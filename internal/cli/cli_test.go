@@ -78,6 +78,9 @@ func TestNoCommandJSONError(t *testing.T) {
 	if env.Error.Code != "no_command" {
 		t.Fatalf("error code = %q, want no_command", env.Error.Code)
 	}
+	if env.Error.ExitCode != ExitUsage {
+		t.Fatalf("exit code = %d, want %d", env.Error.ExitCode, ExitUsage)
+	}
 	assertNoHumanDecoration(t, stderr.String())
 }
 
@@ -99,6 +102,9 @@ func TestUnknownCommandJSONError(t *testing.T) {
 	}
 	if !strings.Contains(env.Error.Hint, "Usage:") {
 		t.Fatalf("hint = %q, want usage guidance", env.Error.Hint)
+	}
+	if env.Error.ExitCode != ExitUsage {
+		t.Fatalf("exit code = %d, want %d", env.Error.ExitCode, ExitUsage)
 	}
 	assertNoHumanDecoration(t, stderr.String())
 }
@@ -136,6 +142,40 @@ func TestKnownCommandGroupJSONError(t *testing.T) {
 	}
 	if !strings.Contains(env.Error.Message, "gate") {
 		t.Fatalf("message = %q, want command group name", env.Error.Message)
+	}
+	if env.Error.ExitCode != ExitUsage {
+		t.Fatalf("exit code = %d, want %d", env.Error.ExitCode, ExitUsage)
+	}
+	assertNoHumanDecoration(t, stderr.String())
+}
+
+func TestCommandGroupRequiresRepositoryRoot(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runWithOptions(
+		[]string{"--json", "project", "status"},
+		&stdout,
+		&stderr,
+		testBuildInfo(),
+		runOptions{workingDir: t.TempDir()},
+	)
+
+	if exitCode != ExitNotFound {
+		t.Fatalf("exitCode = %d, want %d", exitCode, ExitNotFound)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	env := decodeErrorEnvelope(t, stderr.Bytes())
+	if env.Error.Code != "repo_root_not_found" {
+		t.Fatalf("error code = %q, want repo_root_not_found", env.Error.Code)
+	}
+	if env.Error.ExitCode != ExitNotFound {
+		t.Fatalf("error exit code = %d, want %d", env.Error.ExitCode, ExitNotFound)
+	}
+	if env.Error.Hint == "" || env.Error.Expected == "" || env.Error.Actual == "" {
+		t.Fatalf("error = %#v, want structured remediation fields", env.Error)
 	}
 	assertNoHumanDecoration(t, stderr.String())
 }
