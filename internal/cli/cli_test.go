@@ -229,7 +229,7 @@ func TestUnsupportedProjectSubcommandIsNotImplemented(t *testing.T) {
 	var stderr bytes.Buffer
 
 	exitCode := runWithOptions(
-		[]string{"project", "status"},
+		[]string{"project", "frobnicate"},
 		&stdout,
 		&stderr,
 		testBuildInfo(),
@@ -243,6 +243,188 @@ func TestUnsupportedProjectSubcommandIsNotImplemented(t *testing.T) {
 		t.Fatalf("stdout = %q, want empty", stdout.String())
 	}
 	assertHumanError(t, stderr.String(), "project command is not implemented yet")
+}
+
+func TestProjectStatusAndDoctorJSONOutput(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	exitCode := runWithOptions([]string{"project", "status", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	if exitCode != ExitOK {
+		t.Fatalf("project status exit = %d want %d stderr=%s", exitCode, ExitOK, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	assertNoHumanDecoration(t, stdout.String())
+	var status projectStatusOutput
+	if err := json.Unmarshal(stdout.Bytes(), &status); err != nil {
+		t.Fatalf("status stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if status.Health != "ok" || status.LastEventID != "evt-000001" || status.EventTailID != "evt-000001" || status.EventCount != 1 || len(status.Issues) != 0 {
+		t.Fatalf("status = %#v, want healthy initialized project", status)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	exitCode = runWithOptions([]string{"project", "doctor", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	if exitCode != ExitOK {
+		t.Fatalf("project doctor exit = %d want %d stderr=%s", exitCode, ExitOK, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	assertNoHumanDecoration(t, stdout.String())
+	var doctor projectDoctorOutput
+	if err := json.Unmarshal(stdout.Bytes(), &doctor); err != nil {
+		t.Fatalf("doctor stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if doctor.Health != "ok" || doctor.Summary.Failed != 0 || doctor.Summary.Warnings != 0 || len(doctor.Checks) == 0 {
+		t.Fatalf("doctor = %#v, want healthy checks", doctor)
+	}
+}
+
+func TestProjectStatusAndDoctorHumanOutput(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	exitCode := runWithOptions([]string{"project", "status"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	if exitCode != ExitOK {
+		t.Fatalf("project status exit = %d want %d stderr=%s", exitCode, ExitOK, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	statusOutput := stdout.String()
+	for _, want := range []string{"project status: ok", "last_event_id: evt-000001", "event_tail_id: evt-000001", "issues: 0"} {
+		if !strings.Contains(statusOutput, want) {
+			t.Fatalf("status output = %q, want %q", statusOutput, want)
+		}
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	exitCode = runWithOptions([]string{"project", "doctor"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	if exitCode != ExitOK {
+		t.Fatalf("project doctor exit = %d want %d stderr=%s", exitCode, ExitOK, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	doctorOutput := stdout.String()
+	for _, want := range []string{"project doctor: ok", "summary:", "[pass] config .kkachi/config.yaml", "[pass] status .kkachi/status.json"} {
+		if !strings.Contains(doctorOutput, want) {
+			t.Fatalf("doctor output = %q, want %q", doctorOutput, want)
+		}
+	}
+}
+
+func TestProjectStatusAndDoctorRejectUnsupportedOptions(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+
+	for _, args := range [][]string{
+		{"project", "status", "--bogus", "--json"},
+		{"project", "doctor", "--bogus", "--json"},
+	} {
+		stdout.Reset()
+		stderr.Reset()
+		exitCode := runWithOptions(args, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+		if exitCode != ExitUsage {
+			t.Fatalf("%v exitCode = %d, want %d", args, exitCode, ExitUsage)
+		}
+		if stdout.Len() != 0 {
+			t.Fatalf("stdout = %q, want empty", stdout.String())
+		}
+		env := decodeErrorEnvelope(t, stderr.Bytes())
+		if env.Error.Code != "unknown_option" || env.Error.ExitCode != ExitUsage {
+			t.Fatalf("error = %#v, want unknown_option usage", env.Error)
+		}
+		assertNoHumanDecoration(t, stderr.String())
+	}
+}
+
+func TestProjectDoctorReportsCoherenceMismatch(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".kkachi", "events.jsonl"), []byte(`{"version":"0.1","event_id":"evt-000001","occurred_at":"2026-04-30T01:00:00Z","run_id":null,"type":"project.initialized","actor":"helper","payload":{}}`+"\n"+`{"version":"0.1","event_id":"evt-000002","occurred_at":"2026-04-30T02:00:00Z","run_id":null,"type":"run.created","actor":"helper","payload":{}}`+"\n"), 0o600); err != nil {
+		t.Fatalf("write divergent event log: %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	exitCode := runWithOptions([]string{"project", "doctor", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	if exitCode != ExitSafety {
+		t.Fatalf("project doctor exit = %d want %d", exitCode, ExitSafety)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	var doctor projectDoctorOutput
+	if err := json.Unmarshal(stdout.Bytes(), &doctor); err != nil {
+		t.Fatalf("doctor stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if doctor.Health != "fail" {
+		t.Fatalf("health = %q, want fail", doctor.Health)
+	}
+	found := false
+	for _, check := range doctor.Checks {
+		if check.Name == "coherence" && check.Status == "fail" && check.Expected == "evt-000002" && check.Actual == "evt-000001" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("doctor checks = %#v, want coherence mismatch", doctor.Checks)
+	}
+}
+
+func TestProjectStatusReportsCoherenceMismatch(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".kkachi", "events.jsonl"), []byte(`{"version":"0.1","event_id":"evt-000001","occurred_at":"2026-04-30T01:00:00Z","run_id":null,"type":"project.initialized","actor":"helper","payload":{}}`+"\n"+`{"version":"0.1","event_id":"evt-000002","occurred_at":"2026-04-30T02:00:00Z","run_id":null,"type":"run.created","actor":"helper","payload":{}}`+"\n"), 0o600); err != nil {
+		t.Fatalf("write divergent event log: %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	exitCode := runWithOptions([]string{"project", "status", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	if exitCode != ExitSafety {
+		t.Fatalf("project status exit = %d want %d", exitCode, ExitSafety)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	var status projectStatusOutput
+	if err := json.Unmarshal(stdout.Bytes(), &status); err != nil {
+		t.Fatalf("status stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if status.Health != "fail" || status.LastEventID != "evt-000001" || status.EventTailID != "evt-000002" {
+		t.Fatalf("status = %#v, want fail with tail mismatch", status)
+	}
 }
 
 func TestKnownCommandGroupJSONError(t *testing.T) {

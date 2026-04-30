@@ -286,12 +286,73 @@ Command UX rules:
 - `--json` emits machine-readable output and no decorative text.
 - Non-zero exit means the requested action did not succeed.
 - Validation failures include path, field, expected value, actual value, and remediation hint.
+- Canonical exit codes are `0` for success, including read-only diagnostic reports with warnings only; `1` for internal helper failures; `2` for usage errors, unsupported commands, or unsupported command options; `3` for fail-closed state/safety problems such as malformed helper state, unsafe paths, schema failures, or status/event coherence mismatches; and `4` for repository root discovery failure.
 - Mutating commands append an event unless the command fails before mutation.
+- Read-only diagnostic commands (`project status` and `project doctor`) must not append events, repair files, create locks, remove locks, or otherwise mutate `.kkachi/` state.
 - `event append` is itself the primitive append-only event mutation; it fails if status and event-log tail ids are incoherent.
 - `event append` keeps payloads compact: CLI payload input is limited to 256 KiB and serialized JSONL event lines are limited to 1 MiB. Larger evidence belongs in run artifacts.
 - Event run ids may be omitted/null; when present, they must be printable, newline-free strings. Full run id syntax is defined by later run workflow tasks.
 - State-file creation and replacement use atomic temp-file writes with durable sync before publish where the host filesystem supports it.
 - Commands must reject absolute paths, paths escaping the repository root, and ambiguous run ids.
+
+### `project status`
+
+`project status` is a read-only project summary intended for humans and scripts. JSON output has the following stable shape:
+
+```json
+{
+  "root_path": "...",
+  "health": "ok|warning|fail",
+  "project_id": "...",
+  "project_name": "...",
+  "active_run_id": null,
+  "active_run_state": null,
+  "last_event_id": "evt-000001",
+  "event_tail_id": "evt-000001",
+  "event_count": 1,
+  "updated_at": "...",
+  "gate_summary": {},
+  "issues": []
+}
+```
+
+`health` is `ok` when all checks pass, `warning` when only non-fatal issues such as present lock files are found, and `fail` when helper state is unsafe or malformed. Status/event tail mismatch is a fail-closed state problem and returns exit code `3`.
+
+### `project doctor`
+
+`project doctor` is a read-only diagnostic report. It checks:
+
+- `.kkachi/config.yaml` exists, is readable, and declares the core `corex-005` generated fields: `version`, `project.name`, and canonical `paths.run_root`, `paths.status_file`, and `paths.events_file`; fuller config schema validation, including root policy, lock policy, schema mode, and compatibility fields, is deferred to `packg-001`;
+- `.kkachi/status.json` is a JSON object with required typed fields, valid `last_event_id`, RFC3339 `updated_at`, and object `gate_summary`;
+- `.kkachi/events.jsonl` is readable, non-empty JSONL with no blank lines, valid event ids, and sequential `evt-000001`-style ids;
+- status/event coherence, requiring `status.last_event_id` to match the event-log tail id;
+- canonical `.kkachi/*` state, schema, and lock paths stay within the repository and do not symlink-escape;
+- the five initial schema files exist, are readable JSON objects, and require the `version` property;
+- lock files are absent, present, unreadable, or path-unsafe.
+
+JSON output has the following stable shape:
+
+```json
+{
+  "root_path": "...",
+  "health": "ok|warning|fail",
+  "summary": {"passed": 0, "warnings": 0, "failed": 0},
+  "checks": [
+    {
+      "name": "status",
+      "status": "pass|warn|fail",
+      "path": ".kkachi/status.json",
+      "message": "...",
+      "hint": "...",
+      "field": "",
+      "expected": "",
+      "actual": ""
+    }
+  ]
+}
+```
+
+Warnings return exit code `0`; failures return exit code `3`. Doctor does not implement stale-lock policy or recovery in `corex-005`; those remain under `runwf-002`.
 
 ## 11. Locking
 
@@ -306,7 +367,8 @@ Lock requirements:
 
 - Use atomic create where possible.
 - Record owner process id, hostname, command, run id, and timestamp.
-- Provide `doctor` diagnostics for stale locks.
+- `project doctor` reports absent locks as pass, present readable locks as warning, and unreadable or path-unsafe lock paths as failure.
+- Stale-lock age policy and ownership interpretation are deferred to `runwf-002`.
 - Provide explicit recovery commands rather than silent lock removal.
 - Do not allow forced unlock without an event record.
 
@@ -364,9 +426,9 @@ Minimum implementation test layers:
 
 | Layer | Required coverage |
 |---|---|
-| Unit | schema validation, path safety, id generation, lock behavior, gate rules. |
-| Integration | project init, run create/activate/close, event append, schema migration. |
-| Local E2E | User-visible CLI flows such as project init success, generated state files, JSON output, and unsafe overwrite refusal. |
+| Unit | schema validation, path safety, id generation, project status/doctor diagnostics, lock behavior, gate rules. |
+| Integration | project init, project status/doctor, run create/activate/close, event append, schema migration. |
+| Local E2E | User-visible CLI flows such as project init success, generated state files, status/doctor JSON output, event coherence failure, and unsafe overwrite refusal. |
 | Golden fixtures | valid and invalid `.kkachi/` workspaces. |
 | CLI tests | exit codes, JSON output, failure messages, dry-run behavior. |
 | Compatibility tests | migration from previous schema versions and helper-oc lessons where applicable. |
@@ -385,10 +447,10 @@ Minimum implementation test layers:
 
 The following items remain open until roadmap tasks close them:
 
-- implementation language and packaging strategy;
+- release packaging strategy;
 - exact schema syntax and validator library;
 - run id format;
-- exact config schema;
+- full config schema enforcement beyond the core `corex-005` generated fields;
 - exact lock stale detection policy;
 - skill/template package manifest format;
 - whether helper exports a library API in addition to the CLI;

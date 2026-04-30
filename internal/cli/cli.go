@@ -69,6 +69,45 @@ type eventAppendOutput struct {
 	OccurredAt string `json:"occurred_at"`
 }
 
+type projectStatusOutput struct {
+	RootPath       string                     `json:"root_path"`
+	Health         string                     `json:"health"`
+	ProjectID      string                     `json:"project_id"`
+	ProjectName    string                     `json:"project_name"`
+	ActiveRunID    *string                    `json:"active_run_id"`
+	ActiveRunState *string                    `json:"active_run_state"`
+	LastEventID    string                     `json:"last_event_id"`
+	EventTailID    string                     `json:"event_tail_id"`
+	EventCount     int                        `json:"event_count"`
+	UpdatedAt      string                     `json:"updated_at"`
+	GateSummary    map[string]any             `json:"gate_summary"`
+	Issues         []projectDoctorCheckOutput `json:"issues"`
+}
+
+type projectDoctorOutput struct {
+	RootPath string                     `json:"root_path"`
+	Health   string                     `json:"health"`
+	Summary  projectDoctorSummaryOutput `json:"summary"`
+	Checks   []projectDoctorCheckOutput `json:"checks"`
+}
+
+type projectDoctorSummaryOutput struct {
+	Passed   int `json:"passed"`
+	Warnings int `json:"warnings"`
+	Failed   int `json:"failed"`
+}
+
+type projectDoctorCheckOutput struct {
+	Name     string `json:"name"`
+	Status   string `json:"status"`
+	Path     string `json:"path"`
+	Message  string `json:"message"`
+	Hint     string `json:"hint"`
+	Field    string `json:"field"`
+	Expected string `json:"expected"`
+	Actual   string `json:"actual"`
+}
+
 type globalOptions struct {
 	json bool
 	args []string
@@ -158,6 +197,19 @@ func runWithOptions(args []string, stdout io.Writer, stderr io.Writer, info Buil
 }
 
 func runProjectCommand(args []string, root project.Root, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
+	if len(args) > 0 && isImplementedProjectSubcommand(args[0]) && len(args) != 1 {
+		writeError(stderr, jsonMode, cliError{
+			Code:     "unknown_option",
+			Message:  fmt.Sprintf("unknown project %s option %q", args[0], args[1]),
+			Hint:     "Use project init, project status, or project doctor without command-specific options; use global --json for JSON output.",
+			ExitCode: ExitUsage,
+			Field:    "option",
+			Expected: "no project subcommand options",
+			Actual:   args[1],
+		})
+		return ExitUsage
+	}
+
 	if len(args) == 1 && args[0] == "init" {
 		result, err := project.InitProject(root, project.InitOptions{})
 		if err != nil {
@@ -169,10 +221,32 @@ func runProjectCommand(args []string, root project.Root, stdout io.Writer, stder
 		return ExitOK
 	}
 
+	if len(args) == 1 && args[0] == "status" {
+		result, err := project.InspectProjectStatus(root)
+		if err != nil {
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writeProjectStatusResult(stdout, result, jsonMode)
+		return exitCodeForHealth(result.Health)
+	}
+
+	if len(args) == 1 && args[0] == "doctor" {
+		result, err := project.Doctor(root)
+		if err != nil {
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writeProjectDoctorResult(stdout, result, jsonMode)
+		return exitCodeForHealth(result.Health)
+	}
+
 	writeError(stderr, jsonMode, cliError{
 		Code:     "not_implemented",
 		Message:  "project command is not implemented yet",
-		Hint:     "Only project init is available in corex-003; other project commands are reserved by docs/specs.md.",
+		Hint:     "Use project init, project status, or project doctor; other project commands are reserved by docs/specs.md.",
 		ExitCode: ExitUsage,
 	})
 	return ExitUsage
@@ -285,6 +359,15 @@ func runEventCommand(args []string, root project.Root, stdout io.Writer, stderr 
 	return ExitOK
 }
 
+func isImplementedProjectSubcommand(command string) bool {
+	switch command {
+	case "init", "status", "doctor":
+		return true
+	default:
+		return false
+	}
+}
+
 func eventAppendUsageHint() string {
 	return "Use event append <type> --run <run_id> --payload <json-object>."
 }
@@ -374,6 +457,111 @@ func writeEventAppendResult(w io.Writer, result project.AppendEventResult, jsonM
 	fmt.Fprintf(w, "status_file: %s\n", payload.StatusPath)
 }
 
+func writeProjectStatusResult(w io.Writer, result project.ProjectStatus, jsonMode bool) {
+	payload := projectStatusPayload(result)
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(payload)
+		return
+	}
+
+	fmt.Fprintf(w, "project status: %s\n", payload.Health)
+	fmt.Fprintf(w, "root_path: %s\n", payload.RootPath)
+	fmt.Fprintf(w, "project_id: %s\n", payload.ProjectID)
+	fmt.Fprintf(w, "project_name: %s\n", payload.ProjectName)
+	fmt.Fprintf(w, "active_run_id: %s\n", printableOptional(payload.ActiveRunID))
+	fmt.Fprintf(w, "active_run_state: %s\n", printableOptional(payload.ActiveRunState))
+	fmt.Fprintf(w, "last_event_id: %s\n", payload.LastEventID)
+	fmt.Fprintf(w, "event_tail_id: %s\n", payload.EventTailID)
+	fmt.Fprintf(w, "event_count: %d\n", payload.EventCount)
+	fmt.Fprintf(w, "updated_at: %s\n", payload.UpdatedAt)
+	fmt.Fprintf(w, "issues: %d\n", len(payload.Issues))
+	for _, issue := range payload.Issues {
+		fmt.Fprintf(w, "- [%s] %s %s: %s\n", issue.Status, issue.Name, issue.Path, issue.Message)
+		if issue.Hint != "" {
+			fmt.Fprintf(w, "  hint: %s\n", issue.Hint)
+		}
+	}
+}
+
+func writeProjectDoctorResult(w io.Writer, result project.DoctorReport, jsonMode bool) {
+	payload := projectDoctorPayload(result)
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(payload)
+		return
+	}
+
+	fmt.Fprintf(w, "project doctor: %s\n", payload.Health)
+	fmt.Fprintf(w, "root_path: %s\n", payload.RootPath)
+	fmt.Fprintf(w, "summary: %d passed, %d warnings, %d failed\n", payload.Summary.Passed, payload.Summary.Warnings, payload.Summary.Failed)
+	for _, check := range payload.Checks {
+		fmt.Fprintf(w, "- [%s] %s", check.Status, check.Name)
+		if check.Path != "" {
+			fmt.Fprintf(w, " %s", check.Path)
+		}
+		fmt.Fprintf(w, ": %s\n", check.Message)
+		if check.Field != "" || check.Expected != "" || check.Actual != "" {
+			fmt.Fprintf(w, "  field: %s expected: %s actual: %s\n", check.Field, check.Expected, check.Actual)
+		}
+		if check.Hint != "" {
+			fmt.Fprintf(w, "  hint: %s\n", check.Hint)
+		}
+	}
+}
+
+func projectStatusPayload(result project.ProjectStatus) projectStatusOutput {
+	return projectStatusOutput{
+		RootPath:       result.RootPath,
+		Health:         result.Health,
+		ProjectID:      result.ProjectID,
+		ProjectName:    result.ProjectName,
+		ActiveRunID:    result.ActiveRunID,
+		ActiveRunState: result.ActiveRunState,
+		LastEventID:    result.LastEventID,
+		EventTailID:    result.EventTailID,
+		EventCount:     result.EventCount,
+		UpdatedAt:      result.UpdatedAt,
+		GateSummary:    result.GateSummary,
+		Issues:         projectCheckPayloads(result.Issues),
+	}
+}
+
+func projectDoctorPayload(result project.DoctorReport) projectDoctorOutput {
+	return projectDoctorOutput{
+		RootPath: result.RootPath,
+		Health:   result.Health,
+		Summary: projectDoctorSummaryOutput{
+			Passed:   result.Summary.Passed,
+			Warnings: result.Summary.Warnings,
+			Failed:   result.Summary.Failed,
+		},
+		Checks: projectCheckPayloads(result.Checks),
+	}
+}
+
+func projectCheckPayloads(checks []project.DiagnosticCheck) []projectDoctorCheckOutput {
+	payloads := make([]projectDoctorCheckOutput, 0, len(checks))
+	for _, check := range checks {
+		payloads = append(payloads, projectDoctorCheckOutput{
+			Name:     check.Name,
+			Status:   check.Status,
+			Path:     check.Path,
+			Message:  check.Message,
+			Hint:     check.Hint,
+			Field:    check.Field,
+			Expected: check.Expected,
+			Actual:   check.Actual,
+		})
+	}
+	return payloads
+}
+
+func printableOptional(value *string) string {
+	if value == nil {
+		return "null"
+	}
+	return *value
+}
+
 func hasValue(value string) bool {
 	return value != "" && value != "unknown"
 }
@@ -436,6 +624,13 @@ func errorFromProjectProblem(err error) cliError {
 		ExitCode: ExitInternal,
 		Actual:   err.Error(),
 	}
+}
+
+func exitCodeForHealth(health string) int {
+	if health == project.HealthFail {
+		return ExitSafety
+	}
+	return ExitOK
 }
 
 func exitCodeForProblem(code string) int {

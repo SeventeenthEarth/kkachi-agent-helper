@@ -49,6 +49,14 @@ assert_contains "$tmpdir/init.json" '"root_path":"'"$repo"'"' "init JSON"
 assert_contains "$tmpdir/init.json" '"project_name":"repo"' "init JSON"
 assert_contains "$tmpdir/init.json" '"initial_event_id":"evt-000001"' "init JSON"
 
+(cd "$repo" && "$helper" project status --json > "$tmpdir/status.json" 2> "$tmpdir/status.err")
+(cd "$repo" && "$helper" project doctor --json > "$tmpdir/doctor.json" 2> "$tmpdir/doctor.err")
+assert_contains "$tmpdir/status.json" '"health":"ok"' "status JSON"
+assert_contains "$tmpdir/status.json" '"event_tail_id":"evt-000001"' "status JSON"
+assert_contains "$tmpdir/status.json" '"event_count":1' "status JSON"
+assert_contains "$tmpdir/doctor.json" '"health":"ok"' "doctor JSON"
+assert_contains "$tmpdir/doctor.json" '"failed":0' "doctor JSON"
+
 assert_contains "$repo/.kkachi/config.yaml" 'version: "0.1"' "config.yaml"
 assert_contains "$repo/.kkachi/config.yaml" 'name: "repo"' "config.yaml"
 assert_contains "$repo/.kkachi/config.yaml" 'root_policy: "repository_confined_no_symlink_escape"' "config.yaml"
@@ -113,6 +121,15 @@ fi
 assert_contains "$tmpdir/mismatch.err" '"code":"last_event_id_mismatch"' "mismatch stderr"
 assert_contains "$tmpdir/mismatch.err" '"exit_code":3' "mismatch stderr"
 assert_contains "$repo/.kkachi/status.json" '"last_event_id": "evt-000002"' "status.json after refused mismatch append"
+
+if (cd "$repo" && "$helper" project doctor --json > "$tmpdir/mismatch-doctor.json" 2> "$tmpdir/mismatch-doctor.err"); then
+  echo "project doctor succeeded despite last_event_id mismatch" >&2
+  exit 1
+fi
+assert_contains "$tmpdir/mismatch-doctor.json" '"health":"fail"' "mismatch doctor JSON"
+assert_contains "$tmpdir/mismatch-doctor.json" '"name":"coherence"' "mismatch doctor JSON"
+assert_contains "$tmpdir/mismatch-doctor.json" '"expected":"evt-000003"' "mismatch doctor JSON"
+assert_contains "$tmpdir/mismatch-doctor.json" '"actual":"evt-000002"' "mismatch doctor JSON"
 
 event_count_after_refused_append="$(wc -l < "$repo/.kkachi/events.jsonl" | tr -d ' ')"
 if [ "$event_count_after_refused_append" != "3" ]; then

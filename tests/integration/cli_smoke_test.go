@@ -58,6 +58,26 @@ func TestProjectInitCreatesStateAndRefusesOverwrite(t *testing.T) {
 		t.Fatalf("paths = %#v/%#v, want state and schema paths", payload.CreatedPaths, payload.SchemaPaths)
 	}
 
+	statusCmd := exec.Command(binary, "project", "status", "--json")
+	statusCmd.Dir = repo
+	statusOutput, err := statusCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("project status failed: %v\n%s", err, string(statusOutput))
+	}
+	if !strings.Contains(string(statusOutput), `"health":"ok"`) || !strings.Contains(string(statusOutput), `"event_tail_id":"evt-000001"`) {
+		t.Fatalf("project status output = %s, want healthy event tail", string(statusOutput))
+	}
+
+	doctorCmd := exec.Command(binary, "project", "doctor", "--json")
+	doctorCmd.Dir = repo
+	doctorOutput, err := doctorCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("project doctor failed: %v\n%s", err, string(doctorOutput))
+	}
+	if !strings.Contains(string(doctorOutput), `"health":"ok"`) || !strings.Contains(string(doctorOutput), `"failed":0`) {
+		t.Fatalf("project doctor output = %s, want healthy checks", string(doctorOutput))
+	}
+
 	required := []string{
 		".kkachi/config.yaml",
 		".kkachi/status.json",
