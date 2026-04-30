@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestInspectProjectStatusInitializedProject(t *testing.T) {
@@ -293,7 +294,9 @@ func TestDoctorReportsPresentLockAsWarning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DiscoverRoot() error = %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repo, ".kkachi", "active_run.lock"), []byte("run-abc\n"), 0o600); err != nil {
+	metadata := LockMetadata{Version: LockVersion, LockName: ActiveRunLockName, OwnerPID: os.Getpid(), Hostname: mustHostname(t), Command: "test", CreatedAt: time.Now().UTC().Format(time.RFC3339)}
+	data, _ := json.Marshal(metadata)
+	if err := os.WriteFile(filepath.Join(repo, ".kkachi", "active_run.lock"), append(data, '\n'), 0o600); err != nil {
 		t.Fatalf("write lock: %v", err)
 	}
 
@@ -351,8 +354,8 @@ func TestDoctorReportsLockDirectoryAsFailure(t *testing.T) {
 		t.Fatalf("Doctor() error = %v", err)
 	}
 	check := assertDiagnostic(t, report.Checks, "locks", CheckFail, ".kkachi/project_write.lock")
-	if check.Actual != "directory" {
-		t.Fatalf("lock check = %#v, want directory evidence", check)
+	if !strings.Contains(check.Actual, "d") {
+		t.Fatalf("lock check = %#v, want directory mode evidence", check)
 	}
 }
 
@@ -404,4 +407,49 @@ func assertDiagnostic(t *testing.T, checks []DiagnosticCheck, name string, statu
 	}
 	t.Fatalf("checks = %#v, want %s %s at %s", checks, name, status, path)
 	return DiagnosticCheck{}
+}
+
+func mustHostname(t *testing.T) string {
+	t.Helper()
+	hostname, err := os.Hostname()
+	if err != nil {
+		t.Fatalf("hostname: %v", err)
+	}
+	return hostname
+}
+
+func TestDoctorReportsMalformedAndStaleLockDiagnostics(t *testing.T) {
+	repo := initializedRepo(t)
+	root, err := DiscoverRoot(repo)
+	if err != nil {
+		t.Fatalf("DiscoverRoot() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".kkachi", "active_run.lock"), []byte("not-json\n"), 0o600); err != nil {
+		t.Fatalf("write malformed lock: %v", err)
+	}
+	report, err := Doctor(root)
+	if err != nil {
+		t.Fatalf("Doctor() malformed error = %v", err)
+	}
+	check := assertDiagnostic(t, report.Checks, "locks", CheckFail, ".kkachi/active_run.lock")
+	if check.Field != "json" {
+		t.Fatalf("malformed lock check = %#v, want json field", check)
+	}
+
+	if err := os.Remove(filepath.Join(repo, ".kkachi", "active_run.lock")); err != nil {
+		t.Fatalf("remove malformed lock: %v", err)
+	}
+	metadata := LockMetadata{Version: LockVersion, LockName: ActiveRunLockName, OwnerPID: 999999, Hostname: "other-host", Command: "stale writer", CreatedAt: time.Now().UTC().Add(-31 * time.Minute).Format(time.RFC3339)}
+	data, _ := json.Marshal(metadata)
+	if err := os.WriteFile(filepath.Join(repo, ".kkachi", "active_run.lock"), append(data, '\n'), 0o600); err != nil {
+		t.Fatalf("write stale lock: %v", err)
+	}
+	report, err = Doctor(root)
+	if err != nil {
+		t.Fatalf("Doctor() stale error = %v", err)
+	}
+	check = assertDiagnostic(t, report.Checks, "locks", CheckWarn, ".kkachi/active_run.lock")
+	if !strings.Contains(check.Message, "stale") || !strings.Contains(check.Hint, "lock recover") {
+		t.Fatalf("stale lock check = %#v, want recovery hint", check)
+	}
 }

@@ -54,11 +54,16 @@ type AppendEventResult struct {
 }
 
 // AppendEvent appends one event line and atomically advances status.last_event_id.
-// It refuses to mutate state when status.json and events.jsonl disagree.
-// Callers must provide a single-writer lane; cross-process locking is deferred
-// to runwf-002.
+// It refuses to mutate state when status.json and events.jsonl disagree and
+// serializes initialized project writes through project_write.lock.
 func AppendEvent(root Root, options AppendEventOptions) (AppendEventResult, error) {
-	return appendEventWithStatusMutation(root, options, nil)
+	var result AppendEventResult
+	err := withProjectWriteLock(root, "event append", options.RunID, func() error {
+		var err error
+		result, err = appendEventWithStatusMutation(root, options, nil)
+		return err
+	})
+	return result, err
 }
 
 func appendEventWithStatusMutation(root Root, options AppendEventOptions, mutateStatus func(map[string]any, string) error) (AppendEventResult, error) {

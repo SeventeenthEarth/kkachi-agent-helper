@@ -27,6 +27,7 @@ var commandGroups = map[string]struct{}{
 	"event":    {},
 	"schema":   {},
 	"install":  {},
+	"lock":     {},
 }
 
 // BuildInfo is the public version payload returned by the CLI.
@@ -81,6 +82,10 @@ type runLifecycleOutput struct {
 	RunID   string `json:"run_id"`
 	State   string `json:"state"`
 	EventID string `json:"event_id"`
+}
+
+type lockRecoverOutput struct {
+	Recovered []project.LockMetadata `json:"recovered"`
 }
 
 type runListOutput struct {
@@ -197,6 +202,9 @@ func runWithOptions(args []string, stdout io.Writer, stderr io.Writer, info Buil
 			}
 			if command == "event" {
 				return runEventCommand(opts.args[1:], root, stdout, stderr, opts.json)
+			}
+			if command == "lock" {
+				return runLockCommand(opts.args[1:], root, stdout, stderr, opts.json)
 			}
 			writeError(stderr, opts.json, cliError{
 				Code:     "not_implemented",
@@ -542,6 +550,53 @@ func runEventCommand(args []string, root project.Root, stdout io.Writer, stderr 
 	return ExitOK
 }
 
+func runLockCommand(args []string, root project.Root, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
+	if len(args) < 2 || args[0] != "recover" {
+		writeError(stderr, jsonMode, cliError{Code: "not_implemented", Message: "lock command is not implemented yet", Hint: lockRecoverUsageHint(), ExitCode: ExitUsage})
+		return ExitUsage
+	}
+	options := project.LockRecoveryOptions{Target: args[1]}
+	seenReason := false
+	for i := 2; i < len(args); i++ {
+		switch args[i] {
+		case "--reason":
+			if i+1 >= len(args) {
+				writeError(stderr, jsonMode, missingOptionValueError("--reason", "reason", lockRecoverUsageHint()))
+				return ExitUsage
+			}
+			if seenReason {
+				writeError(stderr, jsonMode, cliError{Code: "duplicate_option", Message: "duplicate lock recover option \"--reason\"", Hint: lockRecoverUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: "--reason"})
+				return ExitUsage
+			}
+			seenReason = true
+			options.Reason = args[i+1]
+			i++
+		case "--run":
+			if i+1 >= len(args) {
+				writeError(stderr, jsonMode, missingOptionValueError("--run", "run id", lockRecoverUsageHint()))
+				return ExitUsage
+			}
+			options.RunID = args[i+1]
+			i++
+		default:
+			writeError(stderr, jsonMode, cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown lock recover option %q", args[i]), Hint: lockRecoverUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "--reason or --run", Actual: args[i]})
+			return ExitUsage
+		}
+	}
+	if !seenReason {
+		writeError(stderr, jsonMode, cliError{Code: "missing_required_option", Message: "lock recover requires --reason", Hint: lockRecoverUsageHint(), ExitCode: ExitUsage, Field: "--reason", Expected: "required option", Actual: "missing"})
+		return ExitUsage
+	}
+	result, err := project.RecoverLocks(root, options)
+	if err != nil {
+		cliErr := errorFromProjectProblem(err)
+		writeError(stderr, jsonMode, cliErr)
+		return cliErr.ExitCode
+	}
+	writeLockRecoverResult(stdout, result, jsonMode)
+	return ExitOK
+}
+
 func isImplementedProjectSubcommand(command string) bool {
 	switch command {
 	case "init", "status", "doctor":
@@ -549,6 +604,10 @@ func isImplementedProjectSubcommand(command string) bool {
 	default:
 		return false
 	}
+}
+
+func lockRecoverUsageHint() string {
+	return "Use lock recover <active-run|project-write|all> --reason <text> [--run <run_id>] with optional global --json."
 }
 
 func eventAppendUsageHint() string {
@@ -696,6 +755,18 @@ func writeProjectDoctorResult(w io.Writer, result project.DoctorReport, jsonMode
 		if check.Hint != "" {
 			fmt.Fprintf(w, "  hint: %s\n", check.Hint)
 		}
+	}
+}
+
+func writeLockRecoverResult(w io.Writer, result project.LockRecoveryResult, jsonMode bool) {
+	payload := lockRecoverOutput{Recovered: result.Recovered}
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(payload)
+		return
+	}
+	fmt.Fprintf(w, "recovered locks: %d\n", len(payload.Recovered))
+	for _, lock := range payload.Recovered {
+		fmt.Fprintf(w, "- %s pid=%d host=%s command=%s created_at=%s\n", lock.LockName, lock.OwnerPID, lock.Hostname, lock.Command, lock.CreatedAt)
 	}
 }
 
@@ -898,7 +969,7 @@ func exitCodeForProblem(code string) int {
 	switch code {
 	case "repo_root_not_found":
 		return ExitNotFound
-	case "absolute_path", "empty_path", "path_escape", "repo_root_path", "symlink_escape", "symlink_resolution_failed", "path_inspection_failed", "repo_root_required", "helper_state_exists", "last_event_id_mismatch", "status_invalid_json", "status_last_event_id_invalid", "status_active_run_invalid", "event_log_invalid", "event_log_empty", "event_id_invalid", "event_id_exhausted", "run_metadata_invalid", "run_metadata_invalid_json", "active_run_conflict", "run_transition_invalid", "run_not_found", "run_id_ambiguous", "run_root_read_failed", "run_metadata_read_failed", "run_id_collision":
+	case "absolute_path", "empty_path", "path_escape", "repo_root_path", "symlink_escape", "symlink_resolution_failed", "path_inspection_failed", "repo_root_required", "helper_state_exists", "last_event_id_mismatch", "status_invalid_json", "status_last_event_id_invalid", "status_active_run_invalid", "event_log_invalid", "event_log_empty", "event_id_invalid", "event_id_exhausted", "run_metadata_invalid", "run_metadata_invalid_json", "active_run_conflict", "run_transition_invalid", "run_not_found", "run_id_ambiguous", "run_root_read_failed", "run_metadata_read_failed", "run_id_collision", "lock_conflict", "lock_stale_recovery_required", "lock_metadata_invalid", "lock_not_found", "lock_identity_mismatch", "lock_release_failed":
 		return ExitSafety
 	default:
 		return ExitUsage

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBinaryEntrypointSmoke(t *testing.T) {
@@ -174,6 +175,89 @@ func TestProjectInitCreatesStateAndRefusesOverwrite(t *testing.T) {
 	}
 }
 
+func TestRunwf002LockWorkflow(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	binary := buildHelperBinary(t)
+
+	runHelper(t, binary, repo, "project", "init", "--json")
+
+	writeLockMetadata(t, repo, "project_write", lockMetadata{
+		Version:   "0.1",
+		LockName:  "project_write",
+		OwnerPID:  os.Getpid(),
+		Hostname:  mustHostname(t),
+		Command:   "integration fresh writer",
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	})
+	output, err := runHelperAllowError(binary, repo, runwf002CreateRunArgs("Blocked by write lock")...)
+	if err == nil {
+		t.Fatalf("run create succeeded under fresh project_write lock\n%s", string(output))
+	}
+	assertOutputContains(t, output, `"code":"lock_conflict"`, "fresh project lock conflict")
+	assertOutputContains(t, readFile(t, filepath.Join(repo, ".kkachi", "events.jsonl")), `"event_id":"evt-000001"`, "events after refused create")
+	removeLock(t, repo, "project_write")
+
+	createdOutput := runHelper(t, binary, repo, runwf002CreateRunArgs("Lock workflow")...)
+	var created struct {
+		RunID string `json:"run_id"`
+	}
+	if err := json.Unmarshal(createdOutput, &created); err != nil {
+		t.Fatalf("run create output is not JSON: %v\n%s", err, string(createdOutput))
+	}
+
+	writeLockMetadata(t, repo, "active_run", lockMetadata{
+		Version:   "0.1",
+		LockName:  "active_run",
+		RunID:     created.RunID,
+		OwnerPID:  os.Getpid(),
+		Hostname:  mustHostname(t),
+		Command:   "integration active lifecycle",
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	})
+	output, err = runHelperAllowError(binary, repo, "run", "activate", created.RunID, "--json")
+	if err == nil {
+		t.Fatalf("run activate succeeded under fresh active_run lock\n%s", string(output))
+	}
+	assertOutputContains(t, output, `"code":"lock_conflict"`, "fresh active lock conflict")
+	assertOutputContains(t, readFile(t, filepath.Join(repo, ".kkachi", "status.json")), `"active_run_id": null`, "status after refused activate")
+	assertOutputContains(t, readFile(t, filepath.Join(repo, ".kkachi", "runs", created.RunID, "run-metadata.json")), `"state": "created"`, "metadata after refused activate")
+	removeLock(t, repo, "active_run")
+
+	old := time.Date(2026, 4, 30, 3, 4, 5, 0, time.UTC)
+	writeLockMetadata(t, repo, "project_write", lockMetadata{
+		Version:   "0.1",
+		LockName:  "project_write",
+		OwnerPID:  999999,
+		Hostname:  "other-host",
+		Command:   "integration stale writer",
+		CreatedAt: old.Add(-31 * time.Minute).Format(time.RFC3339),
+	})
+	output, err = runHelperAllowError(binary, repo, runwf002CreateRunArgs("Blocked by stale lock")...)
+	if err == nil {
+		t.Fatalf("run create succeeded under stale project_write lock before recovery\n%s", string(output))
+	}
+	assertOutputContains(t, output, `"code":"lock_stale_recovery_required"`, "stale project lock refusal")
+
+	doctorOutput, err := runHelperAllowError(binary, repo, "project", "doctor", "--json")
+	if err != nil {
+		t.Fatalf("project doctor failed under stale lock: %v\n%s", err, string(doctorOutput))
+	}
+	assertOutputContains(t, doctorOutput, `"health":"warning"`, "doctor stale lock health")
+	assertOutputContains(t, doctorOutput, "lock recover", "doctor stale lock hint")
+
+	recoverOutput := runHelper(t, binary, repo, "lock", "recover", "project-write", "--reason", "integration stale recovery", "--json")
+	assertOutputContains(t, recoverOutput, `"lock_name":"project_write"`, "lock recover output")
+	if _, err := os.Stat(filepath.Join(repo, ".kkachi", "project_write.lock")); !os.IsNotExist(err) {
+		t.Fatalf("project_write lock stat = %v, want absent after recovery", err)
+	}
+	assertOutputContains(t, readFile(t, filepath.Join(repo, ".kkachi", "events.jsonl")), `"type":"lock.recovered"`, "events after recovery")
+
+	runHelper(t, binary, repo, runwf002CreateRunArgs("After recovery")...)
+}
+
 func buildHelperBinary(t *testing.T) string {
 	t.Helper()
 
@@ -184,4 +268,96 @@ func buildHelperBinary(t *testing.T) string {
 		t.Fatalf("go build failed: %v\n%s", err, string(output))
 	}
 	return binary
+}
+
+type lockMetadata struct {
+	Version   string `json:"version"`
+	LockName  string `json:"lock_name"`
+	RunID     string `json:"run_id,omitempty"`
+	OwnerPID  int    `json:"owner_pid"`
+	Hostname  string `json:"hostname"`
+	Command   string `json:"command"`
+	CreatedAt string `json:"created_at"`
+}
+
+func runHelper(t *testing.T, binary string, repo string, args ...string) []byte {
+	t.Helper()
+	output, err := runHelperAllowError(binary, repo, args...)
+	if err != nil {
+		t.Fatalf("%s failed: %v\n%s", strings.Join(args, " "), err, string(output))
+	}
+	return output
+}
+
+func runHelperAllowError(binary string, repo string, args ...string) ([]byte, error) {
+	cmd := exec.Command(binary, args...)
+	cmd.Dir = repo
+	return cmd.CombinedOutput()
+}
+
+func runwf002CreateRunArgs(title string) []string {
+	return []string{
+		"run", "create",
+		"--title", title,
+		"--work-path", "A_development_execution",
+		"--work-mode", "standard",
+		"--urgency", "normal",
+		"--sot-policy", "existing_sot_basis",
+		"--execution-mode", "production_write",
+		"--commander", "Gongmyeong",
+		"--task-id", "runwf-002",
+		"--json",
+	}
+}
+
+func writeLockMetadata(t *testing.T, repo string, name string, metadata lockMetadata) {
+	t.Helper()
+	path := lockFilePath(repo, name)
+	data, err := json.MarshalIndent(metadata, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal lock metadata: %v", err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		t.Fatalf("write lock metadata: %v", err)
+	}
+}
+
+func removeLock(t *testing.T, repo string, name string) {
+	t.Helper()
+	path := lockFilePath(repo, name)
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove %s: %v", path, err)
+	}
+}
+
+func lockFilePath(repo string, name string) string {
+	if name == "active_run" {
+		return filepath.Join(repo, ".kkachi", "active_run.lock")
+	}
+	return filepath.Join(repo, ".kkachi", "project_write.lock")
+}
+
+func readFile(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return data
+}
+
+func assertOutputContains(t *testing.T, output []byte, pattern string, label string) {
+	t.Helper()
+	if !strings.Contains(string(output), pattern) {
+		t.Fatalf("%s output = %s, want %q", label, string(output), pattern)
+	}
+}
+
+func mustHostname(t *testing.T) string {
+	t.Helper()
+	hostname, err := os.Hostname()
+	if err != nil {
+		t.Fatalf("hostname: %v", err)
+	}
+	return hostname
 }

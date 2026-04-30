@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SeventeenthEarth/kkachi-agent-helper/internal/project"
 )
@@ -1061,4 +1062,95 @@ func tempGitRepo(t *testing.T) string {
 		t.Fatalf("mkdir nested: %v", err)
 	}
 	return repo
+}
+
+func TestLockRecoverCLIJSONAndConflictShape(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+
+	fresh := project.LockMetadata{Version: project.LockVersion, LockName: project.ProjectWriteLockName, OwnerPID: os.Getpid(), Hostname: cliMustHostname(t), Command: "fresh writer", CreatedAt: time.Now().UTC().Format(time.RFC3339)}
+	writeCLILock(t, repo, project.ProjectWriteLockName, fresh)
+	stdout.Reset()
+	stderr.Reset()
+	code := runWithOptions([]string{"lock", "recover", "project-write", "--reason", "test", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	assertCLIErrorCode(t, code, stdout, stderr, ExitSafety, "lock_conflict")
+
+	oldNow := time.Date(2026, 4, 30, 3, 4, 5, 0, time.UTC)
+	stale := project.LockMetadata{Version: project.LockVersion, LockName: project.ProjectWriteLockName, OwnerPID: 999999, Hostname: "other-host", Command: "stale writer", CreatedAt: oldNow.Add(-31 * time.Minute).Format(time.RFC3339)}
+	writeCLILock(t, repo, project.ProjectWriteLockName, stale)
+	stdout.Reset()
+	stderr.Reset()
+	code = runWithOptions([]string{"lock", "recover", "project-write", "--reason", "test stale", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	if code != ExitOK {
+		t.Fatalf("lock recover exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	var payload lockRecoverOutput
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("recover stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if len(payload.Recovered) != 1 || payload.Recovered[0].LockName != project.ProjectWriteLockName {
+		t.Fatalf("payload = %#v, want recovered project_write", payload)
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".kkachi", "project_write.lock")); !os.IsNotExist(err) {
+		t.Fatalf("project_write lock stat = %v, want absent", err)
+	}
+	if events := readCLIText(t, filepath.Join(repo, ".kkachi", "events.jsonl")); !strings.Contains(events, `"type":"lock.recovered"`) {
+		t.Fatalf("events = %s, want lock.recovered", events)
+	}
+}
+
+func TestEventAppendCLIFailsUnderFreshProjectWriteLock(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+
+	fresh := project.LockMetadata{Version: project.LockVersion, LockName: project.ProjectWriteLockName, OwnerPID: os.Getpid(), Hostname: cliMustHostname(t), Command: "fresh event writer", CreatedAt: time.Now().UTC().Format(time.RFC3339)}
+	writeCLILock(t, repo, project.ProjectWriteLockName, fresh)
+	stdout.Reset()
+	stderr.Reset()
+	code := runWithOptions([]string{"event", "append", "artifact.written", "--run", "run-abc", "--payload", `{"path":"impl-log.md"}`, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	assertCLIErrorCode(t, code, stdout, stderr, ExitSafety, "lock_conflict")
+	if events := readCLIText(t, filepath.Join(repo, ".kkachi", "events.jsonl")); strings.Contains(events, "artifact.written") {
+		t.Fatalf("events = %s, want no appended artifact event under lock conflict", events)
+	}
+}
+
+func writeCLILock(t *testing.T, repo string, name string, metadata project.LockMetadata) {
+	t.Helper()
+	path := filepath.Join(repo, ".kkachi", "project_write.lock")
+	if name == project.ActiveRunLockName {
+		path = filepath.Join(repo, ".kkachi", "active_run.lock")
+	}
+	data, err := json.MarshalIndent(metadata, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal lock: %v", err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		t.Fatalf("write lock: %v", err)
+	}
+}
+
+func cliMustHostname(t *testing.T) string {
+	t.Helper()
+	hostname, err := os.Hostname()
+	if err != nil {
+		t.Fatalf("hostname: %v", err)
+	}
+	return hostname
+}
+
+func readCLIText(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(data)
 }

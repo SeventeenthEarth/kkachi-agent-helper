@@ -102,6 +102,16 @@ func GenerateRunID(now time.Time, randomSource func(int) (string, error)) (strin
 }
 
 func CreateRun(root Root, options CreateRunOptions) (CreateRunResult, error) {
+	var result CreateRunResult
+	err := withProjectWriteLock(root, "run create", "", func() error {
+		var err error
+		result, err = createRunUnlocked(root, options)
+		return err
+	})
+	return result, err
+}
+
+func createRunUnlocked(root Root, options CreateRunOptions) (CreateRunResult, error) {
 	if strings.TrimSpace(root.Path) == "" {
 		return CreateRunResult{}, problem("repo_root_required", "repository root is required", "Discover the repository root before creating a run.")
 	}
@@ -172,15 +182,25 @@ func CreateRun(root Root, options CreateRunOptions) (CreateRunResult, error) {
 }
 
 func ActivateRun(root Root, options RunLifecycleOptions) (RunLifecycleResult, error) {
-	return transitionRun(root, options, RunStateActive, "run.activated")
+	return transitionRunWithLocks(root, options, RunStateActive, "run.activated", "run activate")
 }
 
 func CloseRun(root Root, options RunLifecycleOptions) (RunLifecycleResult, error) {
-	return transitionRun(root, options, RunStateClosed, "run.closed")
+	return transitionRunWithLocks(root, options, RunStateClosed, "run.closed", "run close")
 }
 
 func AbortRun(root Root, options RunLifecycleOptions) (RunLifecycleResult, error) {
-	return transitionRun(root, options, RunStateAborted, "run.aborted")
+	return transitionRunWithLocks(root, options, RunStateAborted, "run.aborted", "run abort")
+}
+
+func transitionRunWithLocks(root Root, options RunLifecycleOptions, targetState string, eventType string, command string) (RunLifecycleResult, error) {
+	var result RunLifecycleResult
+	err := withRunLifecycleLocks(root, command, options.RunID, func() error {
+		var err error
+		result, err = transitionRun(root, options, targetState, eventType)
+		return err
+	})
+	return result, err
 }
 
 func ListRuns(root Root) ([]RunSummary, error) {

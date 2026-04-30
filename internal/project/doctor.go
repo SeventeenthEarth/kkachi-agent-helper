@@ -20,11 +20,6 @@ const (
 	CheckFail = "fail"
 )
 
-var lockPaths = []string{
-	".kkachi/active_run.lock",
-	".kkachi/project_write.lock",
-}
-
 // DiagnosticCheck is one read-only project doctor finding.
 type DiagnosticCheck struct {
 	Name     string
@@ -417,6 +412,10 @@ func inspectLocks(root Root) []DiagnosticCheck {
 			checks = append(checks, check)
 			continue
 		}
+		name := ProjectWriteLockName
+		if lockPath == activeRunLockPath {
+			name = ActiveRunLockName
+		}
 		info, err := os.Lstat(path.Absolute)
 		if os.IsNotExist(err) {
 			checks = append(checks, passCheck("locks", path.Relative, "lock file is absent"))
@@ -426,17 +425,21 @@ func inspectLocks(root Root) []DiagnosticCheck {
 			checks = append(checks, failCheck("locks", path.Relative, "cannot inspect lock file", "Check permissions and remove unsafe lock paths only after preserving diagnostics.", "path", "inspectable absent or readable lock", err.Error()))
 			continue
 		}
-		if info.IsDir() {
-			checks = append(checks, failCheck("locks", path.Relative, "lock path is a directory", "Replace the directory with a regular lock file only through future lock recovery tooling.", "path", "absent or readable regular lock", "directory"))
+		if info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			checks = append(checks, failCheck("locks", path.Relative, "lock path is not a regular file", "Preserve the path for diagnosis; do not remove it silently.", "path", "absent or readable regular lock", info.Mode().String()))
 			continue
 		}
-		data, err := os.ReadFile(path.Absolute)
+		inspection, err := inspectLockFile(root, name, time.Now().UTC())
 		if err != nil {
-			checks = append(checks, failCheck("locks", path.Relative, "lock file exists but is unreadable", "Preserve the lock for diagnosis and inspect permissions before removing it.", "path", "readable lock file", err.Error()))
+			checks = append(checks, checkFromError("locks", err))
 			continue
 		}
-		actual := fmt.Sprintf("present (%d bytes)", len(data))
-		checks = append(checks, DiagnosticCheck{Name: "locks", Status: CheckWarn, Path: path.Relative, Message: "lock file is present", Hint: "A future lock workflow will own stale lock recovery; for now verify no writer is active before changing state.", Field: "path", Expected: "absent when no helper run is active", Actual: actual})
+		actual := lockIdentity(inspection.metadata)
+		if inspection.stale {
+			checks = append(checks, DiagnosticCheck{Name: "locks", Status: CheckWarn, Path: path.Relative, Message: "stale lock file is present", Hint: "Run lock recover for this stale lock target with --reason before retrying mutating commands.", Field: "lock", Expected: "absent lock", Actual: actual + " stale: " + inspection.reason})
+			continue
+		}
+		checks = append(checks, DiagnosticCheck{Name: "locks", Status: CheckWarn, Path: path.Relative, Message: "fresh lock file is present", Hint: "Wait for the active writer to finish before mutating helper state.", Field: "lock", Expected: "absent when no helper run is active", Actual: actual})
 	}
 	return checks
 }

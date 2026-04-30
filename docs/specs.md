@@ -209,14 +209,14 @@ Minimum fields:
 
 Run id lookup accepts an exact run id, or a prefix only when it resolves to exactly one run. Missing and ambiguous prefixes fail closed.
 
-Run lifecycle commands in `runwf-001` use these state transitions:
+Run lifecycle commands in `runwf-001` use these state transitions. In `runwf-002`, mutating run lifecycle commands are additionally serialized by the lock policy in [Locking](#11-locking).
 
 - `run create` records `.kkachi/runs/<run_id>/run-metadata.json` with `state: "created"`, `required_artifacts: []`, and `gate_state: {}` as part of the `run.created` lifecycle event. If metadata recording fails after the event line is appended, `status.last_event_id` is not advanced, leaving an explicit status/event mismatch for fail-closed recovery.
 - `run activate <run_id>` only accepts `created` runs and records metadata `state: "active"`, `status.active_run_id`, and `status.active_run_state` as part of the `run.activated` lifecycle event. If another run is already active, it fails closed.
 - `run close <run_id>` and `run abort <run_id>` only accept `created` or `active` runs and record metadata `state: "closed"` / `"aborted"` as part of the `run.closed` or `run.aborted` lifecycle event. If the target is active, they clear the status active-run fields in the same status update.
 - Before run lookup or mutation, the helper verifies that `status.last_event_id` matches the event log tail. Mismatch fails closed without starting another run transition. Lifecycle commands append the event before advancing status so any post-event metadata/status write failure is surfaced as a status/event mismatch rather than silently disappearing.
 
-`runwf-001` does not create `.kkachi/active_run.lock`, `.kkachi/project_write.lock`, artifact manifests, or baseline artifact files. Those remain scoped to `runwf-002` and `runwf-003`.
+`runwf-001` does not define artifact manifests or baseline artifact files; those remain scoped to `runwf-003`. `runwf-002` adds transient lock-file enforcement around mutating project and run lifecycle operations.
 
 ## 8. Work paths and gates
 
@@ -365,7 +365,7 @@ JSON output has the following stable shape:
 }
 ```
 
-Warnings return exit code `0`; failures return exit code `3`. Doctor does not implement stale-lock policy or recovery in `corex-005`; those remain under `runwf-002`.
+Warnings return exit code `0`; failures return exit code `3`. `corex-005` introduced read-only lock diagnostics; `runwf-002` adds stale-lock interpretation and explicit recovery while keeping `project doctor` read-only.
 
 ## 11. Locking
 
@@ -380,8 +380,14 @@ Lock requirements:
 
 - Use atomic create where possible.
 - Record owner process id, hostname, command, run id, and timestamp.
-- `project doctor` reports absent locks as pass, present readable locks as warning, and unreadable or path-unsafe lock paths as failure.
-- Stale-lock age policy and ownership interpretation are deferred to `runwf-002`.
+- `project_write.lock` serializes helper-state mutations such as event appends and run creation.
+- `active_run.lock` serializes run lifecycle transitions; lifecycle commands also acquire `project_write.lock` so status/events/metadata updates remain one-active-write by default.
+- `project doctor` reports absent locks as pass, fresh or stale readable locks as warning, and malformed, unreadable, non-regular, or path-unsafe lock paths as failure.
+- A lock is stale when it is older than 30 minutes, or when it belongs to the current host and its owner pid is no longer alive.
+- A mutating command encountering a fresh lock fails closed with `lock_conflict`.
+- A mutating command encountering a stale lock fails closed with `lock_stale_recovery_required`; it must not silently remove or reuse the lock.
+- `lock recover <active-run|project-write|all> --reason <text> [--run <run_id>]` is the explicit recovery command. It refuses fresh locks, malformed lock metadata, absent targeted locks, and recovery without a reason.
+- Recovery appends `lock.recovered` before lock removal and advances `status.last_event_id`.
 - Provide explicit recovery commands rather than silent lock removal.
 - Do not allow forced unlock without an event record.
 
