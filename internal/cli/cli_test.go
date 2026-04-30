@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/SeventeenthEarth/kkachi-agent-helper/internal/project"
 )
 
 func TestVersionHumanOutput(t *testing.T) {
@@ -292,6 +294,166 @@ func TestCommandGroupRequiresRepositoryRoot(t *testing.T) {
 	}
 	if env.Error.ExitCode != ExitNotFound {
 		t.Fatalf("error exit code = %d, want %d", env.Error.ExitCode, ExitNotFound)
+	}
+	if env.Error.Hint == "" || env.Error.Expected == "" || env.Error.Actual == "" {
+		t.Fatalf("error = %#v, want structured remediation fields", env.Error)
+	}
+	assertNoHumanDecoration(t, stderr.String())
+}
+
+func TestEventAppendJSONOutput(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	exitCode := runWithOptions(
+		[]string{"event", "append", "artifact.written", "--run", "run-abc", "--payload", `{"path":"impl-log.md"}`, "--json"},
+		&stdout,
+		&stderr,
+		testBuildInfo(),
+		runOptions{workingDir: repo},
+	)
+
+	if exitCode != ExitOK {
+		t.Fatalf("exitCode = %d, want %d\nstderr: %s", exitCode, ExitOK, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	assertNoHumanDecoration(t, stdout.String())
+	var payload eventAppendOutput
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if payload.EventID != "evt-000002" || payload.PreviousID != "evt-000001" || payload.EventsPath != ".kkachi/events.jsonl" {
+		t.Fatalf("payload = %#v, want appended event summary", payload)
+	}
+	statusBytes, err := os.ReadFile(filepath.Join(repo, ".kkachi", "status.json"))
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if !strings.Contains(string(statusBytes), `"last_event_id": "evt-000002"`) {
+		t.Fatalf("status = %s, want advanced last_event_id", string(statusBytes))
+	}
+}
+
+func TestEventAppendValidatesOptionsAndPayload(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+
+	tests := []struct {
+		name string
+		args []string
+		code string
+	}{
+		{
+			name: "missing run",
+			args: []string{"event", "append", "artifact.written", "--payload", `{}`, "--json"},
+			code: "run_id_required",
+		},
+		{
+			name: "missing payload",
+			args: []string{"event", "append", "artifact.written", "--run", "run-abc", "--json"},
+			code: "payload_required",
+		},
+		{
+			name: "invalid payload json",
+			args: []string{"event", "append", "artifact.written", "--run", "run-abc", "--payload", `{`, "--json"},
+			code: "payload_invalid_json",
+		},
+		{
+			name: "payload array is not object",
+			args: []string{"event", "append", "artifact.written", "--run", "run-abc", "--payload", `[]`, "--json"},
+			code: "payload_invalid_json",
+		},
+		{
+			name: "payload null is not object",
+			args: []string{"event", "append", "artifact.written", "--run", "run-abc", "--payload", `null`, "--json"},
+			code: "payload_invalid_json",
+		},
+		{
+			name: "empty event type",
+			args: []string{"event", "append", "", "--run", "run-abc", "--payload", `{}`, "--json"},
+			code: "event_type_required",
+		},
+		{
+			name: "oversized payload",
+			args: []string{"event", "append", "artifact.written", "--run", "run-abc", "--payload", `{"blob":"` + strings.Repeat("x", project.MaxEventPayloadBytes) + `"}`, "--json"},
+			code: "payload_too_large",
+		},
+		{
+			name: "control character run id",
+			args: []string{"event", "append", "artifact.written", "--run", "run-abc\nsecond-line", "--payload", `{}`, "--json"},
+			code: "run_id_invalid",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stdout.Reset()
+			stderr.Reset()
+			assertCLIErrorCode(t, runWithOptions(tt.args, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitUsage, tt.code)
+		})
+	}
+}
+
+func TestEventAppendRefusesCoherenceMismatch(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".kkachi", "events.jsonl"), []byte(`{"version":"0.1","event_id":"evt-000002","occurred_at":"2026-04-30T02:00:00Z","run_id":null,"type":"run.created","actor":"helper","payload":{}}`+"\n"), 0o600); err != nil {
+		t.Fatalf("write divergent event log: %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	exitCode := runWithOptions(
+		[]string{"event", "append", "artifact.written", "--run", "run-abc", "--payload", `{}`, "--json"},
+		&stdout,
+		&stderr,
+		testBuildInfo(),
+		runOptions{workingDir: repo},
+	)
+
+	if exitCode != ExitSafety {
+		t.Fatalf("exitCode = %d, want %d", exitCode, ExitSafety)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	env := decodeErrorEnvelope(t, stderr.Bytes())
+	if env.Error.Code != "last_event_id_mismatch" {
+		t.Fatalf("error code = %q, want last_event_id_mismatch", env.Error.Code)
+	}
+	if env.Error.Expected != "evt-000002" || env.Error.Actual != "evt-000001" {
+		t.Fatalf("error coherence fields = %#v, want expected event tail and actual status", env.Error)
+	}
+}
+
+func assertCLIErrorCode(t *testing.T, exitCode int, stdout bytes.Buffer, stderr bytes.Buffer, wantExitCode int, wantCode string) {
+	t.Helper()
+
+	if exitCode != wantExitCode {
+		t.Fatalf("exitCode = %d, want %d", exitCode, wantExitCode)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	env := decodeErrorEnvelope(t, stderr.Bytes())
+	if env.Error.Code != wantCode {
+		t.Fatalf("error code = %q, want %s", env.Error.Code, wantCode)
 	}
 	if env.Error.Hint == "" || env.Error.Expected == "" || env.Error.Actual == "" {
 		t.Fatalf("error = %#v, want structured remediation fields", env.Error)

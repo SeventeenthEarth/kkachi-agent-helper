@@ -61,6 +61,14 @@ type projectInitOutput struct {
 	InitialEventID string   `json:"initial_event_id"`
 }
 
+type eventAppendOutput struct {
+	EventID    string `json:"event_id"`
+	PreviousID string `json:"previous_id"`
+	StatusPath string `json:"status_path"`
+	EventsPath string `json:"events_path"`
+	OccurredAt string `json:"occurred_at"`
+}
+
 type globalOptions struct {
 	json bool
 	args []string
@@ -127,6 +135,9 @@ func runWithOptions(args []string, stdout io.Writer, stderr io.Writer, info Buil
 			if command == "project" {
 				return runProjectCommand(opts.args[1:], root, stdout, stderr, opts.json)
 			}
+			if command == "event" {
+				return runEventCommand(opts.args[1:], root, stdout, stderr, opts.json)
+			}
 			writeError(stderr, opts.json, cliError{
 				Code:     "not_implemented",
 				Message:  fmt.Sprintf("command group %q is not implemented yet", command),
@@ -165,6 +176,129 @@ func runProjectCommand(args []string, root project.Root, stdout io.Writer, stder
 		ExitCode: ExitUsage,
 	})
 	return ExitUsage
+}
+
+func runEventCommand(args []string, root project.Root, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
+	if len(args) < 2 || args[0] != "append" {
+		writeError(stderr, jsonMode, cliError{
+			Code:     "not_implemented",
+			Message:  "event command is not implemented yet",
+			Hint:     eventAppendUsageHint(),
+			ExitCode: ExitUsage,
+		})
+		return ExitUsage
+	}
+
+	eventType := args[1]
+	runID := ""
+	payloadText := ""
+	for i := 2; i < len(args); i++ {
+		switch args[i] {
+		case "--run":
+			if i+1 >= len(args) {
+				writeError(stderr, jsonMode, missingOptionValueError("--run", "run id", "Pass --run <run_id>."))
+				return ExitUsage
+			}
+			runID = args[i+1]
+			i++
+		case "--payload":
+			if i+1 >= len(args) {
+				writeError(stderr, jsonMode, missingOptionValueError("--payload", "JSON object", "Pass --payload '<json-object>'."))
+				return ExitUsage
+			}
+			payloadText = args[i+1]
+			i++
+		default:
+			writeError(stderr, jsonMode, cliError{
+				Code:     "unknown_option",
+				Message:  fmt.Sprintf("unknown event append option %q", args[i]),
+				Hint:     eventAppendUsageHint(),
+				ExitCode: ExitUsage,
+				Field:    "option",
+				Expected: "--run or --payload",
+				Actual:   args[i],
+			})
+			return ExitUsage
+		}
+	}
+	if strings.TrimSpace(runID) == "" {
+		writeError(stderr, jsonMode, cliError{
+			Code:     "run_id_required",
+			Message:  "event append requires --run",
+			Hint:     "Pass --run <run_id> so the event remains attributable.",
+			ExitCode: ExitUsage,
+			Field:    "run_id",
+			Expected: "non-empty run id",
+			Actual:   "empty",
+		})
+		return ExitUsage
+	}
+	if strings.TrimSpace(payloadText) == "" {
+		writeError(stderr, jsonMode, cliError{
+			Code:     "payload_required",
+			Message:  "event append requires --payload",
+			Hint:     "Pass --payload '<json-object>' even when the object is empty.",
+			ExitCode: ExitUsage,
+			Field:    "payload",
+			Expected: "JSON object",
+			Actual:   "empty",
+		})
+		return ExitUsage
+	}
+	if len(payloadText) > project.MaxEventPayloadBytes {
+		writeError(stderr, jsonMode, cliError{
+			Code:     "payload_too_large",
+			Message:  "event payload exceeds the maximum supported size",
+			Hint:     "Store large evidence in artifacts and keep event payloads compact.",
+			ExitCode: ExitUsage,
+			Field:    "payload",
+			Expected: fmt.Sprintf("at most %d bytes", project.MaxEventPayloadBytes),
+			Actual:   fmt.Sprintf("%d bytes", len(payloadText)),
+		})
+		return ExitUsage
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(payloadText), &payload); err != nil || payload == nil {
+		actual := "not an object"
+		if err != nil {
+			actual = err.Error()
+		}
+		writeError(stderr, jsonMode, cliError{
+			Code:     "payload_invalid_json",
+			Message:  "event payload must be a JSON object",
+			Hint:     "Pass --payload with a valid JSON object such as '{\"key\":\"value\"}'.",
+			ExitCode: ExitUsage,
+			Field:    "payload",
+			Expected: "JSON object",
+			Actual:   actual,
+		})
+		return ExitUsage
+	}
+
+	result, err := project.AppendEvent(root, project.AppendEventOptions{Type: eventType, RunID: runID, Payload: payload})
+	if err != nil {
+		cliErr := errorFromProjectProblem(err)
+		writeError(stderr, jsonMode, cliErr)
+		return cliErr.ExitCode
+	}
+	writeEventAppendResult(stdout, result, jsonMode)
+	return ExitOK
+}
+
+func eventAppendUsageHint() string {
+	return "Use event append <type> --run <run_id> --payload <json-object>."
+}
+
+func missingOptionValueError(option string, expected string, hint string) cliError {
+	return cliError{
+		Code:     "missing_option_value",
+		Message:  option + " requires a value",
+		Hint:     hint,
+		ExitCode: ExitUsage,
+		Field:    option,
+		Expected: expected,
+		Actual:   "missing",
+	}
 }
 
 func parseGlobalOptions(args []string) globalOptions {
@@ -219,6 +353,25 @@ func writeProjectInitResult(w io.Writer, result project.InitResult, jsonMode boo
 		fmt.Fprintf(w, "- %s\n", path)
 	}
 	fmt.Fprintf(w, "initial_event_id: %s\n", payload.InitialEventID)
+}
+
+func writeEventAppendResult(w io.Writer, result project.AppendEventResult, jsonMode bool) {
+	payload := eventAppendOutput{
+		EventID:    result.EventID,
+		PreviousID: result.PreviousID,
+		StatusPath: result.StatusPath,
+		EventsPath: result.EventsPath,
+		OccurredAt: result.OccurredAt,
+	}
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(payload)
+		return
+	}
+
+	fmt.Fprintf(w, "appended event: %s\n", payload.EventID)
+	fmt.Fprintf(w, "previous_event_id: %s\n", payload.PreviousID)
+	fmt.Fprintf(w, "events_file: %s\n", payload.EventsPath)
+	fmt.Fprintf(w, "status_file: %s\n", payload.StatusPath)
 }
 
 func hasValue(value string) bool {
@@ -289,7 +442,7 @@ func exitCodeForProblem(code string) int {
 	switch code {
 	case "repo_root_not_found":
 		return ExitNotFound
-	case "absolute_path", "empty_path", "path_escape", "repo_root_path", "symlink_escape", "symlink_resolution_failed", "path_inspection_failed", "repo_root_required", "helper_state_exists":
+	case "absolute_path", "empty_path", "path_escape", "repo_root_path", "symlink_escape", "symlink_resolution_failed", "path_inspection_failed", "repo_root_required", "helper_state_exists", "last_event_id_mismatch", "status_invalid_json", "status_last_event_id_invalid", "event_log_invalid", "event_log_empty", "event_id_invalid":
 		return ExitSafety
 	default:
 		return ExitUsage

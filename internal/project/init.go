@@ -155,47 +155,7 @@ func rejectExistingManagedFiles(paths []SafePath) error {
 }
 
 func writeNewFile(path SafePath, content []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path.Absolute), 0o755); err != nil {
-		return &Problem{
-			Code:     "helper_state_directory_failed",
-			Message:  "cannot create helper state directory",
-			Hint:     "Check permissions and ensure helper-managed parent paths are directories.",
-			Path:     filepath.ToSlash(filepath.Dir(path.Relative)),
-			Field:    "path",
-			Expected: "writable directory path",
-			Actual:   err.Error(),
-		}
-	}
-
-	file, err := os.OpenFile(path.Absolute, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return helperStateExistsProblem(path.Relative, nil)
-		}
-		return &Problem{
-			Code:     "helper_state_write_failed",
-			Message:  "cannot create helper state file",
-			Hint:     "Check repository permissions and preserve stderr for diagnosis.",
-			Path:     path.Relative,
-			Field:    "path",
-			Expected: "writable new file",
-			Actual:   err.Error(),
-		}
-	}
-	defer file.Close()
-
-	if _, err := file.Write(content); err != nil {
-		return &Problem{
-			Code:     "helper_state_write_failed",
-			Message:  "cannot write helper state file",
-			Hint:     "Check repository permissions and preserve stderr for diagnosis.",
-			Path:     path.Relative,
-			Field:    "path",
-			Expected: "writable file",
-			Actual:   err.Error(),
-		}
-	}
-	return nil
+	return writeNewFileAtomically(path, content)
 }
 
 func helperStateExistsProblem(relative string, info os.FileInfo) *Problem {

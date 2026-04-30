@@ -74,6 +74,23 @@ func TestProjectInitCreatesStateAndRefusesOverwrite(t *testing.T) {
 		}
 	}
 
+	appendCmd := exec.Command(binary, "event", "append", "artifact.written", "--run", "run-abc", "--payload", `{"path":"impl-log.md"}`, "--json")
+	appendCmd.Dir = repo
+	appendOutput, err := appendCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("event append failed: %v\n%s", err, string(appendOutput))
+	}
+	if !strings.Contains(string(appendOutput), `"event_id":"evt-000002"`) {
+		t.Fatalf("event append output = %s, want evt-000002", string(appendOutput))
+	}
+	statusBytes, err := os.ReadFile(filepath.Join(repo, ".kkachi", "status.json"))
+	if err != nil {
+		t.Fatalf("read status after event append: %v", err)
+	}
+	if !strings.Contains(string(statusBytes), `"last_event_id": "evt-000002"`) {
+		t.Fatalf("status after event append = %s, want evt-000002", string(statusBytes))
+	}
+
 	retry := exec.Command(binary, "project", "init", "--json")
 	retry.Dir = repo
 	retryOutput, err := retry.CombinedOutput()

@@ -85,6 +85,42 @@ for schema in "$repo"/.kkachi/schemas/*.schema.json; do
   assert_contains "$schema" '"version"' "$schema"
 done
 
+(cd "$repo" && "$helper" event append artifact.written --run run-abc --payload '{"path":"impl-log.md"}' --json > "$tmpdir/event.json" 2> "$tmpdir/event.err")
+
+assert_contains "$tmpdir/event.json" '"event_id":"evt-000002"' "event append JSON"
+assert_contains "$tmpdir/event.json" '"previous_id":"evt-000001"' "event append JSON"
+assert_contains "$repo/.kkachi/status.json" '"last_event_id": "evt-000002"' "status.json after event append"
+assert_contains "$repo/.kkachi/events.jsonl" '"event_id":"evt-000002"' "events.jsonl after event append"
+assert_contains "$repo/.kkachi/events.jsonl" '"type":"artifact.written"' "events.jsonl after event append"
+assert_contains "$repo/.kkachi/events.jsonl" '"run_id":"run-abc"' "events.jsonl after event append"
+
+event_count_after_append="$(wc -l < "$repo/.kkachi/events.jsonl" | tr -d ' ')"
+if [ "$event_count_after_append" != "2" ]; then
+  echo "events.jsonl line count after append = $event_count_after_append, want 2" >&2
+  cat "$repo/.kkachi/events.jsonl" >&2
+  exit 1
+fi
+
+cat >> "$repo/.kkachi/events.jsonl" <<'EOF_CRASH'
+{"version":"0.1","event_id":"evt-000003","occurred_at":"2026-04-30T03:00:00Z","run_id":"run-abc","type":"run.created","actor":"helper","payload":{}}
+EOF_CRASH
+
+if (cd "$repo" && "$helper" event append artifact.written --run run-abc --payload '{}' --json > "$tmpdir/mismatch.json" 2> "$tmpdir/mismatch.err"); then
+  echo "event append succeeded despite last_event_id mismatch" >&2
+  exit 1
+fi
+
+assert_contains "$tmpdir/mismatch.err" '"code":"last_event_id_mismatch"' "mismatch stderr"
+assert_contains "$tmpdir/mismatch.err" '"exit_code":3' "mismatch stderr"
+assert_contains "$repo/.kkachi/status.json" '"last_event_id": "evt-000002"' "status.json after refused mismatch append"
+
+event_count_after_refused_append="$(wc -l < "$repo/.kkachi/events.jsonl" | tr -d ' ')"
+if [ "$event_count_after_refused_append" != "3" ]; then
+  echo "events.jsonl line count after refused append = $event_count_after_refused_append, want 3" >&2
+  cat "$repo/.kkachi/events.jsonl" >&2
+  exit 1
+fi
+
 if (cd "$repo" && "$helper" project init --json > "$tmpdir/retry.json" 2> "$tmpdir/retry.err"); then
   echo "second project init succeeded unexpectedly" >&2
   exit 1

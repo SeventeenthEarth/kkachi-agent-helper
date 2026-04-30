@@ -17,4 +17,4 @@ run_scenario() {
   printf 'PASS\n'
 }
 
-run_scenario "corex-003 project init" "$project_root/tests/e2e/project-init.sh"
+run_scenario "corex-004 state coherence" "$project_root/tests/e2e/project-init.sh"

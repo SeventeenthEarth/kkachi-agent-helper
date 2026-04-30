@@ -165,7 +165,7 @@ Minimum fields:
 | `actor` | `helper`, `commander`, `bridge`, `reviewer`, or `operator`. |
 | `payload` | Event-specific data. |
 
-`project init` writes the first event as `evt-000001` with type `project.initialized`. Later append id allocation and coherence checks are owned by the atomic event work in `corex-004`.
+`project init` writes the first event as `evt-000001` with type `project.initialized`. `event append` allocates later ids as zero-padded sequential values (`evt-000002`, `evt-000003`, and so on) through `evt-999999`; exhaustion fails closed until a future migration widens the id policy. It appends exactly one JSONL line and advances `status.last_event_id` plus `status.updated_at`. Before appending, the helper verifies that `status.last_event_id` matches the tail event id in `events.jsonl`; a mismatch fails closed without appending another event. If the event append succeeds but the later status advance fails, the project is intentionally left fail-closed for `project doctor` or a future recovery command instead of silently rewriting history.
 
 Initial event types:
 
@@ -287,6 +287,10 @@ Command UX rules:
 - Non-zero exit means the requested action did not succeed.
 - Validation failures include path, field, expected value, actual value, and remediation hint.
 - Mutating commands append an event unless the command fails before mutation.
+- `event append` is itself the primitive append-only event mutation; it fails if status and event-log tail ids are incoherent.
+- `event append` keeps payloads compact: CLI payload input is limited to 256 KiB and serialized JSONL event lines are limited to 1 MiB. Larger evidence belongs in run artifacts.
+- Event run ids may be omitted/null; when present, they must be printable, newline-free strings. Full run id syntax is defined by later run workflow tasks.
+- State-file creation and replacement use atomic temp-file writes with durable sync before publish where the host filesystem supports it.
 - Commands must reject absolute paths, paths escaping the repository root, and ambiguous run ids.
 
 ## 11. Locking
@@ -384,7 +388,6 @@ The following items remain open until roadmap tasks close them:
 - implementation language and packaging strategy;
 - exact schema syntax and validator library;
 - run id format;
-- event id format after the initial `project init` event;
 - exact config schema;
 - exact lock stale detection policy;
 - skill/template package manifest format;
