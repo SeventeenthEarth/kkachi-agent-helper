@@ -52,6 +52,15 @@ type errorEnvelope struct {
 	Error cliError `json:"error"`
 }
 
+type projectInitOutput struct {
+	RootPath       string   `json:"root_path"`
+	ProjectID      string   `json:"project_id"`
+	ProjectName    string   `json:"project_name"`
+	CreatedPaths   []string `json:"created_paths"`
+	SchemaPaths    []string `json:"schema_paths"`
+	InitialEventID string   `json:"initial_event_id"`
+}
+
 type globalOptions struct {
 	json bool
 	args []string
@@ -109,10 +118,14 @@ func runWithOptions(args []string, stdout io.Writer, stderr io.Writer, info Buil
 		return ExitOK
 	default:
 		if _, ok := commandGroups[command]; ok {
-			if _, err := project.DiscoverRoot(options.workingDir); err != nil {
+			root, err := project.DiscoverRoot(options.workingDir)
+			if err != nil {
 				cliErr := errorFromProjectProblem(err)
 				writeError(stderr, opts.json, cliErr)
 				return cliErr.ExitCode
+			}
+			if command == "project" {
+				return runProjectCommand(opts.args[1:], root, stdout, stderr, opts.json)
 			}
 			writeError(stderr, opts.json, cliError{
 				Code:     "not_implemented",
@@ -131,6 +144,27 @@ func runWithOptions(args []string, stdout io.Writer, stderr io.Writer, info Buil
 		})
 		return ExitUsage
 	}
+}
+
+func runProjectCommand(args []string, root project.Root, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
+	if len(args) == 1 && args[0] == "init" {
+		result, err := project.InitProject(root, project.InitOptions{})
+		if err != nil {
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writeProjectInitResult(stdout, result, jsonMode)
+		return ExitOK
+	}
+
+	writeError(stderr, jsonMode, cliError{
+		Code:     "not_implemented",
+		Message:  "project command is not implemented yet",
+		Hint:     "Only project init is available in corex-003; other project commands are reserved by docs/specs.md.",
+		ExitCode: ExitUsage,
+	})
+	return ExitUsage
 }
 
 func parseGlobalOptions(args []string) globalOptions {
@@ -159,6 +193,32 @@ func writeVersion(w io.Writer, info BuildInfo, jsonMode bool) {
 		parts = append(parts, "built "+info.BuildDate)
 	}
 	fmt.Fprintln(w, strings.Join(parts, " "))
+}
+
+func writeProjectInitResult(w io.Writer, result project.InitResult, jsonMode bool) {
+	payload := projectInitOutput{
+		RootPath:       result.RootPath,
+		ProjectID:      result.ProjectID,
+		ProjectName:    result.ProjectName,
+		CreatedPaths:   result.CreatedPaths,
+		SchemaPaths:    result.SchemaPaths,
+		InitialEventID: result.InitialEventID,
+	}
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(payload)
+		return
+	}
+
+	fmt.Fprintf(w, "initialized kkachi project: %s\n", payload.RootPath)
+	fmt.Fprintf(w, "project_id: %s\n", payload.ProjectID)
+	fmt.Fprintf(w, "created:\n")
+	for _, path := range payload.CreatedPaths {
+		fmt.Fprintf(w, "- %s\n", path)
+	}
+	for _, path := range payload.SchemaPaths {
+		fmt.Fprintf(w, "- %s\n", path)
+	}
+	fmt.Fprintf(w, "initial_event_id: %s\n", payload.InitialEventID)
 }
 
 func hasValue(value string) bool {
@@ -229,7 +289,7 @@ func exitCodeForProblem(code string) int {
 	switch code {
 	case "repo_root_not_found":
 		return ExitNotFound
-	case "absolute_path", "empty_path", "path_escape", "repo_root_path", "symlink_escape", "symlink_resolution_failed", "path_inspection_failed", "repo_root_required":
+	case "absolute_path", "empty_path", "path_escape", "repo_root_path", "symlink_escape", "symlink_resolution_failed", "path_inspection_failed", "repo_root_required", "helper_state_exists":
 		return ExitSafety
 	default:
 		return ExitUsage

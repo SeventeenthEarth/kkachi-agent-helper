@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -113,7 +115,7 @@ func TestKnownCommandGroupIsNotImplemented(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	exitCode := Run([]string{"project", "init"}, &stdout, &stderr, testBuildInfo())
+	exitCode := Run([]string{"run", "create"}, &stdout, &stderr, testBuildInfo())
 
 	if exitCode == 0 {
 		t.Fatal("exitCode = 0, want non-zero")
@@ -121,7 +123,124 @@ func TestKnownCommandGroupIsNotImplemented(t *testing.T) {
 	if stdout.Len() != 0 {
 		t.Fatalf("stdout = %q, want empty", stdout.String())
 	}
-	assertHumanError(t, stderr.String(), `command group "project" is not implemented yet`)
+	assertHumanError(t, stderr.String(), `command group "run" is not implemented yet`)
+}
+
+func TestProjectInitHumanOutput(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runWithOptions(
+		[]string{"project", "init"},
+		&stdout,
+		&stderr,
+		testBuildInfo(),
+		runOptions{workingDir: repo},
+	)
+
+	if exitCode != ExitOK {
+		t.Fatalf("exitCode = %d, want %d\nstderr: %s", exitCode, ExitOK, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "initialized kkachi project:") || !strings.Contains(output, ".kkachi/config.yaml") || !strings.Contains(output, "initial_event_id: evt-000001") {
+		t.Fatalf("stdout = %q, want init summary", output)
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".kkachi", "status.json")); err != nil {
+		t.Fatalf("status.json was not created: %v", err)
+	}
+}
+
+func TestProjectInitJSONOutput(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runWithOptions(
+		[]string{"project", "init", "--json"},
+		&stdout,
+		&stderr,
+		testBuildInfo(),
+		runOptions{workingDir: filepath.Join(repo, "nested")},
+	)
+
+	if exitCode != ExitOK {
+		t.Fatalf("exitCode = %d, want %d\nstderr: %s", exitCode, ExitOK, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	assertNoHumanDecoration(t, stdout.String())
+
+	var payload projectInitOutput
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if payload.RootPath == "" || payload.ProjectID == "" || payload.ProjectName == "" {
+		t.Fatalf("payload = %#v, want root and project identity", payload)
+	}
+	if payload.InitialEventID != "evt-000001" {
+		t.Fatalf("initial event id = %q, want evt-000001", payload.InitialEventID)
+	}
+	if len(payload.CreatedPaths) != 3 || len(payload.SchemaPaths) != 5 {
+		t.Fatalf("payload paths = %#v/%#v, want created and schema paths", payload.CreatedPaths, payload.SchemaPaths)
+	}
+}
+
+func TestProjectInitRefusesExistingState(t *testing.T) {
+	repo := tempGitRepo(t)
+	if err := os.MkdirAll(filepath.Join(repo, ".kkachi"), 0o755); err != nil {
+		t.Fatalf("mkdir .kkachi: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".kkachi", "status.json"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write existing status: %v", err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runWithOptions(
+		[]string{"project", "init", "--json"},
+		&stdout,
+		&stderr,
+		testBuildInfo(),
+		runOptions{workingDir: repo},
+	)
+
+	if exitCode != ExitSafety {
+		t.Fatalf("exitCode = %d, want %d", exitCode, ExitSafety)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	env := decodeErrorEnvelope(t, stderr.Bytes())
+	if env.Error.Code != "helper_state_exists" {
+		t.Fatalf("error code = %q, want helper_state_exists", env.Error.Code)
+	}
+}
+
+func TestUnsupportedProjectSubcommandIsNotImplemented(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runWithOptions(
+		[]string{"project", "status"},
+		&stdout,
+		&stderr,
+		testBuildInfo(),
+		runOptions{workingDir: repo},
+	)
+
+	if exitCode != ExitUsage {
+		t.Fatalf("exitCode = %d, want %d", exitCode, ExitUsage)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	assertHumanError(t, stderr.String(), "project command is not implemented yet")
 }
 
 func TestKnownCommandGroupJSONError(t *testing.T) {
@@ -216,4 +335,17 @@ func assertNoHumanDecoration(t *testing.T, output string) {
 	if strings.Contains(output, "error:") || strings.Contains(output, "hint:") {
 		t.Fatalf("output = %q, want raw JSON without human decoration", output)
 	}
+}
+
+func tempGitRepo(t *testing.T) string {
+	t.Helper()
+
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, "nested"), 0o755); err != nil {
+		t.Fatalf("mkdir nested: %v", err)
+	}
+	return repo
 }

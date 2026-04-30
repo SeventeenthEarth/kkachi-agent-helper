@@ -165,6 +165,8 @@ Minimum fields:
 | `actor` | `helper`, `commander`, `bridge`, `reviewer`, or `operator`. |
 | `payload` | Event-specific data. |
 
+`project init` writes the first event as `evt-000001` with type `project.initialized`. Later append id allocation and coherence checks are owned by the atomic event work in `corex-004`.
+
 Initial event types:
 
 - `project.initialized`
@@ -307,6 +309,7 @@ Lock requirements:
 ## 12. Schema and migration policy
 
 - Schemas live embedded in the binary and may also be copied under `.kkachi/schemas/` for transparency.
+- `project init` writes project-local minimal JSON Schema draft 2020-12 copies for the canonical schema names. These copies require `version` and remain intentionally permissive until `packg-001` adds the full registry and validator surface.
 - Every schema has a version.
 - Backward-compatible additions are allowed within a minor version when fields are optional.
 - Required field changes need a migration command and tests.
@@ -334,6 +337,14 @@ Initial gate names:
 
 `project init` creates `.kkachi/`, default config, schemas, status, and event log. It must not overwrite existing helper state without an explicit migration or reset command.
 
+Initial `project init` defaults:
+
+- `project.name` is derived from the repository basename as a slug.
+- `status.project_id` uses `kkachi-project-<project-slug>-<random-hex>`.
+- `status.last_event_id` is `evt-000001`.
+- `.kkachi/events.jsonl` contains exactly one initial `project.initialized` JSONL record.
+- `.kkachi/schemas/` contains minimal local schema copies for status, run metadata, event, selected CLI, and bridge session snapshot.
+
 Skill and template installation should support:
 
 - local path source for development;
@@ -351,6 +362,7 @@ Minimum implementation test layers:
 |---|---|
 | Unit | schema validation, path safety, id generation, lock behavior, gate rules. |
 | Integration | project init, run create/activate/close, event append, schema migration. |
+| Local E2E | User-visible CLI flows such as project init success, generated state files, JSON output, and unsafe overwrite refusal. |
 | Golden fixtures | valid and invalid `.kkachi/` workspaces. |
 | CLI tests | exit codes, JSON output, failure messages, dry-run behavior. |
 | Compatibility tests | migration from previous schema versions and helper-oc lessons where applicable. |
@@ -372,7 +384,7 @@ The following items remain open until roadmap tasks close them:
 - implementation language and packaging strategy;
 - exact schema syntax and validator library;
 - run id format;
-- event id format;
+- event id format after the initial `project init` event;
 - exact config schema;
 - exact lock stale detection policy;
 - skill/template package manifest format;
