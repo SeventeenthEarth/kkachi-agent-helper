@@ -144,7 +144,7 @@ Minimum fields:
 | `version` | string | Status schema version. |
 | `project_id` | string | Stable project identity. |
 | `active_run_id` | string or null | Current active run. |
-| `active_run_state` | string or null | `draft`, `ready`, `running`, `blocked`, `review`, `verified`, `closed`, or `aborted`. |
+| `active_run_state` | string or null | Current active run lifecycle summary. In `runwf-001`, this is `active` while a run is active and `null` otherwise; later gate workflows may add richer gate-phase summaries. |
 | `last_event_id` | string | Latest appended event id. |
 | `updated_at` | string | ISO timestamp from helper clock. |
 | `gate_summary` | object | Current pass/fail/blocked summary. |
@@ -192,7 +192,7 @@ Minimum fields:
 | Field | Allowed values or shape |
 |---|---|
 | `version` | schema version |
-| `run_id` | helper-generated id |
+| `run_id` | helper-generated id using `run-YYYYMMDDTHHMMSSZ-<12hex>` |
 | `task_id` | roadmap task id or null |
 | `title` | short title |
 | `work_path` | `A_development_execution` or `B_discovery_shaping` |
@@ -203,9 +203,20 @@ Minimum fields:
 | `commander` | assigned team-member profile name |
 | `redteam` | assigned red-team profile name or null |
 | `created_at` | ISO timestamp |
-| `state` | run lifecycle state |
+| `state` | `created`, `active`, `closed`, or `aborted` |
 | `required_artifacts` | list of artifact paths required by gates |
 | `gate_state` | per-gate pass/fail/block summary |
+
+Run id lookup accepts an exact run id, or a prefix only when it resolves to exactly one run. Missing and ambiguous prefixes fail closed.
+
+Run lifecycle commands in `runwf-001` use these state transitions:
+
+- `run create` records `.kkachi/runs/<run_id>/run-metadata.json` with `state: "created"`, `required_artifacts: []`, and `gate_state: {}` as part of the `run.created` lifecycle event. If metadata recording fails after the event line is appended, `status.last_event_id` is not advanced, leaving an explicit status/event mismatch for fail-closed recovery.
+- `run activate <run_id>` only accepts `created` runs and records metadata `state: "active"`, `status.active_run_id`, and `status.active_run_state` as part of the `run.activated` lifecycle event. If another run is already active, it fails closed.
+- `run close <run_id>` and `run abort <run_id>` only accept `created` or `active` runs and record metadata `state: "closed"` / `"aborted"` as part of the `run.closed` or `run.aborted` lifecycle event. If the target is active, they clear the status active-run fields in the same status update.
+- Before run lookup or mutation, the helper verifies that `status.last_event_id` matches the event log tail. Mismatch fails closed without starting another run transition. Lifecycle commands append the event before advancing status so any post-event metadata/status write failure is surfaced as a status/event mismatch rather than silently disappearing.
+
+`runwf-001` does not create `.kkachi/active_run.lock`, `.kkachi/project_write.lock`, artifact manifests, or baseline artifact files. Those remain scoped to `runwf-002` and `runwf-003`.
 
 ## 8. Work paths and gates
 
@@ -265,10 +276,12 @@ Initial command groups:
 kkachi-agent-helper project init
 kkachi-agent-helper project doctor
 kkachi-agent-helper project status [--json]
-kkachi-agent-helper run create
-kkachi-agent-helper run activate <run_id>
-kkachi-agent-helper run close <run_id>
-kkachi-agent-helper run abort <run_id>
+kkachi-agent-helper run create --title <title> --work-path <A_development_execution|B_discovery_shaping> --work-mode <standard|light> --urgency <normal|urgent|critical> --sot-policy <existing_sot_basis|minimal_sot_before_code|full_sot_before_code> --execution-mode <production_write|adapter_qa|readiness_hardening|research|verification|docs_only> --commander <profile> [--task-id <id>] [--redteam <profile>]
+kkachi-agent-helper run list [--json]
+kkachi-agent-helper run show <run_id-or-prefix> [--json]
+kkachi-agent-helper run activate <run_id-or-prefix>
+kkachi-agent-helper run close <run_id-or-prefix>
+kkachi-agent-helper run abort <run_id-or-prefix>
 kkachi-agent-helper artifact init <run_id>
 kkachi-agent-helper artifact list <run_id> [--json]
 kkachi-agent-helper artifact validate <run_id> [--gate <gate>]

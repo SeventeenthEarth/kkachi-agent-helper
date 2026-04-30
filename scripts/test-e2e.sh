@@ -17,4 +17,4 @@ run_scenario() {
   printf 'PASS\n'
 }
 
-run_scenario "corex-005 project diagnostics" "$project_root/tests/e2e/project-init.sh"
+run_scenario "runwf-001 run lifecycle" "$project_root/tests/e2e/project-init.sh"

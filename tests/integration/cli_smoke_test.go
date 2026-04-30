@@ -48,8 +48,12 @@ func TestProjectInitCreatesStateAndRefusesOverwrite(t *testing.T) {
 	if err := json.Unmarshal(output, &payload); err != nil {
 		t.Fatalf("output is not JSON: %v\n%s", err, string(output))
 	}
-	if payload.RootPath != repo {
-		t.Fatalf("root_path = %q, want %q", payload.RootPath, repo)
+	wantRoot, err := filepath.EvalSymlinks(repo)
+	if err != nil {
+		t.Fatalf("eval repo path: %v", err)
+	}
+	if payload.RootPath != wantRoot {
+		t.Fatalf("root_path = %q, want %q", payload.RootPath, wantRoot)
 	}
 	if payload.ProjectID == "" || payload.ProjectName == "" || payload.InitialEventID != "evt-000001" {
 		t.Fatalf("payload = %#v, want project identity and initial event", payload)
@@ -94,21 +98,69 @@ func TestProjectInitCreatesStateAndRefusesOverwrite(t *testing.T) {
 		}
 	}
 
+	runCreate := exec.Command(binary, "run", "create", "--title", "Run workflow metadata", "--work-path", "A_development_execution", "--work-mode", "standard", "--urgency", "normal", "--sot-policy", "existing_sot_basis", "--execution-mode", "production_write", "--commander", "Gongmyeong", "--task-id", "runwf-001", "--json")
+	runCreate.Dir = repo
+	runCreateOutput, err := runCreate.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run create failed: %v\n%s", err, string(runCreateOutput))
+	}
+	var createdRun struct {
+		RunID   string `json:"run_id"`
+		State   string `json:"state"`
+		EventID string `json:"event_id"`
+	}
+	if err := json.Unmarshal(runCreateOutput, &createdRun); err != nil {
+		t.Fatalf("run create output is not JSON: %v\n%s", err, string(runCreateOutput))
+	}
+	if !strings.HasPrefix(createdRun.RunID, "run-") || createdRun.State != "created" || createdRun.EventID != "evt-000002" {
+		t.Fatalf("createdRun = %#v, want created evt-000002", createdRun)
+	}
+
+	runShow := exec.Command(binary, "run", "show", createdRun.RunID, "--json")
+	runShow.Dir = repo
+	runShowOutput, err := runShow.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run show failed: %v\n%s", err, string(runShowOutput))
+	}
+	if !strings.Contains(string(runShowOutput), `"task_id":"runwf-001"`) || !strings.Contains(string(runShowOutput), `"required_artifacts":[]`) {
+		t.Fatalf("run show output = %s, want metadata", string(runShowOutput))
+	}
+
+	runActivate := exec.Command(binary, "run", "activate", createdRun.RunID, "--json")
+	runActivate.Dir = repo
+	runActivateOutput, err := runActivate.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run activate failed: %v\n%s", err, string(runActivateOutput))
+	}
+	if !strings.Contains(string(runActivateOutput), `"state":"active"`) || !strings.Contains(string(runActivateOutput), `"event_id":"evt-000003"`) {
+		t.Fatalf("run activate output = %s, want active evt-000003", string(runActivateOutput))
+	}
+
+	runClose := exec.Command(binary, "run", "close", createdRun.RunID, "--json")
+	runClose.Dir = repo
+	runCloseOutput, err := runClose.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run close failed: %v\n%s", err, string(runCloseOutput))
+	}
+	if !strings.Contains(string(runCloseOutput), `"state":"closed"`) || !strings.Contains(string(runCloseOutput), `"event_id":"evt-000004"`) {
+		t.Fatalf("run close output = %s, want closed evt-000004", string(runCloseOutput))
+	}
+
 	appendCmd := exec.Command(binary, "event", "append", "artifact.written", "--run", "run-abc", "--payload", `{"path":"impl-log.md"}`, "--json")
 	appendCmd.Dir = repo
 	appendOutput, err := appendCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("event append failed: %v\n%s", err, string(appendOutput))
 	}
-	if !strings.Contains(string(appendOutput), `"event_id":"evt-000002"`) {
-		t.Fatalf("event append output = %s, want evt-000002", string(appendOutput))
+	if !strings.Contains(string(appendOutput), `"event_id":"evt-000005"`) {
+		t.Fatalf("event append output = %s, want evt-000005", string(appendOutput))
 	}
 	statusBytes, err := os.ReadFile(filepath.Join(repo, ".kkachi", "status.json"))
 	if err != nil {
 		t.Fatalf("read status after event append: %v", err)
 	}
-	if !strings.Contains(string(statusBytes), `"last_event_id": "evt-000002"`) {
-		t.Fatalf("status after event append = %s, want evt-000002", string(statusBytes))
+	if !strings.Contains(string(statusBytes), `"last_event_id": "evt-000005"`) {
+		t.Fatalf("status after event append = %s, want evt-000005", string(statusBytes))
 	}
 
 	retry := exec.Command(binary, "project", "init", "--json")

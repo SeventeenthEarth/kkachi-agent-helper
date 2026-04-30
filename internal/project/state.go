@@ -58,6 +58,10 @@ type AppendEventResult struct {
 // Callers must provide a single-writer lane; cross-process locking is deferred
 // to runwf-002.
 func AppendEvent(root Root, options AppendEventOptions) (AppendEventResult, error) {
+	return appendEventWithStatusMutation(root, options, nil)
+}
+
+func appendEventWithStatusMutation(root Root, options AppendEventOptions, mutateStatus func(map[string]any, string) error) (AppendEventResult, error) {
 	if strings.TrimSpace(root.Path) == "" {
 		return AppendEventResult{}, problem("repo_root_required", "repository root is required", "Discover the repository root before appending an event.")
 	}
@@ -152,6 +156,11 @@ func AppendEvent(root Root, options AppendEventOptions) (AppendEventResult, erro
 		return AppendEventResult{}, err
 	}
 
+	if mutateStatus != nil {
+		if err := mutateStatus(status, occurredAt); err != nil {
+			return AppendEventResult{}, err
+		}
+	}
 	status["last_event_id"] = nextID
 	status["updated_at"] = occurredAt
 	updatedStatus, err := json.MarshalIndent(status, "", "  ")

@@ -2,7 +2,7 @@
 
 `kkachi-agent-helper` is the deterministic local CLI helper for Kkachi project state, run artifacts, locks, schemas, events, and install scaffolding.
 
-The current implementation covers the `corex-001` through `corex-005` foundations: repository layout, Go toolchain, command shell, version output, repo-root discovery, safe repository-relative path handling, symlink escape rejection, canonical exit codes, structured human/JSON errors, verification commands, safe `.kkachi/` project initialization, atomic state writes, append-only event handling, `last_event_id` coherence checks, and read-only `project status` / `project doctor` diagnostics.
+The current implementation covers the `corex-001` through `corex-005` foundations plus `runwf-001`: repository layout, Go toolchain, command shell, version output, repo-root discovery, safe repository-relative path handling, symlink escape rejection, canonical exit codes, structured human/JSON errors, verification commands, safe `.kkachi/` project initialization, atomic state writes, append-only event handling, `last_event_id` coherence checks, read-only `project status` / `project doctor` diagnostics, and run metadata lifecycle commands.
 
 ## Source of truth
 
@@ -28,7 +28,7 @@ Test lanes are intentionally split:
 - `make test-prepare` runs formatting and static preparation checks.
 - `make test-unit` runs single-file/unit-level tests without external systems.
 - `make test-int` runs multi-component integration tests without external systems.
-- `make test-e2e` runs local end-to-end scenarios. For `corex-005`, it builds the helper, initializes a temporary project, verifies generated `.kkachi/` state, runs `project status` and `project doctor`, appends an event, checks `last_event_id` coherence, verifies doctor reports incoherent state, and checks overwrite refusal.
+- `make test-e2e` runs local end-to-end scenarios. For `runwf-001`, it builds the helper, initializes a temporary project, verifies generated `.kkachi/` state, runs `project status` and `project doctor`, creates/activates/closes a run, checks active-run fields and event ids, appends an event, checks `last_event_id` coherence, verifies doctor reports incoherent state, and checks overwrite refusal.
 - `make test` runs `test-prepare`, `test-unit`, `test-int`, and `test-e2e` sequentially.
 
 ## CLI examples
@@ -43,6 +43,12 @@ kkachi-agent-helper project status --json
 kkachi-agent-helper project doctor
 kkachi-agent-helper project doctor --json
 kkachi-agent-helper event append artifact.written --run run-abc --payload '{"path":"impl-log.md"}' --json
+kkachi-agent-helper run create --title 'Run workflow metadata' --work-path A_development_execution --work-mode standard --urgency normal --sot-policy existing_sot_basis --execution-mode production_write --commander Gongmyeong --task-id runwf-001 --json
+kkachi-agent-helper run list
+kkachi-agent-helper run show <run_id> --json
+kkachi-agent-helper run activate <run_id> --json
+kkachi-agent-helper run close <run_id> --json
+kkachi-agent-helper run abort <run_id> --json
 ```
 
 For `corex-004`, `project init` creates `.kkachi/config.yaml`, `.kkachi/status.json`, `.kkachi/events.jsonl`, and the initial `.kkachi/schemas/*.schema.json` files using atomic new-file writes. It allows existing empty helper directories but refuses to overwrite any helper-managed file.
@@ -51,7 +57,9 @@ For `corex-004`, `project init` creates `.kkachi/config.yaml`, `.kkachi/status.j
 
 For `corex-005`, `project status` and `project doctor` are read-only. They do not repair `.kkachi/`, append events, create locks, or rewrite status. `project status` summarizes root path, health, project identity, active run fields, `last_event_id`, event-log tail/count, `updated_at`, gate summary, and issues. `project doctor` reports pass/warn/fail checks for config, status, events, canonical paths, schema availability, lock files, and status/event coherence. Present lock files are warnings; malformed files, unsafe paths, schema problems, and coherence mismatches fail closed.
 
-Other command groups such as `run`, `artifact`, `gate`, `schema`, and `install`, plus later `project` subcommands, remain reserved placeholders. Repo-bound command groups first require a discoverable Git or `.kkachi` repository root, then return deterministic `not_implemented` errors until their roadmap tasks add real behavior.
+`runwf-001` implements `run create`, `run list`, `run show`, `run activate`, `run close`, and `run abort`. Run ids use `run-YYYYMMDDTHHMMSSZ-<12hex>`. Full ids resolve exactly; prefixes resolve only when unique, and missing or ambiguous prefixes fail closed. `run create` records `.kkachi/runs/<run_id>/run-metadata.json` with `state: "created"`, empty `required_artifacts`, empty `gate_state`, and a `run.created` event. `run activate` only accepts `created` runs and sets `status.active_run_id` / `status.active_run_state` with `run.activated`. `run close` and `run abort` only accept `created` or `active` runs, clear active status fields when they target the active run, and append `run.closed` / `run.aborted`. Lock files and artifact initialization remain deferred to `runwf-002` / `runwf-003`; this release only rejects active-run conflicts through status state.
+
+Other command groups such as `artifact`, `gate`, `schema`, and `install`, plus later `project` subcommands, remain reserved placeholders. Repo-bound command groups first require a discoverable Git or `.kkachi` repository root, then return deterministic `not_implemented` errors until their roadmap tasks add real behavior.
 
 Error output is stable for both humans and scripts:
 

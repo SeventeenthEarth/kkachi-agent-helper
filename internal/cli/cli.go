@@ -69,6 +69,24 @@ type eventAppendOutput struct {
 	OccurredAt string `json:"occurred_at"`
 }
 
+type runCreateOutput struct {
+	RunID    string              `json:"run_id"`
+	State    string              `json:"state"`
+	RunPath  string              `json:"run_path"`
+	EventID  string              `json:"event_id"`
+	Metadata project.RunMetadata `json:"metadata"`
+}
+
+type runLifecycleOutput struct {
+	RunID   string `json:"run_id"`
+	State   string `json:"state"`
+	EventID string `json:"event_id"`
+}
+
+type runListOutput struct {
+	Runs []project.RunSummary `json:"runs"`
+}
+
 type projectStatusOutput struct {
 	RootPath       string                     `json:"root_path"`
 	Health         string                     `json:"health"`
@@ -174,6 +192,9 @@ func runWithOptions(args []string, stdout io.Writer, stderr io.Writer, info Buil
 			if command == "project" {
 				return runProjectCommand(opts.args[1:], root, stdout, stderr, opts.json)
 			}
+			if command == "run" {
+				return runRunCommand(opts.args[1:], root, stdout, stderr, opts.json)
+			}
 			if command == "event" {
 				return runEventCommand(opts.args[1:], root, stdout, stderr, opts.json)
 			}
@@ -250,6 +271,168 @@ func runProjectCommand(args []string, root project.Root, stdout io.Writer, stder
 		ExitCode: ExitUsage,
 	})
 	return ExitUsage
+}
+
+func runRunCommand(args []string, root project.Root, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
+	if len(args) == 0 {
+		writeError(stderr, jsonMode, cliError{Code: "run_subcommand_required", Message: "run subcommand is required", Hint: runUsageHint(), ExitCode: ExitUsage})
+		return ExitUsage
+	}
+	switch args[0] {
+	case "create":
+		options, ok := parseRunCreateOptions(args[1:], stderr, jsonMode)
+		if !ok {
+			return ExitUsage
+		}
+		result, err := project.CreateRun(root, options)
+		if err != nil {
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writeRunCreateResult(stdout, result, jsonMode)
+		return ExitOK
+	case "activate", "close", "abort":
+		if err := requireOneRunID(args); err != nil {
+			writeError(stderr, jsonMode, *err)
+			return ExitUsage
+		}
+		result, err := executeRunLifecycle(args[0], root, args[1])
+		if err != nil {
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writeRunLifecycleResult(stdout, args[0], result, jsonMode)
+		return ExitOK
+	case "list":
+		if len(args) != 1 {
+			writeError(stderr, jsonMode, cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown run list option %q", args[1]), Hint: "Use run list with optional global --json only.", ExitCode: ExitUsage, Field: "option", Expected: "no run list options", Actual: args[1]})
+			return ExitUsage
+		}
+		runs, err := project.ListRuns(root)
+		if err != nil {
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writeRunListResult(stdout, runs, jsonMode)
+		return ExitOK
+	case "show":
+		if err := requireOneRunID(args); err != nil {
+			writeError(stderr, jsonMode, *err)
+			return ExitUsage
+		}
+		metadata, err := project.ShowRun(root, args[1])
+		if err != nil {
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writeRunShowResult(stdout, metadata, jsonMode)
+		return ExitOK
+	default:
+		writeError(stderr, jsonMode, cliError{Code: "not_implemented", Message: "run command is not implemented yet", Hint: runUsageHint(), ExitCode: ExitUsage})
+		return ExitUsage
+	}
+}
+
+func requireOneRunID(args []string) *cliError {
+	command := args[0]
+	if len(args) == 2 {
+		return nil
+	}
+	if len(args) > 2 && strings.HasPrefix(args[2], "--") {
+		expected := "no run lifecycle options"
+		if command == "show" {
+			expected = "no run show options"
+		}
+		return &cliError{
+			Code:     "unknown_option",
+			Message:  fmt.Sprintf("unknown run %s option %q", command, args[2]),
+			Hint:     fmt.Sprintf("Use run %s <run_id> with optional global --json only.", command),
+			ExitCode: ExitUsage,
+			Field:    "option",
+			Expected: expected,
+			Actual:   args[2],
+		}
+	}
+	return &cliError{
+		Code:     "run_id_required",
+		Message:  fmt.Sprintf("run %s requires exactly one run id", command),
+		Hint:     fmt.Sprintf("Use run %s <run_id>.", command),
+		ExitCode: ExitUsage,
+		Field:    "run_id",
+		Expected: "one run id or unique prefix",
+		Actual:   fmt.Sprintf("%d arguments", len(args)-1),
+	}
+}
+
+func executeRunLifecycle(command string, root project.Root, runID string) (project.RunLifecycleResult, error) {
+	options := project.RunLifecycleOptions{RunID: runID}
+	switch command {
+	case "activate":
+		return project.ActivateRun(root, options)
+	case "close":
+		return project.CloseRun(root, options)
+	case "abort":
+		return project.AbortRun(root, options)
+	default:
+		return project.RunLifecycleResult{}, fmt.Errorf("unsupported lifecycle command %q", command)
+	}
+}
+
+func parseRunCreateOptions(args []string, stderr io.Writer, jsonMode bool) (project.CreateRunOptions, bool) {
+	var options project.CreateRunOptions
+	seen := map[string]bool{}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if !strings.HasPrefix(arg, "--") {
+			writeError(stderr, jsonMode, cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown run create argument %q", arg), Hint: runCreateUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "run create flag", Actual: arg})
+			return options, false
+		}
+		if i+1 >= len(args) {
+			writeError(stderr, jsonMode, missingOptionValueError(arg, "value", runCreateUsageHint()))
+			return options, false
+		}
+		value := args[i+1]
+		i++
+		if seen[arg] {
+			writeError(stderr, jsonMode, cliError{Code: "duplicate_option", Message: fmt.Sprintf("duplicate run create option %q", arg), Hint: runCreateUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: arg})
+			return options, false
+		}
+		seen[arg] = true
+		switch arg {
+		case "--title":
+			options.Title = value
+		case "--work-path":
+			options.WorkPath = value
+		case "--work-mode":
+			options.WorkMode = value
+		case "--urgency":
+			options.Urgency = value
+		case "--sot-policy":
+			options.SOTPolicy = value
+		case "--execution-mode":
+			options.ExecutionMode = value
+		case "--commander":
+			options.Commander = value
+		case "--task-id":
+			options.TaskID = value
+		case "--redteam":
+			options.Redteam = value
+		default:
+			writeError(stderr, jsonMode, cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown run create option %q", arg), Hint: runCreateUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "known run create flag", Actual: arg})
+			return options, false
+		}
+	}
+	for _, required := range []string{"--title", "--work-path", "--work-mode", "--urgency", "--sot-policy", "--execution-mode", "--commander"} {
+		if !seen[required] {
+			writeError(stderr, jsonMode, cliError{Code: "missing_required_option", Message: fmt.Sprintf("run create requires %s", required), Hint: runCreateUsageHint(), ExitCode: ExitUsage, Field: required, Expected: "required option", Actual: "missing"})
+			return options, false
+		}
+	}
+	return options, true
 }
 
 func runEventCommand(args []string, root project.Root, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
@@ -370,6 +553,14 @@ func isImplementedProjectSubcommand(command string) bool {
 
 func eventAppendUsageHint() string {
 	return "Use event append <type> --run <run_id> --payload <json-object>."
+}
+
+func runUsageHint() string {
+	return "Use run create|activate|close|abort|list|show."
+}
+
+func runCreateUsageHint() string {
+	return "Use run create --title <title> --work-path <A_development_execution|B_discovery_shaping> --work-mode <standard|light> --urgency <normal|urgent|critical> --sot-policy <existing_sot_basis|minimal_sot_before_code|full_sot_before_code> --execution-mode <production_write|adapter_qa|readiness_hardening|research|verification|docs_only> --commander <profile> [--task-id <id>] [--redteam <profile>]."
 }
 
 func missingOptionValueError(option string, expected string, hint string) cliError {
@@ -508,6 +699,76 @@ func writeProjectDoctorResult(w io.Writer, result project.DoctorReport, jsonMode
 	}
 }
 
+func writeRunCreateResult(w io.Writer, result project.CreateRunResult, jsonMode bool) {
+	payload := runCreateOutput{RunID: result.Metadata.RunID, State: result.Metadata.State, RunPath: result.RunPath, EventID: result.EventID, Metadata: result.Metadata}
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(payload)
+		return
+	}
+	fmt.Fprintf(w, "created run: %s\n", payload.RunID)
+	fmt.Fprintf(w, "state: %s\n", payload.State)
+	fmt.Fprintf(w, "run_path: %s\n", payload.RunPath)
+	fmt.Fprintf(w, "event_id: %s\n", payload.EventID)
+}
+
+func writeRunLifecycleResult(w io.Writer, action string, result project.RunLifecycleResult, jsonMode bool) {
+	payload := runLifecycleOutput{RunID: result.Metadata.RunID, State: result.Metadata.State, EventID: result.EventID}
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(payload)
+		return
+	}
+	fmt.Fprintf(w, "%s run: %s\n", pastTenseAction(action), payload.RunID)
+	fmt.Fprintf(w, "state: %s\n", payload.State)
+	fmt.Fprintf(w, "event_id: %s\n", payload.EventID)
+}
+
+func pastTenseAction(action string) string {
+	switch action {
+	case "activate":
+		return "activated"
+	case "close":
+		return "closed"
+	case "abort":
+		return "aborted"
+	default:
+		return action
+	}
+}
+
+func writeRunListResult(w io.Writer, runs []project.RunSummary, jsonMode bool) {
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(runListOutput{Runs: runs})
+		return
+	}
+	fmt.Fprintf(w, "runs: %d\n", len(runs))
+	for _, run := range runs {
+		taskID := "null"
+		if run.TaskID != nil {
+			taskID = *run.TaskID
+		}
+		fmt.Fprintf(w, "- %s state=%s task_id=%s created_at=%s title=%s\n", run.RunID, run.State, taskID, run.CreatedAt, run.Title)
+	}
+}
+
+func writeRunShowResult(w io.Writer, metadata project.RunMetadata, jsonMode bool) {
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(metadata)
+		return
+	}
+	fmt.Fprintf(w, "run_id: %s\n", metadata.RunID)
+	fmt.Fprintf(w, "title: %s\n", metadata.Title)
+	fmt.Fprintf(w, "task_id: %s\n", printableOptional(metadata.TaskID))
+	fmt.Fprintf(w, "state: %s\n", metadata.State)
+	fmt.Fprintf(w, "work_path: %s\n", metadata.WorkPath)
+	fmt.Fprintf(w, "work_mode: %s\n", metadata.WorkMode)
+	fmt.Fprintf(w, "urgency: %s\n", metadata.Urgency)
+	fmt.Fprintf(w, "sot_policy: %s\n", metadata.SOTPolicy)
+	fmt.Fprintf(w, "execution_mode: %s\n", metadata.ExecutionMode)
+	fmt.Fprintf(w, "commander: %s\n", metadata.Commander)
+	fmt.Fprintf(w, "redteam: %s\n", printableOptional(metadata.Redteam))
+	fmt.Fprintf(w, "created_at: %s\n", metadata.CreatedAt)
+}
+
 func projectStatusPayload(result project.ProjectStatus) projectStatusOutput {
 	return projectStatusOutput{
 		RootPath:       result.RootPath,
@@ -637,7 +898,7 @@ func exitCodeForProblem(code string) int {
 	switch code {
 	case "repo_root_not_found":
 		return ExitNotFound
-	case "absolute_path", "empty_path", "path_escape", "repo_root_path", "symlink_escape", "symlink_resolution_failed", "path_inspection_failed", "repo_root_required", "helper_state_exists", "last_event_id_mismatch", "status_invalid_json", "status_last_event_id_invalid", "event_log_invalid", "event_log_empty", "event_id_invalid":
+	case "absolute_path", "empty_path", "path_escape", "repo_root_path", "symlink_escape", "symlink_resolution_failed", "path_inspection_failed", "repo_root_required", "helper_state_exists", "last_event_id_mismatch", "status_invalid_json", "status_last_event_id_invalid", "status_active_run_invalid", "event_log_invalid", "event_log_empty", "event_id_invalid", "event_id_exhausted", "run_metadata_invalid", "run_metadata_invalid_json", "active_run_conflict", "run_transition_invalid", "run_not_found", "run_id_ambiguous", "run_root_read_failed", "run_metadata_read_failed", "run_id_collision":
 		return ExitSafety
 	default:
 		return ExitUsage

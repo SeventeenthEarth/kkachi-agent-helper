@@ -113,19 +113,28 @@ func TestUnknownCommandJSONError(t *testing.T) {
 	assertNoHumanDecoration(t, stderr.String())
 }
 
-func TestKnownCommandGroupIsNotImplemented(t *testing.T) {
+func TestImplementedRunCommandValidatesCreateOptions(t *testing.T) {
+	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
 
-	exitCode := Run([]string{"run", "create"}, &stdout, &stderr, testBuildInfo())
+	exitCode := runWithOptions([]string{"run", "create", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
 
-	if exitCode == 0 {
-		t.Fatal("exitCode = 0, want non-zero")
+	if exitCode != ExitUsage {
+		t.Fatalf("exitCode = %d, want %d", exitCode, ExitUsage)
 	}
 	if stdout.Len() != 0 {
 		t.Fatalf("stdout = %q, want empty", stdout.String())
 	}
-	assertHumanError(t, stderr.String(), `command group "run" is not implemented yet`)
+	env := decodeErrorEnvelope(t, stderr.Bytes())
+	if env.Error.Code != "missing_required_option" {
+		t.Fatalf("error code = %q, want missing_required_option", env.Error.Code)
+	}
 }
 
 func TestProjectInitHumanOutput(t *testing.T) {
@@ -481,6 +490,366 @@ func TestCommandGroupRequiresRepositoryRoot(t *testing.T) {
 		t.Fatalf("error = %#v, want structured remediation fields", env.Error)
 	}
 	assertNoHumanDecoration(t, stderr.String())
+}
+
+func TestRunCreateListShowActivateCloseCLI(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	createArgs := runCreateArgs("Run workflow metadata", "--task-id", "runwf-001", "--redteam", "Reviewer", "--json")
+	if code := runWithOptions(createArgs, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("run create exit = %d stderr=%s", code, stderr.String())
+	}
+	var created runCreateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
+		t.Fatalf("create stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if !strings.HasPrefix(created.RunID, "run-") || created.State != "created" || created.EventID != "evt-000002" || created.Metadata.TaskID == nil || *created.Metadata.TaskID != "runwf-001" {
+		t.Fatalf("created = %#v, want created run payload", created)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"run", "list", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("run list exit = %d stderr=%s", code, stderr.String())
+	}
+	var list runListOutput
+	if err := json.Unmarshal(stdout.Bytes(), &list); err != nil {
+		t.Fatalf("list stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if len(list.Runs) != 1 || list.Runs[0].RunID != created.RunID || list.Runs[0].State != "created" {
+		t.Fatalf("list = %#v, want created run summary", list)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"run", "show", created.RunID[:24], "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("run show exit = %d stderr=%s", code, stderr.String())
+	}
+	var shown project.RunMetadata
+	if err := json.Unmarshal(stdout.Bytes(), &shown); err != nil {
+		t.Fatalf("show stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if shown.RunID != created.RunID || shown.RequiredArtifacts == nil || shown.GateState == nil {
+		t.Fatalf("shown = %#v, want full metadata", shown)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"run", "activate", created.RunID, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("run activate exit = %d stderr=%s", code, stderr.String())
+	}
+	var activated runLifecycleOutput
+	if err := json.Unmarshal(stdout.Bytes(), &activated); err != nil {
+		t.Fatalf("activate stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if activated.RunID != created.RunID || activated.State != "active" || activated.EventID != "evt-000003" {
+		t.Fatalf("activated = %#v, want active evt", activated)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"project", "status", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project status exit = %d stderr=%s", code, stderr.String())
+	}
+	var status projectStatusOutput
+	if err := json.Unmarshal(stdout.Bytes(), &status); err != nil {
+		t.Fatalf("status stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if status.ActiveRunID == nil || *status.ActiveRunID != created.RunID || status.ActiveRunState == nil || *status.ActiveRunState != "active" || status.LastEventID != "evt-000003" {
+		t.Fatalf("status = %#v, want active fields", status)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"run", "close", created.RunID, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("run close exit = %d stderr=%s", code, stderr.String())
+	}
+	var closed runLifecycleOutput
+	if err := json.Unmarshal(stdout.Bytes(), &closed); err != nil {
+		t.Fatalf("close stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if closed.State != "closed" || closed.EventID != "evt-000004" {
+		t.Fatalf("closed = %#v, want closed evt", closed)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"project", "status", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project status after close exit = %d stderr=%s", code, stderr.String())
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &status); err != nil {
+		t.Fatalf("status stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if status.ActiveRunID != nil || status.ActiveRunState != nil || status.LastEventID != "evt-000004" || status.EventCount != 4 {
+		t.Fatalf("status after close = %#v, want active cleared", status)
+	}
+}
+
+func TestRunAbortCLI(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	createArgs := runCreateArgs("Abort me", "--work-mode", "light", "--urgency", "urgent", "--sot-policy", "minimal_sot_before_code", "--execution-mode", "verification", "--json")
+	if code := runWithOptions(createArgs, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("run create exit = %d stderr=%s", code, stderr.String())
+	}
+	var created runCreateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
+		t.Fatalf("create stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"run", "abort", created.RunID, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("run abort exit = %d stderr=%s", code, stderr.String())
+	}
+	var aborted runLifecycleOutput
+	if err := json.Unmarshal(stdout.Bytes(), &aborted); err != nil {
+		t.Fatalf("abort stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if aborted.State != "aborted" || aborted.EventID != "evt-000003" {
+		t.Fatalf("aborted = %#v, want aborted evt", aborted)
+	}
+}
+
+func TestRunCLIValidationAndSafetyErrors(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	assertCLIErrorCode(t, runWithOptions([]string{"run", "create", "--title", "Bad", "--work-path", "nope", "--work-mode", "standard", "--urgency", "normal", "--sot-policy", "existing_sot_basis", "--execution-mode", "production_write", "--commander", "Gongmyeong", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitSafety, "run_metadata_invalid")
+
+	stdout.Reset()
+	stderr.Reset()
+	assertCLIErrorCode(t, runWithOptions([]string{"run", "show", "run-19990101T000000Z-aaaaaaaaaaaa", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitSafety, "run_not_found")
+
+	stdout.Reset()
+	stderr.Reset()
+	createArgs := runCreateArgs("Corrupt", "--json")
+	if code := runWithOptions(createArgs, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("run create exit = %d stderr=%s", code, stderr.String())
+	}
+	var created runCreateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".kkachi", "runs", created.RunID, "run-metadata.json"), []byte("{not-json\n"), 0o600); err != nil {
+		t.Fatalf("corrupt metadata: %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	assertCLIErrorCode(t, runWithOptions([]string{"run", "list", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitSafety, "run_metadata_invalid_json")
+}
+
+func TestRunCLIHumanOutput(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	createArgs := runCreateArgs("Human run", "--task-id", "runwf-001")
+	if code := runWithOptions(createArgs, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("run create exit = %d stderr=%s", code, stderr.String())
+	}
+	createOutput := stdout.String()
+	if !strings.Contains(createOutput, "created run: run-") || !strings.Contains(createOutput, "state: created") || !strings.Contains(createOutput, "event_id: evt-000002") {
+		t.Fatalf("create output = %q, want human run summary", createOutput)
+	}
+	runID := onlyRunID(t, repo)
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"run", "list"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("run list exit = %d stderr=%s", code, stderr.String())
+	}
+	if output := stdout.String(); !strings.Contains(output, "runs: 1") || !strings.Contains(output, runID) || !strings.Contains(output, "state=created") || !strings.Contains(output, "task_id=runwf-001") {
+		t.Fatalf("list output = %q, want human list summary", output)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"run", "show", runID}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("run show exit = %d stderr=%s", code, stderr.String())
+	}
+	if output := stdout.String(); !strings.Contains(output, "run_id: "+runID) || !strings.Contains(output, "title: Human run") || !strings.Contains(output, "state: created") {
+		t.Fatalf("show output = %q, want human metadata", output)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"run", "activate", runID}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("run activate exit = %d stderr=%s", code, stderr.String())
+	}
+	if output := stdout.String(); !strings.Contains(output, "activated run: "+runID) || !strings.Contains(output, "state: active") || !strings.Contains(output, "event_id: evt-000003") {
+		t.Fatalf("activate output = %q, want human lifecycle summary", output)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"run", "close", runID}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("run close exit = %d stderr=%s", code, stderr.String())
+	}
+	if output := stdout.String(); !strings.Contains(output, "closed run: "+runID) || !strings.Contains(output, "state: closed") || !strings.Contains(output, "event_id: evt-000004") {
+		t.Fatalf("close output = %q, want human lifecycle summary", output)
+	}
+}
+
+func TestRunCLIRejectsUnknownOptionsAndExtraArgs(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	createArgs := runCreateArgs("Arg run", "--json")
+	if code := runWithOptions(createArgs, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("run create exit = %d stderr=%s", code, stderr.String())
+	}
+	var created runCreateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		args []string
+		code string
+	}{
+		{name: "create unknown option", args: []string{"run", "create", "--bogus", "x", "--json"}, code: "unknown_option"},
+		{name: "create duplicate option", args: append(createArgs[:len(createArgs)-1], "--title", "again", "--json"), code: "duplicate_option"},
+		{name: "list unknown option", args: []string{"run", "list", "--bogus", "--json"}, code: "unknown_option"},
+		{name: "show unknown option", args: []string{"run", "show", created.RunID, "--bogus", "--json"}, code: "unknown_option"},
+		{name: "activate unknown option", args: []string{"run", "activate", created.RunID, "--bogus", "--json"}, code: "unknown_option"},
+		{name: "activate extra id", args: []string{"run", "activate", created.RunID, "extra", "--json"}, code: "run_id_required"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stdout.Reset()
+			stderr.Reset()
+			assertCLIErrorCode(t, runWithOptions(tt.args, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitUsage, tt.code)
+		})
+	}
+}
+
+func TestRunCommandsRefuseEventCoherenceMismatch(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions(runCreateArgs("Blocked", "--json"), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("run create exit = %d stderr=%s", code, stderr.String())
+	}
+	var created runCreateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+	appendCrashEvent(t, repo, "evt-000003", created.RunID)
+
+	tests := [][]string{
+		runCreateArgs("Blocked", "--json"),
+		{"run", "list", "--json"},
+		{"run", "show", created.RunID, "--json"},
+		{"run", "activate", created.RunID, "--json"},
+		{"run", "close", created.RunID, "--json"},
+		{"run", "abort", created.RunID, "--json"},
+	}
+	for _, args := range tests {
+		stdout.Reset()
+		stderr.Reset()
+		assertCLIErrorCode(t, runWithOptions(args, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitSafety, "last_event_id_mismatch")
+	}
+}
+
+func runCreateArgs(title string, overrides ...string) []string {
+	args := []string{
+		"run", "create",
+		"--title", title,
+		"--work-path", "A_development_execution",
+		"--work-mode", "standard",
+		"--urgency", "normal",
+		"--sot-policy", "existing_sot_basis",
+		"--execution-mode", "production_write",
+		"--commander", "Gongmyeong",
+	}
+	for i := 0; i < len(overrides); {
+		key := overrides[i]
+		if key == "--json" {
+			args = append(args, key)
+			i++
+			continue
+		}
+		if i+1 >= len(overrides) {
+			args = append(args, key)
+			break
+		}
+		value := overrides[i+1]
+		i += 2
+		replaced := false
+		for j := 0; j+1 < len(args); j += 2 {
+			if args[j] == key {
+				args[j+1] = value
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			args = append(args, key, value)
+		}
+	}
+	return args
+}
+
+func onlyRunID(t *testing.T, repo string) string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(repo, ".kkachi", "runs"))
+	if err != nil {
+		t.Fatalf("read runs: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("run entry count = %d, want 1", len(entries))
+	}
+	return entries[0].Name()
+}
+
+func appendCrashEvent(t *testing.T, repo string, eventID string, runID string) {
+	t.Helper()
+	line := `{"version":"0.1","event_id":"` + eventID + `","occurred_at":"2026-04-30T03:00:00Z","run_id":"` + runID + `","type":"run.created","actor":"helper","payload":{}}` + "\n"
+	file, err := os.OpenFile(filepath.Join(repo, ".kkachi", "events.jsonl"), os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatalf("open event log: %v", err)
+	}
+	if _, err := file.WriteString(line); err != nil {
+		t.Fatalf("append crash event: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close event log: %v", err)
+	}
 }
 
 func TestEventAppendJSONOutput(t *testing.T) {
