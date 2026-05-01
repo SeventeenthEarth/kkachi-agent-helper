@@ -29,7 +29,7 @@ var gateDefinitions = []GateDefinition{
 	{Name: GateSOT, Implemented: true, Description: "SOT basis or Path B SOT creation evidence"},
 	{Name: GateRoadmap, Implemented: true, Description: "roadmap trace or explicit exception evidence"},
 	{Name: GatePlan, Implemented: true, Description: "acceptance criteria, plan.md, and checklist.md"},
-	{Name: GateBackend, Description: "bridge backend evidence artifacts"},
+	{Name: GateBackend, Implemented: true, Description: "bridge backend evidence artifacts"},
 	{Name: GateImplementation, Description: "implementation evidence artifacts"},
 	{Name: GateReview, Description: "review and red-team evidence artifacts"},
 	{Name: GateVerification, Description: "test-log and verification verdict artifacts"},
@@ -147,6 +147,8 @@ func checkGateResult(root Root, metadata RunMetadata, metadataRelative string, d
 		return checkRoadmapGate(root, metadata, metadataRelative)
 	case GatePlan:
 		return checkPlanGate(root, metadata)
+	case GateBackend:
+		return checkBackendGate(root, metadata, metadataRelative)
 	}
 	return blockedGateResult(metadata.RunID, definition), nil
 }

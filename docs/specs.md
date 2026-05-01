@@ -292,7 +292,7 @@ Light mode reduces depth, not safety. Helper validation must still require:
 
 ## 9. Backend evidence validation
 
-When a run uses `kkachi-agent-bridge`, helper validation covers artifact shape only. The commander owns the reasoning.
+When a run uses `kkachi-agent-bridge`, helper validation covers artifact shape only. The commander owns the reasoning. The `backend` gate is activated only from `run-metadata.json.required_artifacts`: if the backend artifacts are not required by the run manifest, the gate records a deterministic not-applicable pass instead of inferring backend use from baseline files.
 
 Required files:
 
@@ -303,7 +303,7 @@ Required files:
 | `bridge-session-snapshot.json` | Validate session identity fields such as `session_id`, `backend_type`, `adapter_type`, state, lifecycle class, and open pendings. |
 | `bridge-events.md` | Validate presence when backend behavior matters. |
 
-The helper must not override the commander's backend choice. It may fail a gate if the selected backend record is missing, malformed, stale, or marked unsupported for the declared execution mode.
+The helper must not override the commander's backend choice. It may fail a gate if the selected backend record is missing, malformed, stale, or marked unsupported for the declared execution mode. `selected-cli.json` passes only with an object containing non-empty `version`, `status`, `backend_type`, `adapter_type`, and `source_ledger_ref`, plus a declared `caveats` array of strings; `status` must be `supported` or `degraded`. `capability-check.md` and `bridge-events.md` require `Status: complete`; the capability check must mention the selected backend and adapter, and bridge events must include non-empty behavior evidence. `bridge-session-snapshot.json` must match the selected backend/adapter, declare a non-empty `session_id`, `state`, and `lifecycle_class`, and have `open_pendings: 0`.
 
 ## 10. CLI surface
 
@@ -359,13 +359,14 @@ Stable JSON output has the following shape:
 }
 ```
 
-Behavior in `gates-001` and `gates-002`:
+Behavior in `gates-001` through `gates-003`:
 
 - `intake` is implemented by reusing the deterministic intake checks from `artifact validate`.
 - `sot` is implemented by requiring completed `sot-basis.md` for Path A or completed `sot-update.md` for Path B.
 - `roadmap` is implemented by accepting a non-empty run metadata `task_id`, completed `roadmap-update.md`, or `roadmap-update.md` with `Status: not_applicable` plus a non-empty `Reason:`.
 - `plan` is implemented by requiring completed `acceptance-criteria.md`, `plan.md`, and `checklist.md`.
-- `backend`, `implementation`, `review`, `verification`, `docs`, and `final` are declared but return `blocked` until later gates tasks implement their artifact-specific rules.
+- `backend` is implemented as a manifest-driven gate. If `required_artifacts` includes backend evidence, it validates `selected-cli.json`, `capability-check.md`, `bridge-session-snapshot.json`, and `bridge-events.md`; if not, it passes as not applicable with a check tied to `run-metadata.json`.
+- `implementation`, `review`, `verification`, `docs`, and `final` are declared but return `blocked` until later gates tasks implement their artifact-specific rules.
 - Unknown gate names are usage errors.
 - `gate final <run_id>` remains reserved for `gates-004` and is not implemented yet.
 - Passing checks append `gate.passed`; failing checks append `gate.failed`; blocked checks append `gate.checked`.

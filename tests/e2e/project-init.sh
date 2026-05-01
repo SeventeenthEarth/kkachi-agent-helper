@@ -256,8 +256,72 @@ if [ "$event_count_after_append" != "10" ]; then
   exit 1
 fi
 
+(cd "$repo" && "$helper" run create --title 'Adapter QA backend gate' --work-path A_development_execution --work-mode standard --urgency normal --sot-policy existing_sot_basis --execution-mode adapter_qa --commander Gongmyeong --task-id gates-003 --json > "$tmpdir/adapter-run.json" 2> "$tmpdir/adapter-run.err")
+adapter_run_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run_id"])' "$tmpdir/adapter-run.json")"
+if [ -z "$adapter_run_id" ]; then
+  echo "could not parse adapter QA run id" >&2
+  cat "$tmpdir/adapter-run.json" >&2
+  exit 1
+fi
+assert_contains "$tmpdir/adapter-run.json" '"event_id":"evt-000011"' "adapter run create JSON"
+(cd "$repo" && "$helper" artifact init "$adapter_run_id" --json > "$tmpdir/adapter-artifact-init.json" 2> "$tmpdir/adapter-artifact-init.err")
+assert_contains "$tmpdir/adapter-artifact-init.json" '"event_id":"evt-000012"' "adapter artifact init JSON"
+assert_contains "$repo/.kkachi/runs/$adapter_run_id/run-metadata.json" '"selected-cli.json"' "adapter run metadata"
+if (cd "$repo" && "$helper" gate check "$adapter_run_id" backend --json > "$tmpdir/adapter-backend-pending.json" 2> "$tmpdir/adapter-backend-pending.err"); then
+  echo "backend gate succeeded with baseline pending evidence" >&2
+  cat "$tmpdir/adapter-backend-pending.json" >&2
+  exit 1
+fi
+assert_contains "$tmpdir/adapter-backend-pending.json" '"gate":"backend"' "adapter pending backend gate JSON"
+assert_contains "$tmpdir/adapter-backend-pending.json" '"status":"fail"' "adapter pending backend gate JSON"
+assert_contains "$tmpdir/adapter-backend-pending.json" '"event_id":"evt-000013"' "adapter pending backend gate JSON"
+assert_contains "$tmpdir/adapter-backend-pending.json" '"name":"selected_cli","status":"fail"' "adapter pending backend gate JSON"
+cat > "$repo/.kkachi/runs/$adapter_run_id/selected-cli.json" <<'EOF_SELECTED_CLI'
+{
+  "version": "0.1",
+  "status": "supported",
+  "backend_type": "codex",
+  "adapter_type": "openai-codex",
+  "source_ledger_ref": "docs/ledger.md#codex",
+  "caveats": []
+}
+EOF_SELECTED_CLI
+cat > "$repo/.kkachi/runs/$adapter_run_id/capability-check.md" <<'EOF_CAPABILITY'
+# capability-check.md
+
+Status: complete
+Backend Type: codex
+Adapter Type: openai-codex
+Capability: thread resume checked
+EOF_CAPABILITY
+cat > "$repo/.kkachi/runs/$adapter_run_id/bridge-session-snapshot.json" <<'EOF_BRIDGE_SNAPSHOT'
+{
+  "session_id": "session-123",
+  "backend_type": "codex",
+  "adapter_type": "openai-codex",
+  "state": "running",
+  "lifecycle_class": "interactive",
+  "open_pendings": 0
+}
+EOF_BRIDGE_SNAPSHOT
+cat > "$repo/.kkachi/runs/$adapter_run_id/bridge-events.md" <<'EOF_BRIDGE_EVENTS'
+# bridge-events.md
+
+Status: complete
+Event: bridge opened a codex session and emitted output
+EOF_BRIDGE_EVENTS
+(cd "$repo" && "$helper" gate check "$adapter_run_id" backend --json > "$tmpdir/adapter-backend-pass.json" 2> "$tmpdir/adapter-backend-pass.err")
+assert_contains "$tmpdir/adapter-backend-pass.json" '"gate":"backend"' "adapter passing backend gate JSON"
+assert_contains "$tmpdir/adapter-backend-pass.json" '"status":"pass"' "adapter passing backend gate JSON"
+assert_contains "$tmpdir/adapter-backend-pass.json" '"event_id":"evt-000014"' "adapter passing backend gate JSON"
+assert_contains "$tmpdir/adapter-backend-pass.json" '"name":"bridge_events","status":"pass"' "adapter passing backend gate JSON"
+assert_contains "$repo/.kkachi/events.jsonl" '"type":"gate.failed"' "events.jsonl after adapter pending backend gate"
+assert_contains "$repo/.kkachi/events.jsonl" '"type":"gate.passed"' "events.jsonl after adapter passing backend gate"
+assert_contains "$repo/.kkachi/status.json" '"backend": {' "status.json after adapter backend gate"
+assert_contains "$repo/.kkachi/runs/$adapter_run_id/run-metadata.json" '"backend": {' "adapter run metadata after backend gate"
+
 cat >> "$repo/.kkachi/events.jsonl" <<'EOF_CRASH'
-{"version":"0.1","event_id":"evt-000011","occurred_at":"2026-04-30T03:00:00Z","run_id":"run-abc","type":"run.created","actor":"helper","payload":{}}
+{"version":"0.1","event_id":"evt-000015","occurred_at":"2026-04-30T03:00:00Z","run_id":"run-abc","type":"run.created","actor":"helper","payload":{}}
 EOF_CRASH
 
 if (cd "$repo" && "$helper" event append artifact.written --run run-abc --payload '{}' --json > "$tmpdir/mismatch.json" 2> "$tmpdir/mismatch.err"); then
@@ -267,7 +331,7 @@ fi
 
 assert_contains "$tmpdir/mismatch.err" '"code":"last_event_id_mismatch"' "mismatch stderr"
 assert_contains "$tmpdir/mismatch.err" '"exit_code":3' "mismatch stderr"
-assert_contains "$repo/.kkachi/status.json" '"last_event_id": "evt-000010"' "status.json after refused mismatch append"
+assert_contains "$repo/.kkachi/status.json" '"last_event_id": "evt-000014"' "status.json after refused mismatch append"
 
 if (cd "$repo" && "$helper" project doctor --json > "$tmpdir/mismatch-doctor.json" 2> "$tmpdir/mismatch-doctor.err"); then
   echo "project doctor succeeded despite last_event_id mismatch" >&2
@@ -275,12 +339,12 @@ if (cd "$repo" && "$helper" project doctor --json > "$tmpdir/mismatch-doctor.jso
 fi
 assert_contains "$tmpdir/mismatch-doctor.json" '"health":"fail"' "mismatch doctor JSON"
 assert_contains "$tmpdir/mismatch-doctor.json" '"name":"coherence"' "mismatch doctor JSON"
-assert_contains "$tmpdir/mismatch-doctor.json" '"expected":"evt-000011"' "mismatch doctor JSON"
-assert_contains "$tmpdir/mismatch-doctor.json" '"actual":"evt-000010"' "mismatch doctor JSON"
+assert_contains "$tmpdir/mismatch-doctor.json" '"expected":"evt-000015"' "mismatch doctor JSON"
+assert_contains "$tmpdir/mismatch-doctor.json" '"actual":"evt-000014"' "mismatch doctor JSON"
 
 event_count_after_refused_append="$(wc -l < "$repo/.kkachi/events.jsonl" | tr -d ' ')"
-if [ "$event_count_after_refused_append" != "11" ]; then
-  echo "events.jsonl line count after refused append = $event_count_after_refused_append, want 11" >&2
+if [ "$event_count_after_refused_append" != "15" ]; then
+  echo "events.jsonl line count after refused append = $event_count_after_refused_append, want 15" >&2
   cat "$repo/.kkachi/events.jsonl" >&2
   exit 1
 fi

@@ -1445,3 +1445,98 @@ func cliGateCheckStatus(checks []project.GateCheck, name string, status string) 
 	}
 	return false
 }
+
+func TestGateCheckBackendCLIJSONHumanAndStateUpdates(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions(runCreateArgs("Backend gate", "--execution-mode", "adapter_qa", "--task-id", "gates-003", "--json"), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("run create exit = %d stderr=%s", code, stderr.String())
+	}
+	var created runCreateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"artifact", "init", created.RunID, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("artifact init exit = %d stderr=%s", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"gate", "check", created.RunID, "backend", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitSafety {
+		t.Fatalf("pending backend exit = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var failed gateCheckOutput
+	if err := json.Unmarshal(stdout.Bytes(), &failed); err != nil {
+		t.Fatalf("decode failed backend: %v\n%s", err, stdout.String())
+	}
+	if failed.Status != project.GateStatusFail || failed.EventID != "evt-000004" || !cliGateCheckStatus(failed.Checks, "selected_cli", project.GateStatusFail) || len(failed.MissingEvidence) == 0 {
+		t.Fatalf("failed = %#v, want pending backend failure", failed)
+	}
+	if text := readCLIText(t, filepath.Join(repo, ".kkachi", "events.jsonl")); !strings.Contains(text, `"type":"gate.failed"`) {
+		t.Fatalf("events missing gate.failed: %s", text)
+	}
+
+	writeCLIBackendEvidence(t, repo, created.RunID)
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"gate", "check", created.RunID[:24], "backend", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("backend pass exit = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var passed gateCheckOutput
+	if err := json.Unmarshal(stdout.Bytes(), &passed); err != nil {
+		t.Fatalf("decode passed backend: %v\n%s", err, stdout.String())
+	}
+	if passed.RunID != created.RunID || passed.Gate != project.GateBackend || passed.Status != project.GateStatusPass || passed.EventID != "evt-000005" || !cliGateCheckStatus(passed.Checks, "bridge_events", project.GateStatusPass) {
+		t.Fatalf("passed = %#v, want backend pass evt-000005", passed)
+	}
+	metadataText := readCLIText(t, filepath.Join(repo, ".kkachi", "runs", created.RunID, "run-metadata.json"))
+	if !strings.Contains(metadataText, `"backend"`) || !strings.Contains(metadataText, `"event_id": "evt-000005"`) {
+		t.Fatalf("metadata missing backend gate state: %s", metadataText)
+	}
+	statusText := readCLIText(t, filepath.Join(repo, ".kkachi", "status.json"))
+	if !strings.Contains(statusText, `"backend"`) || !strings.Contains(statusText, `"status": "pass"`) {
+		t.Fatalf("status missing backend summary: %s", statusText)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"gate", "check", created.RunID, "backend"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("backend human exit = %d stderr=%s", code, stderr.String())
+	}
+	if output := stdout.String(); !strings.Contains(output, "gate: backend") || !strings.Contains(output, "status: pass") || !strings.Contains(output, "selected_cli pass") {
+		t.Fatalf("human backend output = %q, want summary and checks", output)
+	}
+}
+
+func writeCLIBackendEvidence(t *testing.T, repo string, runID string) {
+	t.Helper()
+	writeCLIJSONArtifact(t, repo, runID, "selected-cli.json", map[string]any{"version": "0.1", "status": "supported", "backend_type": "codex", "adapter_type": "openai-codex", "source_ledger_ref": "docs/ledger.md#codex", "caveats": []string{}})
+	writeCLITextArtifact(t, repo, runID, "capability-check.md", "# capability-check.md\n\nStatus: complete\nBackend Type: codex\nAdapter Type: openai-codex\nCapability: thread resume checked\n")
+	writeCLIJSONArtifact(t, repo, runID, "bridge-session-snapshot.json", map[string]any{"session_id": "session-123", "backend_type": "codex", "adapter_type": "openai-codex", "state": "running", "lifecycle_class": "interactive", "open_pendings": 0})
+	writeCLITextArtifact(t, repo, runID, "bridge-events.md", "# bridge-events.md\n\nStatus: complete\nEvent: bridge opened a codex session and emitted output\n")
+}
+
+func writeCLIJSONArtifact(t *testing.T, repo string, runID string, artifact string, payload any) {
+	t.Helper()
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal %s: %v", artifact, err)
+	}
+	writeCLITextArtifact(t, repo, runID, artifact, string(append(data, '\n')))
+}
+
+func writeCLITextArtifact(t *testing.T, repo string, runID string, artifact string, content string) {
+	t.Helper()
+	path := filepath.Join(repo, ".kkachi", "runs", runID, filepath.FromSlash(artifact))
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write %s: %v", artifact, err)
+	}
+}

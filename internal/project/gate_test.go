@@ -478,3 +478,219 @@ func writeMarkdownArtifact(t *testing.T, repo string, runID string, artifact str
 	path := filepath.Join(repo, ".kkachi", "runs", runID, filepath.FromSlash(artifact))
 	mustWriteFile(t, path, []byte("# "+artifact+"\n\n"+body+"\n"))
 }
+
+func TestCheckGateBackendPassesWithValidAdapterQAEvidence(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created := createAdapterQARunWithArtifacts(t, root)
+	writeValidBackendEvidence(t, repo, created.Metadata.RunID)
+
+	result, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateBackend, Now: testRunNow(5)})
+	if err != nil {
+		t.Fatalf("CheckGate(backend pass) error = %v", err)
+	}
+	if result.Status != GateStatusPass || result.EventID != "evt-000004" || len(result.MissingEvidence) != 0 {
+		t.Fatalf("result = %#v, want backend pass with no missing evidence", result)
+	}
+	for _, name := range []string{"backend_manifest", "selected_cli", "capability_check", "bridge_session_snapshot", "bridge_events"} {
+		if !gateCheckStatus(result.Checks, name, GateStatusPass) {
+			t.Fatalf("checks = %#v, want %s pass", result.Checks, name)
+		}
+	}
+	metadata := readRunMetadata(t, repo, created.Metadata.RunID)
+	assertGateState(t, metadata.GateState, GateBackend, GateStatusPass, "evt-000004")
+}
+
+func TestCheckGateBackendNotApplicableWhenManifestDoesNotRequireBackend(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+		t.Fatalf("InitArtifacts() error = %v", err)
+	}
+
+	result, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateBackend, Now: testRunNow(5)})
+	if err != nil {
+		t.Fatalf("CheckGate(backend not applicable) error = %v", err)
+	}
+	if result.Status != GateStatusPass || result.EventID != "evt-000004" || len(result.Checks) != 1 || !gateCheckStatus(result.Checks, "backend_manifest", GateStatusPass) {
+		t.Fatalf("result = %#v, want manifest-driven not-applicable pass", result)
+	}
+	if !strings.Contains(result.Checks[0].Message, "not applicable") || result.Checks[0].Path == "" {
+		t.Fatalf("check = %#v, want manifest-tied not-applicable message", result.Checks[0])
+	}
+}
+
+func TestCheckGateBackendFailsMissingArtifactsAndMalformedJSON(t *testing.T) {
+	tests := []struct {
+		name       string
+		setup      func(t *testing.T, repo string, runID string)
+		checkName  string
+		wantActual string
+	}{
+		{name: "missing selected cli", setup: func(t *testing.T, repo string, runID string) {
+			mustRemove(t, filepath.Join(repo, ".kkachi", "runs", runID, "selected-cli.json"))
+		}, checkName: "selected_cli", wantActual: "missing"},
+		{name: "malformed selected cli", setup: func(t *testing.T, repo string, runID string) {
+			mustWriteFile(t, filepath.Join(repo, ".kkachi", "runs", runID, "selected-cli.json"), []byte("{not-json\n"))
+		}, checkName: "selected_cli", wantActual: "malformed"},
+		{name: "malformed bridge snapshot", setup: func(t *testing.T, repo string, runID string) {
+			mustWriteFile(t, filepath.Join(repo, ".kkachi", "runs", runID, "bridge-session-snapshot.json"), []byte("{not-json\n"))
+		}, checkName: "bridge_session_snapshot", wantActual: "malformed"},
+		{name: "selected cli array", setup: func(t *testing.T, repo string, runID string) {
+			mustWriteFile(t, filepath.Join(repo, ".kkachi", "runs", runID, "selected-cli.json"), []byte("[]\n"))
+		}, checkName: "selected_cli", wantActual: "malformed"},
+		{name: "selected cli null", setup: func(t *testing.T, repo string, runID string) {
+			mustWriteFile(t, filepath.Join(repo, ".kkachi", "runs", runID, "selected-cli.json"), []byte("null\n"))
+		}, checkName: "selected_cli", wantActual: "null"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initializedRepo(t)
+			root, _ := DiscoverRoot(repo)
+			created := createAdapterQARunWithArtifacts(t, root)
+			writeValidBackendEvidence(t, repo, created.Metadata.RunID)
+			tt.setup(t, repo, created.Metadata.RunID)
+
+			result, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateBackend, Now: testRunNow(5)})
+			if err != nil {
+				t.Fatalf("CheckGate(backend fail) error = %v", err)
+			}
+			if result.Status != GateStatusFail || !gateCheckStatus(result.Checks, tt.checkName, GateStatusFail) || !gateCheckActual(result.Checks, tt.checkName, tt.wantActual) || len(result.MissingEvidence) == 0 {
+				t.Fatalf("result = %#v, want %s failure actual %q", result, tt.checkName, tt.wantActual)
+			}
+		})
+	}
+}
+
+func TestCheckGateBackendFailsUnsupportedIdentityPendingsAndIncompleteMarkdown(t *testing.T) {
+	tests := []struct {
+		name       string
+		setup      func(t *testing.T, repo string, runID string)
+		checkName  string
+		wantActual string
+	}{
+		{name: "unsupported selected cli", setup: func(t *testing.T, repo string, runID string) {
+			writeSelectedCLI(t, repo, runID, "unsupported", "codex", "openai-codex")
+		}, checkName: "selected_cli", wantActual: "unsupported"},
+		{name: "pending selected cli", setup: func(t *testing.T, repo string, runID string) {
+			writeSelectedCLI(t, repo, runID, "pending", "codex", "openai-codex")
+		}, checkName: "selected_cli", wantActual: "pending"},
+		{name: "invalid caveats number", setup: func(t *testing.T, repo string, runID string) {
+			payload := map[string]any{"version": "0.1", "status": "supported", "backend_type": "codex", "adapter_type": "openai-codex", "source_ledger_ref": "docs/ledger.md#codex", "caveats": 42}
+			writeJSONArtifact(t, repo, runID, "selected-cli.json", payload)
+		}, checkName: "selected_cli", wantActual: "invalid"},
+		{name: "invalid caveats null", setup: func(t *testing.T, repo string, runID string) {
+			payload := map[string]any{"version": "0.1", "status": "supported", "backend_type": "codex", "adapter_type": "openai-codex", "source_ledger_ref": "docs/ledger.md#codex", "caveats": nil}
+			writeJSONArtifact(t, repo, runID, "selected-cli.json", payload)
+		}, checkName: "selected_cli", wantActual: "invalid"},
+		{name: "identity mismatch", setup: func(t *testing.T, repo string, runID string) {
+			writeBridgeSnapshot(t, repo, runID, "claude", "anthropic-claude", 0)
+		}, checkName: "bridge_session_snapshot", wantActual: "claude/anthropic-claude"},
+		{name: "open pendings", setup: func(t *testing.T, repo string, runID string) {
+			writeBridgeSnapshot(t, repo, runID, "codex", "openai-codex", 2)
+		}, checkName: "bridge_session_snapshot", wantActual: "2"},
+		{name: "incomplete capability check", setup: func(t *testing.T, repo string, runID string) {
+			writeMarkdownArtifact(t, repo, runID, "capability-check.md", "Status: pending\nBackend: codex\nAdapter: openai-codex\n")
+		}, checkName: "capability_check", wantActual: "pending"},
+		{name: "incomplete bridge events", setup: func(t *testing.T, repo string, runID string) {
+			writeMarkdownArtifact(t, repo, runID, "bridge-events.md", "Status: pending\nEvent: started\n")
+		}, checkName: "bridge_events", wantActual: "pending"},
+		{name: "bridge events placeholder only", setup: func(t *testing.T, repo string, runID string) {
+			writeMarkdownArtifact(t, repo, runID, "bridge-events.md", "Status: complete\nRun: "+runID+"\nRecord Kkachi evidence here. Use explicit not-applicable reasons when this artifact is intentionally out of scope.\n")
+		}, checkName: "bridge_events", wantActual: "missing"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initializedRepo(t)
+			root, _ := DiscoverRoot(repo)
+			created := createAdapterQARunWithArtifacts(t, root)
+			writeValidBackendEvidence(t, repo, created.Metadata.RunID)
+			tt.setup(t, repo, created.Metadata.RunID)
+
+			result, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateBackend, Now: testRunNow(5)})
+			if err != nil {
+				t.Fatalf("CheckGate(backend fail) error = %v", err)
+			}
+			if result.Status != GateStatusFail || !gateCheckStatus(result.Checks, tt.checkName, GateStatusFail) || !gateCheckActual(result.Checks, tt.checkName, tt.wantActual) {
+				t.Fatalf("result = %#v, want %s failure actual %q", result, tt.checkName, tt.wantActual)
+			}
+		})
+	}
+}
+
+func TestCheckGateBackendFailsPartialManifest(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created := createAdapterQARunWithArtifacts(t, root)
+	metadata := readRunMetadata(t, repo, created.Metadata.RunID)
+	metadata.RequiredArtifacts = removeArtifactForTest(metadata.RequiredArtifacts, "bridge-events.md")
+	writeRunMetadataForTest(t, repo, metadata)
+	writeValidBackendEvidence(t, repo, created.Metadata.RunID)
+
+	result, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateBackend, Now: testRunNow(5)})
+	if err != nil {
+		t.Fatalf("CheckGate(backend partial manifest) error = %v", err)
+	}
+	if result.Status != GateStatusFail || !gateCheckStatus(result.Checks, "backend_manifest", GateStatusFail) || !gateCheckActual(result.Checks, "backend_manifest", "missing bridge-events.md") {
+		t.Fatalf("result = %#v, want backend_manifest missing bridge-events.md failure", result)
+	}
+}
+
+func removeArtifactForTest(artifacts []string, remove string) []string {
+	kept := []string{}
+	for _, artifact := range artifacts {
+		if artifact != remove {
+			kept = append(kept, artifact)
+		}
+	}
+	return kept
+}
+
+func createAdapterQARunWithArtifacts(t *testing.T, root Root) CreateRunResult {
+	t.Helper()
+	options := deterministicCreateRunOptions()
+	options.ExecutionMode = "adapter_qa"
+	options.TaskID = "gates-003"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun(adapter_qa) error = %v", err)
+	}
+	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+		t.Fatalf("InitArtifacts(adapter_qa) error = %v", err)
+	}
+	return created
+}
+
+func writeValidBackendEvidence(t *testing.T, repo string, runID string) {
+	t.Helper()
+	writeSelectedCLI(t, repo, runID, "supported", "codex", "openai-codex")
+	writeMarkdownArtifact(t, repo, runID, "capability-check.md", "Status: complete\nBackend Type: codex\nAdapter Type: openai-codex\nCapability: thread resume checked\n")
+	writeBridgeSnapshot(t, repo, runID, "codex", "openai-codex", 0)
+	writeMarkdownArtifact(t, repo, runID, "bridge-events.md", "Status: complete\nEvent: bridge opened a codex session and emitted output\n")
+}
+
+func writeSelectedCLI(t *testing.T, repo string, runID string, status string, backendType string, adapterType string) {
+	t.Helper()
+	payload := map[string]any{"version": "0.1", "status": status, "backend_type": backendType, "adapter_type": adapterType, "source_ledger_ref": "docs/ledger.md#codex", "caveats": []string{}}
+	writeJSONArtifact(t, repo, runID, "selected-cli.json", payload)
+}
+
+func writeBridgeSnapshot(t *testing.T, repo string, runID string, backendType string, adapterType string, openPendings int) {
+	t.Helper()
+	payload := map[string]any{"session_id": "session-123", "backend_type": backendType, "adapter_type": adapterType, "state": "running", "lifecycle_class": "interactive", "open_pendings": openPendings}
+	writeJSONArtifact(t, repo, runID, "bridge-session-snapshot.json", payload)
+}
+
+func writeJSONArtifact(t *testing.T, repo string, runID string, artifact string, payload any) {
+	t.Helper()
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal %s: %v", artifact, err)
+	}
+	path := filepath.Join(repo, ".kkachi", "runs", runID, filepath.FromSlash(artifact))
+	mustWriteFile(t, path, append(data, '\n'))
+}

@@ -286,6 +286,78 @@ func TestGates001And002GateCheckWorkflow(t *testing.T) {
 	}
 }
 
+func TestGates003BackendGateIntegrationWorkflow(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	binary := buildHelperBinary(t)
+
+	runHelper(t, binary, repo, "project", "init", "--json")
+	createdOutput := runHelper(t, binary, repo,
+		"run", "create",
+		"--title", "Backend gate integration",
+		"--work-path", "A_development_execution",
+		"--work-mode", "standard",
+		"--urgency", "normal",
+		"--sot-policy", "existing_sot_basis",
+		"--execution-mode", "adapter_qa",
+		"--commander", "Gongmyeong",
+		"--task-id", "gates-003",
+		"--json",
+	)
+	var created struct {
+		RunID   string `json:"run_id"`
+		EventID string `json:"event_id"`
+	}
+	if err := json.Unmarshal(createdOutput, &created); err != nil {
+		t.Fatalf("run create output is not JSON: %v\n%s", err, string(createdOutput))
+	}
+	if created.EventID != "evt-000002" {
+		t.Fatalf("created event id = %q, want evt-000002", created.EventID)
+	}
+	initOutput := runHelper(t, binary, repo, "artifact", "init", created.RunID, "--json")
+	assertOutputContains(t, initOutput, `"event_id":"evt-000003"`, "adapter artifact init")
+	metadataPath := filepath.Join(repo, ".kkachi", "runs", created.RunID, "run-metadata.json")
+	metadata := readFile(t, metadataPath)
+	for _, artifact := range []string{"selected-cli.json", "capability-check.md", "bridge-session-snapshot.json", "bridge-events.md"} {
+		assertOutputContains(t, metadata, `"`+artifact+`"`, "adapter metadata required artifacts")
+	}
+
+	pendingOutput, err := runHelperAllowError(binary, repo, "gate", "check", created.RunID, "backend", "--json")
+	if err == nil {
+		t.Fatalf("backend gate succeeded with pending evidence\n%s", string(pendingOutput))
+	}
+	var pending gateCheckOutput
+	if err := json.Unmarshal(pendingOutput, &pending); err != nil {
+		t.Fatalf("pending backend output is not JSON: %v\n%s", err, string(pendingOutput))
+	}
+	if pending.RunID != created.RunID || pending.Gate != "backend" || pending.Status != "fail" || pending.EventID != "evt-000004" || len(pending.MissingEvidence) == 0 || !gateCheckListed(pending.Checks, "selected_cli", "fail") {
+		t.Fatalf("pending backend = %#v, want selected_cli fail with evt-000004", pending)
+	}
+	assertOutputContains(t, readFile(t, filepath.Join(repo, ".kkachi", "events.jsonl")), `"type":"gate.failed"`, "events after pending backend gate")
+	assertOutputContains(t, readFile(t, filepath.Join(repo, ".kkachi", "status.json")), `"backend": {`, "status after pending backend gate")
+	assertOutputContains(t, readFile(t, metadataPath), `"status": "fail"`, "metadata after pending backend gate")
+
+	writeIntegrationBackendEvidence(t, repo, created.RunID)
+	passOutput := runHelper(t, binary, repo, "gate", "check", created.RunID[:24], "backend", "--json")
+	var passed gateCheckOutput
+	if err := json.Unmarshal(passOutput, &passed); err != nil {
+		t.Fatalf("passing backend output is not JSON: %v\n%s", err, string(passOutput))
+	}
+	if passed.RunID != created.RunID || passed.Gate != "backend" || passed.Status != "pass" || passed.EventID != "evt-000005" || len(passed.MissingEvidence) != 0 {
+		t.Fatalf("passed backend = %#v, want backend pass evt-000005", passed)
+	}
+	for _, check := range []string{"backend_manifest", "selected_cli", "capability_check", "bridge_session_snapshot", "bridge_events"} {
+		if !gateCheckListed(passed.Checks, check, "pass") {
+			t.Fatalf("passed checks = %#v, want %s pass", passed.Checks, check)
+		}
+	}
+	assertOutputContains(t, readFile(t, filepath.Join(repo, ".kkachi", "events.jsonl")), `"type":"gate.passed"`, "events after passing backend gate")
+	assertOutputContains(t, readFile(t, filepath.Join(repo, ".kkachi", "status.json")), `"event_id": "evt-000005"`, "status after passing backend gate")
+	assertOutputContains(t, readFile(t, metadataPath), `"event_id": "evt-000005"`, "metadata after passing backend gate")
+}
+
 func TestRunwf002LockWorkflow(t *testing.T) {
 	repo := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
@@ -731,6 +803,40 @@ func writeIntegrationMarkdownArtifact(t *testing.T, repo string, runID string, a
 	path := filepath.Join(repo, ".kkachi", "runs", runID, filepath.FromSlash(artifact))
 	content := "# " + artifact + "\n\n" + strings.TrimRight(body, "\n") + "\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write %s: %v", artifact, err)
+	}
+}
+
+func writeIntegrationBackendEvidence(t *testing.T, repo string, runID string) {
+	t.Helper()
+	writeIntegrationJSONArtifact(t, repo, runID, "selected-cli.json", map[string]any{
+		"version":           "0.1",
+		"status":            "supported",
+		"backend_type":      "codex",
+		"adapter_type":      "openai-codex",
+		"source_ledger_ref": "docs/ledger.md#codex",
+		"caveats":           []string{},
+	})
+	writeIntegrationMarkdownArtifact(t, repo, runID, "capability-check.md", "Status: complete\nBackend Type: codex\nAdapter Type: openai-codex\nCapability: thread resume checked\n")
+	writeIntegrationJSONArtifact(t, repo, runID, "bridge-session-snapshot.json", map[string]any{
+		"session_id":      "session-123",
+		"backend_type":    "codex",
+		"adapter_type":    "openai-codex",
+		"state":           "running",
+		"lifecycle_class": "interactive",
+		"open_pendings":   0,
+	})
+	writeIntegrationMarkdownArtifact(t, repo, runID, "bridge-events.md", "Status: complete\nEvent: bridge opened a codex session and emitted output\n")
+}
+
+func writeIntegrationJSONArtifact(t *testing.T, repo string, runID string, artifact string, payload any) {
+	t.Helper()
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal %s: %v", artifact, err)
+	}
+	path := filepath.Join(repo, ".kkachi", "runs", runID, filepath.FromSlash(artifact))
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
 		t.Fatalf("write %s: %v", artifact, err)
 	}
 }
