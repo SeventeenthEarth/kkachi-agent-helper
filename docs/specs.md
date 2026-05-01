@@ -359,12 +359,15 @@ Stable JSON output has the following shape:
 }
 ```
 
-Behavior in `gates-001`:
+Behavior in `gates-001` and `gates-002`:
 
 - `intake` is implemented by reusing the deterministic intake checks from `artifact validate`.
-- `sot`, `roadmap`, `plan`, `backend`, `implementation`, `review`, `verification`, `docs`, and `final` are declared but return `blocked` until later gates tasks implement their artifact-specific rules.
+- `sot` is implemented by requiring completed `sot-basis.md` for Path A or completed `sot-update.md` for Path B.
+- `roadmap` is implemented by accepting a non-empty run metadata `task_id`, completed `roadmap-update.md`, or `roadmap-update.md` with `Status: not_applicable` plus a non-empty `Reason:`.
+- `plan` is implemented by requiring completed `acceptance-criteria.md`, `plan.md`, and `checklist.md`.
+- `backend`, `implementation`, `review`, `verification`, `docs`, and `final` are declared but return `blocked` until later gates tasks implement their artifact-specific rules.
 - Unknown gate names are usage errors.
-- `gate final <run_id>` remains reserved for `gates-004` and is not implemented by `gates-001`.
+- `gate final <run_id>` remains reserved for `gates-004` and is not implemented yet.
 - Passing checks append `gate.passed`; failing checks append `gate.failed`; blocked checks append `gate.checked`.
 - Every successful `gate check` updates both `run-metadata.json.gate_state[gate]` and `status.json.gate_summary[gate]` with the status, event id, and checked timestamp.
 - A passing gate exits `0`; failed or blocked gates exit `3`.

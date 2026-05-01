@@ -175,7 +175,7 @@ func TestProjectInitCreatesStateAndRefusesOverwrite(t *testing.T) {
 	}
 }
 
-func TestGates001GateCheckWorkflow(t *testing.T) {
+func TestGates001And002GateCheckWorkflow(t *testing.T) {
 	repo := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
 		t.Fatalf("mkdir .git: %v", err)
@@ -192,7 +192,7 @@ func TestGates001GateCheckWorkflow(t *testing.T) {
 		"--sot-policy", "existing_sot_basis",
 		"--execution-mode", "production_write",
 		"--commander", "Gongmyeong",
-		"--task-id", "gates-001",
+		"--task-id", "gates-002",
 		"--json",
 	)
 	var created struct {
@@ -241,16 +241,48 @@ func TestGates001GateCheckWorkflow(t *testing.T) {
 	assertOutputContains(t, readFile(t, filepath.Join(repo, ".kkachi", "status.json")), `"status": "pass"`, "status after passing gate check")
 	assertOutputContains(t, readFile(t, filepath.Join(repo, ".kkachi", "runs", created.RunID, "run-metadata.json")), `"event_id": "evt-000005"`, "metadata after passing gate check")
 
-	blockedOutput, err := runHelperAllowError(binary, repo, "gate", "check", created.RunID, "plan", "--json")
+	planPendingOutput, err := runHelperAllowError(binary, repo, "gate", "check", created.RunID, "plan", "--json")
 	if err == nil {
-		t.Fatalf("future gate check succeeded, want blocked exit\n%s", string(blockedOutput))
+		t.Fatalf("plan gate check succeeded with pending plan artifacts\n%s", string(planPendingOutput))
 	}
-	var blocked gateCheckOutput
-	if err := json.Unmarshal(blockedOutput, &blocked); err != nil {
-		t.Fatalf("blocked gate output is not JSON: %v\n%s", err, string(blockedOutput))
+	var planPending gateCheckOutput
+	if err := json.Unmarshal(planPendingOutput, &planPending); err != nil {
+		t.Fatalf("plan pending gate output is not JSON: %v\n%s", err, string(planPendingOutput))
 	}
-	if blocked.Status != "blocked" || blocked.EventID != "evt-000006" || len(blocked.MissingEvidence) != 1 || !gateCheckListed(blocked.Checks, "plan_implemented", "blocked") {
-		t.Fatalf("blocked gate = %#v, want blocked future gate", blocked)
+	if planPending.Status != "fail" || planPending.EventID != "evt-000006" || len(planPending.MissingEvidence) != 3 || !gateCheckListed(planPending.Checks, "acceptance_criteria", "fail") || !gateCheckListed(planPending.Checks, "plan_artifact", "fail") || !gateCheckListed(planPending.Checks, "checklist_artifact", "fail") {
+		t.Fatalf("planPending = %#v, want failed plan gate with pending artifacts", planPending)
+	}
+
+	writeIntegrationMarkdownArtifact(t, repo, created.RunID, "sot-basis.md", "Status: complete\nSource: docs/specs.md\n")
+	writeIntegrationMarkdownArtifact(t, repo, created.RunID, "acceptance-criteria.md", "Status: complete\nCriteria: pre-implementation safety\n")
+	writeIntegrationMarkdownArtifact(t, repo, created.RunID, "plan.md", "Status: complete\nPlan: gates-002 deterministic validators\n")
+	writeIntegrationMarkdownArtifact(t, repo, created.RunID, "checklist.md", "Status: complete\n- [x] SOT gate\n- [x] roadmap gate\n- [x] plan gate\n")
+
+	sotOutput := runHelper(t, binary, repo, "gate", "check", created.RunID, "sot", "--json")
+	var sotPassed gateCheckOutput
+	if err := json.Unmarshal(sotOutput, &sotPassed); err != nil {
+		t.Fatalf("sot gate output is not JSON: %v\n%s", err, string(sotOutput))
+	}
+	if sotPassed.Status != "pass" || sotPassed.EventID != "evt-000007" || !gateCheckListed(sotPassed.Checks, "sot_basis", "pass") {
+		t.Fatalf("sotPassed = %#v, want SOT pass", sotPassed)
+	}
+
+	roadmapOutput := runHelper(t, binary, repo, "gate", "check", created.RunID, "roadmap", "--json")
+	var roadmapPassed gateCheckOutput
+	if err := json.Unmarshal(roadmapOutput, &roadmapPassed); err != nil {
+		t.Fatalf("roadmap gate output is not JSON: %v\n%s", err, string(roadmapOutput))
+	}
+	if roadmapPassed.Status != "pass" || roadmapPassed.EventID != "evt-000008" || !gateCheckListed(roadmapPassed.Checks, "roadmap_trace", "pass") {
+		t.Fatalf("roadmapPassed = %#v, want roadmap trace pass", roadmapPassed)
+	}
+
+	planOutput := runHelper(t, binary, repo, "gate", "check", created.RunID, "plan", "--json")
+	var planPassed gateCheckOutput
+	if err := json.Unmarshal(planOutput, &planPassed); err != nil {
+		t.Fatalf("plan gate output is not JSON: %v\n%s", err, string(planOutput))
+	}
+	if planPassed.Status != "pass" || planPassed.EventID != "evt-000009" || len(planPassed.MissingEvidence) != 0 || !gateCheckListed(planPassed.Checks, "acceptance_criteria", "pass") || !gateCheckListed(planPassed.Checks, "plan_artifact", "pass") || !gateCheckListed(planPassed.Checks, "checklist_artifact", "pass") {
+		t.Fatalf("planPassed = %#v, want completed plan gate pass", planPassed)
 	}
 }
 
@@ -691,6 +723,15 @@ func writeIntegrationIntake(t *testing.T, repo string, runID string, workPath st
 	path := filepath.Join(repo, ".kkachi", "runs", runID, "intake-classification.md")
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write intake classification: %v", err)
+	}
+}
+
+func writeIntegrationMarkdownArtifact(t *testing.T, repo string, runID string, artifact string, body string) {
+	t.Helper()
+	path := filepath.Join(repo, ".kkachi", "runs", runID, filepath.FromSlash(artifact))
+	content := "# " + artifact + "\n\n" + strings.TrimRight(body, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write %s: %v", artifact, err)
 	}
 }
 

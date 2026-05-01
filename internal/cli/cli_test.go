@@ -1346,7 +1346,7 @@ func cliValidationCheckStatus(checks []project.ArtifactValidationCheck, name str
 	return false
 }
 
-func TestGateCheckCLIJSONHumanAndBlocked(t *testing.T) {
+func TestGateCheckCLIJSONHumanAndPlanFailure(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -1355,7 +1355,7 @@ func TestGateCheckCLIJSONHumanAndBlocked(t *testing.T) {
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := runWithOptions(runCreateArgs("Gate check", "--task-id", "gates-001", "--json"), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(runCreateArgs("Gate check", "--task-id", "gates-002", "--json"), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("run create exit = %d stderr=%s", code, stderr.String())
 	}
 	var created runCreateOutput
@@ -1409,12 +1409,12 @@ func TestGateCheckCLIJSONHumanAndBlocked(t *testing.T) {
 	if code := runWithOptions([]string{"gate", "check", created.RunID, "plan", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitSafety {
 		t.Fatalf("gate check plan exit = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
-	var blocked gateCheckOutput
-	if err := json.Unmarshal(stdout.Bytes(), &blocked); err != nil {
-		t.Fatalf("decode blocked gate check: %v\n%s", err, stdout.String())
+	var planFailed gateCheckOutput
+	if err := json.Unmarshal(stdout.Bytes(), &planFailed); err != nil {
+		t.Fatalf("decode failed plan gate check: %v\n%s", err, stdout.String())
 	}
-	if blocked.Status != project.GateStatusBlocked || blocked.EventID != "evt-000006" || !cliGateCheckStatus(blocked.Checks, "plan_implemented", project.GateStatusBlocked) {
-		t.Fatalf("blocked gate = %#v, want blocked plan", blocked)
+	if planFailed.Status != project.GateStatusFail || planFailed.EventID != "evt-000006" || !cliGateCheckStatus(planFailed.Checks, "acceptance_criteria", project.GateStatusFail) || !cliGateCheckStatus(planFailed.Checks, "plan_artifact", project.GateStatusFail) || !cliGateCheckStatus(planFailed.Checks, "checklist_artifact", project.GateStatusFail) {
+		t.Fatalf("planFailed = %#v, want failed plan gate with missing artifacts", planFailed)
 	}
 
 	stdout.Reset()

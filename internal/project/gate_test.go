@@ -106,28 +106,265 @@ func TestCheckGateRecheckOverwritesGateSummary(t *testing.T) {
 	assertStatusGateSummary(t, status, GateIntake, created.Metadata.RunID, GateStatusPass, "evt-000005")
 }
 
-func TestCheckGateFutureGateBlocksAndRecordsState(t *testing.T) {
+func TestCheckGateSOTPathAPassesAndFailsWithArtifactEvidence(t *testing.T) {
 	repo := initializedRepo(t)
 	root, _ := DiscoverRoot(repo)
 	created, err := CreateRun(root, deterministicCreateRunOptions())
 	if err != nil {
 		t.Fatalf("CreateRun() error = %v", err)
 	}
+	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+		t.Fatalf("InitArtifacts() error = %v", err)
+	}
 
-	result, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GatePlan, Now: testRunNow(4)})
+	failed, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateSOT, Now: testRunNow(5)})
 	if err != nil {
-		t.Fatalf("CheckGate(plan) error = %v", err)
+		t.Fatalf("CheckGate(sot fail) error = %v", err)
 	}
-	if result.Status != GateStatusBlocked || result.EventID != "evt-000003" || len(result.MissingEvidence) != 1 {
-		t.Fatalf("result = %#v, want blocked placeholder", result)
-	}
-	if !gateCheckStatus(result.Checks, "plan_implemented", GateStatusBlocked) {
-		t.Fatalf("checks = %#v, want plan_implemented blocked", result.Checks)
+	if failed.Status != GateStatusFail || failed.EventID != "evt-000004" || !gateCheckStatus(failed.Checks, "sot_basis", GateStatusFail) || len(failed.MissingEvidence) == 0 {
+		t.Fatalf("failed = %#v, want pending SOT basis failure", failed)
 	}
 	metadata := readRunMetadata(t, repo, created.Metadata.RunID)
-	assertGateState(t, metadata.GateState, GatePlan, GateStatusBlocked, "evt-000003")
-	if got := eventTypes(t, repo); got[len(got)-1] != "gate.checked" {
-		t.Fatalf("last event type = %q, want gate.checked", got[len(got)-1])
+	assertGateState(t, metadata.GateState, GateSOT, GateStatusFail, "evt-000004")
+
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "sot-basis.md", "Status: complete\nSource: docs/specs.md\n")
+	passed, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateSOT, Now: testRunNow(6)})
+	if err != nil {
+		t.Fatalf("CheckGate(sot pass) error = %v", err)
+	}
+	if passed.Status != GateStatusPass || passed.EventID != "evt-000005" || !gateCheckStatus(passed.Checks, "sot_basis", GateStatusPass) || len(passed.MissingEvidence) != 0 {
+		t.Fatalf("passed = %#v, want completed SOT basis pass", passed)
+	}
+	metadata = readRunMetadata(t, repo, created.Metadata.RunID)
+	assertGateState(t, metadata.GateState, GateSOT, GateStatusPass, "evt-000005")
+	if got := eventTypes(t, repo); got[len(got)-1] != "gate.passed" {
+		t.Fatalf("last event type = %q, want gate.passed", got[len(got)-1])
+	}
+}
+
+func TestCheckGateSOTPathBUsesSOTUpdate(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.WorkPath = "B_discovery_shaping"
+	options.SOTPolicy = "minimal_sot_before_code"
+	options.ExecutionMode = "research"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+		t.Fatalf("InitArtifacts() error = %v", err)
+	}
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "sot-update.md", "Status: complete\nSOT: created for handoff\n")
+
+	result, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateSOT, Now: testRunNow(5)})
+	if err != nil {
+		t.Fatalf("CheckGate(sot Path B) error = %v", err)
+	}
+	if result.Status != GateStatusPass || result.EventID != "evt-000004" || !gateCheckStatus(result.Checks, "sot_update", GateStatusPass) {
+		t.Fatalf("result = %#v, want Path B SOT update pass", result)
+	}
+}
+
+func TestCheckGateSOTRejectsNotApplicableEvidence(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+		t.Fatalf("InitArtifacts() error = %v", err)
+	}
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "sot-basis.md", "Status: not_applicable\nReason: SOT is optional\n")
+
+	result, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateSOT, Now: testRunNow(5)})
+	if err != nil {
+		t.Fatalf("CheckGate(sot not_applicable) error = %v", err)
+	}
+	if result.Status != GateStatusFail || result.EventID != "evt-000004" || !gateCheckStatus(result.Checks, "sot_basis", GateStatusFail) || !gateCheckActual(result.Checks, "sot_basis", "not_applicable") {
+		t.Fatalf("result = %#v, want SOT not_applicable rejection", result)
+	}
+}
+
+func TestCheckGateRoadmapPassesByTaskIDOrExplicitArtifactException(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+		t.Fatalf("InitArtifacts() error = %v", err)
+	}
+
+	taskTrace, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateRoadmap, Now: testRunNow(5)})
+	if err != nil {
+		t.Fatalf("CheckGate(roadmap task trace) error = %v", err)
+	}
+	if taskTrace.Status != GateStatusPass || taskTrace.EventID != "evt-000004" || !gateCheckStatus(taskTrace.Checks, "roadmap_trace", GateStatusPass) {
+		t.Fatalf("taskTrace = %#v, want task_id roadmap pass", taskTrace)
+	}
+
+	metadata := readRunMetadata(t, repo, created.Metadata.RunID)
+	metadata.TaskID = nil
+	writeRunMetadataForTest(t, repo, metadata)
+	pending, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateRoadmap, Now: testRunNow(6)})
+	if err != nil {
+		t.Fatalf("CheckGate(roadmap pending) error = %v", err)
+	}
+	if pending.Status != GateStatusFail || pending.EventID != "evt-000005" || !gateCheckStatus(pending.Checks, "roadmap_trace", GateStatusFail) {
+		t.Fatalf("pending = %#v, want roadmap-update failure without task_id", pending)
+	}
+
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "roadmap-update.md", "Status: not_applicable\nReason: existing roadmap already traces this non-roadmap run\n")
+	exception, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateRoadmap, Now: testRunNow(7)})
+	if err != nil {
+		t.Fatalf("CheckGate(roadmap exception) error = %v", err)
+	}
+	if exception.Status != GateStatusPass || exception.EventID != "evt-000006" || len(exception.MissingEvidence) != 0 {
+		t.Fatalf("exception = %#v, want explicit not-applicable pass", exception)
+	}
+}
+
+func TestCheckGateRoadmapPassesByCompletedUpdateAndRejectsMissingExceptionReason(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+		t.Fatalf("InitArtifacts() error = %v", err)
+	}
+	metadata := readRunMetadata(t, repo, created.Metadata.RunID)
+	metadata.TaskID = nil
+	writeRunMetadataForTest(t, repo, metadata)
+
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "roadmap-update.md", "Status: complete\nTrace: docs/roadmap.md gates-002\n")
+	completed, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateRoadmap, Now: testRunNow(5)})
+	if err != nil {
+		t.Fatalf("CheckGate(roadmap complete) error = %v", err)
+	}
+	if completed.Status != GateStatusPass || completed.EventID != "evt-000004" || !gateCheckStatus(completed.Checks, "roadmap_trace", GateStatusPass) {
+		t.Fatalf("completed = %#v, want completed roadmap-update pass", completed)
+	}
+
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "roadmap-update.md", "Status: not_applicable\nReason:   \n")
+	missingReason, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateRoadmap, Now: testRunNow(6)})
+	if err != nil {
+		t.Fatalf("CheckGate(roadmap missing reason) error = %v", err)
+	}
+	if missingReason.Status != GateStatusFail || missingReason.EventID != "evt-000005" || !gateCheckStatus(missingReason.Checks, "roadmap_trace", GateStatusFail) || !gateCheckActual(missingReason.Checks, "roadmap_trace", "not_applicable without reason") {
+		t.Fatalf("missingReason = %#v, want not_applicable without reason failure", missingReason)
+	}
+}
+
+func TestCheckGatePlanRequiresAcceptancePlanAndChecklist(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+		t.Fatalf("InitArtifacts() error = %v", err)
+	}
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "acceptance-criteria.md", "Status: complete\nCriteria: deterministic\n")
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "plan.md", "Status: complete\nPlan: validate gates\n")
+
+	failed, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GatePlan, Now: testRunNow(5)})
+	if err != nil {
+		t.Fatalf("CheckGate(plan fail) error = %v", err)
+	}
+	if failed.Status != GateStatusFail || failed.EventID != "evt-000004" || !gateCheckStatus(failed.Checks, "checklist_artifact", GateStatusFail) || len(failed.MissingEvidence) != 1 {
+		t.Fatalf("failed = %#v, want checklist failure", failed)
+	}
+
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "checklist.md", "Status: complete\n- [x] lock plan gate\n")
+	passed, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GatePlan, Now: testRunNow(6)})
+	if err != nil {
+		t.Fatalf("CheckGate(plan pass) error = %v", err)
+	}
+	if passed.Status != GateStatusPass || passed.EventID != "evt-000005" || len(passed.MissingEvidence) != 0 {
+		t.Fatalf("passed = %#v, want plan pass", passed)
+	}
+}
+
+func TestCheckGatePlanRejectsNotApplicableEvidence(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+		t.Fatalf("InitArtifacts() error = %v", err)
+	}
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "acceptance-criteria.md", "Status: not_applicable\nReason: low risk\n")
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "plan.md", "Status: complete\nPlan: validate gates\n")
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "checklist.md", "Status: complete\n- [x] lock plan gate\n")
+
+	result, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GatePlan, Now: testRunNow(5)})
+	if err != nil {
+		t.Fatalf("CheckGate(plan not_applicable) error = %v", err)
+	}
+	if result.Status != GateStatusFail || result.EventID != "evt-000004" || !gateCheckStatus(result.Checks, "acceptance_criteria", GateStatusFail) || !gateCheckActual(result.Checks, "acceptance_criteria", "not_applicable") {
+		t.Fatalf("result = %#v, want plan not_applicable rejection", result)
+	}
+}
+
+func TestCheckGateMarkdownArtifactFailures(t *testing.T) {
+	tests := []struct {
+		name        string
+		artifact    string
+		gate        string
+		check       string
+		setup       func(t *testing.T, path string)
+		wantActual  string
+		wantMissing bool
+	}{
+		{name: "empty SOT basis", artifact: "sot-basis.md", gate: GateSOT, check: "sot_basis", setup: func(t *testing.T, path string) {
+			t.Helper()
+			mustWriteFile(t, path, nil)
+		}, wantActual: "empty", wantMissing: true},
+		{name: "directory plan", artifact: "plan.md", gate: GatePlan, check: "plan_artifact", setup: func(t *testing.T, path string) {
+			t.Helper()
+			mustRemove(t, path)
+			mustMkdir(t, path)
+		}, wantActual: "directory", wantMissing: true},
+		{name: "missing checklist", artifact: "checklist.md", gate: GatePlan, check: "checklist_artifact", setup: func(t *testing.T, path string) {
+			t.Helper()
+			mustRemove(t, path)
+		}, wantActual: "missing", wantMissing: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initializedRepo(t)
+			root, _ := DiscoverRoot(repo)
+			created, err := CreateRun(root, deterministicCreateRunOptions())
+			if err != nil {
+				t.Fatalf("CreateRun() error = %v", err)
+			}
+			if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+				t.Fatalf("InitArtifacts() error = %v", err)
+			}
+			writeCompletedPlanArtifacts(t, repo, created.Metadata.RunID)
+			path := filepath.Join(repo, ".kkachi", "runs", created.Metadata.RunID, filepath.FromSlash(tt.artifact))
+			tt.setup(t, path)
+
+			result, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: tt.gate, Now: testRunNow(5)})
+			if err != nil {
+				t.Fatalf("CheckGate(%s) error = %v", tt.gate, err)
+			}
+			if result.Status != GateStatusFail || !gateCheckStatus(result.Checks, tt.check, GateStatusFail) || !gateCheckActual(result.Checks, tt.check, tt.wantActual) {
+				t.Fatalf("result = %#v, want %s actual %q failure", result, tt.check, tt.wantActual)
+			}
+			if tt.wantMissing && len(result.MissingEvidence) == 0 {
+				t.Fatalf("missing evidence = %#v, want non-empty", result.MissingEvidence)
+			}
+		})
 	}
 }
 
@@ -156,6 +393,15 @@ func TestCheckGateRefusesUnknownAndCoherenceMismatchWithoutMutation(t *testing.T
 func gateCheckStatus(checks []GateCheck, name string, status string) bool {
 	for _, check := range checks {
 		if check.Name == name && check.Status == status {
+			return true
+		}
+	}
+	return false
+}
+
+func gateCheckActual(checks []GateCheck, name string, actual string) bool {
+	for _, check := range checks {
+		if check.Name == name && check.Actual == actual {
 			return true
 		}
 	}
@@ -218,4 +464,17 @@ func eventTypes(t *testing.T, repo string) []string {
 		types = append(types, event.Type)
 	}
 	return types
+}
+
+func writeCompletedPlanArtifacts(t *testing.T, repo string, runID string) {
+	t.Helper()
+	writeMarkdownArtifact(t, repo, runID, "acceptance-criteria.md", "Status: complete\nCriteria: deterministic\n")
+	writeMarkdownArtifact(t, repo, runID, "plan.md", "Status: complete\nPlan: validate gates\n")
+	writeMarkdownArtifact(t, repo, runID, "checklist.md", "Status: complete\n- [x] lock plan gate\n")
+}
+
+func writeMarkdownArtifact(t *testing.T, repo string, runID string, artifact string, body string) {
+	t.Helper()
+	path := filepath.Join(repo, ".kkachi", "runs", runID, filepath.FromSlash(artifact))
+	mustWriteFile(t, path, []byte("# "+artifact+"\n\n"+body+"\n"))
 }

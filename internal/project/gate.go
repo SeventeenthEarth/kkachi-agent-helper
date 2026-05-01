@@ -2,6 +2,7 @@ package project
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 )
@@ -25,9 +26,9 @@ const (
 
 var gateDefinitions = []GateDefinition{
 	{Name: GateIntake, Implemented: true, Description: "run metadata, intake classification, and path/mode eligibility"},
-	{Name: GateSOT, Description: "SOT basis or Path B SOT creation evidence"},
-	{Name: GateRoadmap, Description: "roadmap trace or explicit exception evidence"},
-	{Name: GatePlan, Description: "acceptance criteria, plan.md, and checklist.md"},
+	{Name: GateSOT, Implemented: true, Description: "SOT basis or Path B SOT creation evidence"},
+	{Name: GateRoadmap, Implemented: true, Description: "roadmap trace or explicit exception evidence"},
+	{Name: GatePlan, Implemented: true, Description: "acceptance criteria, plan.md, and checklist.md"},
 	{Name: GateBackend, Description: "bridge backend evidence artifacts"},
 	{Name: GateImplementation, Description: "implementation evidence artifacts"},
 	{Name: GateReview, Description: "review and red-team evidence artifacts"},
@@ -97,7 +98,7 @@ func checkGateUnlocked(root Root, options GateCheckOptions) (GateCheckResult, er
 		return GateCheckResult{}, err
 	}
 
-	result, err := checkGateResult(root, metadata.RunID, definition)
+	result, err := checkGateResult(root, metadata, metadataPath.Relative, definition)
 	if err != nil {
 		return GateCheckResult{}, err
 	}
@@ -133,15 +134,157 @@ func nextGateEventID(root Root) (string, error) {
 	return nextEventID(last, eventsPath.Relative)
 }
 
-func checkGateResult(root Root, runID string, definition GateDefinition) (GateCheckResult, error) {
+func checkGateResult(root Root, metadata RunMetadata, metadataRelative string, definition GateDefinition) (GateCheckResult, error) {
 	if !definition.Implemented {
-		return blockedGateResult(runID, definition), nil
+		return blockedGateResult(metadata.RunID, definition), nil
 	}
+	switch definition.Name {
+	case GateIntake:
+		return checkIntakeGate(root, metadata.RunID)
+	case GateSOT:
+		return checkSOTGate(root, metadata)
+	case GateRoadmap:
+		return checkRoadmapGate(root, metadata, metadataRelative)
+	case GatePlan:
+		return checkPlanGate(root, metadata)
+	}
+	return blockedGateResult(metadata.RunID, definition), nil
+}
+
+func checkIntakeGate(root Root, runID string) (GateCheckResult, error) {
 	artifactResult, err := ValidateArtifacts(root, ArtifactValidateOptions{RunID: runID, Gate: ArtifactGateIntake})
 	if err != nil {
 		return GateCheckResult{}, err
 	}
 	return gateResultFromArtifactValidation(artifactResult), nil
+}
+
+func checkSOTGate(root Root, metadata RunMetadata) (GateCheckResult, error) {
+	switch metadata.WorkPath {
+	case "A_development_execution":
+		return gateResultFromChecks(metadata.RunID, GateSOT, []GateCheck{
+			checkMarkdownGateArtifact(root, metadata.RunID, markdownGateArtifactRule{Name: "sot_basis", Artifact: "sot-basis.md"}),
+		}), nil
+	case "B_discovery_shaping":
+		return gateResultFromChecks(metadata.RunID, GateSOT, []GateCheck{
+			checkMarkdownGateArtifact(root, metadata.RunID, markdownGateArtifactRule{Name: "sot_update", Artifact: "sot-update.md"}),
+		}), nil
+	default:
+		return gateResultFromChecks(metadata.RunID, GateSOT, []GateCheck{{
+			Name:     "sot_work_path",
+			Status:   GateStatusFail,
+			Message:  "work path is not eligible for SOT gate evaluation",
+			Hint:     "Repair run-metadata.json to use a supported Kkachi work path.",
+			Field:    "work_path",
+			Expected: "A_development_execution or B_discovery_shaping",
+			Actual:   metadata.WorkPath,
+		}}), nil
+	}
+}
+
+func checkRoadmapGate(root Root, metadata RunMetadata, metadataRelative string) (GateCheckResult, error) {
+	if metadata.TaskID != nil && strings.TrimSpace(*metadata.TaskID) != "" {
+		return gateResultFromChecks(metadata.RunID, GateRoadmap, []GateCheck{{
+			Name:    "roadmap_trace",
+			Status:  GateStatusPass,
+			Path:    metadataRelative,
+			Message: "run metadata records a roadmap task trace",
+			Field:   "task_id",
+			Actual:  strings.TrimSpace(*metadata.TaskID),
+		}}), nil
+	}
+	return gateResultFromChecks(metadata.RunID, GateRoadmap, []GateCheck{
+		checkMarkdownGateArtifact(root, metadata.RunID, markdownGateArtifactRule{Name: "roadmap_trace", Artifact: "roadmap-update.md", AllowNotApplicable: true}),
+	}), nil
+}
+
+func checkPlanGate(root Root, metadata RunMetadata) (GateCheckResult, error) {
+	return gateResultFromChecks(metadata.RunID, GatePlan, []GateCheck{
+		checkMarkdownGateArtifact(root, metadata.RunID, markdownGateArtifactRule{Name: "acceptance_criteria", Artifact: "acceptance-criteria.md"}),
+		checkMarkdownGateArtifact(root, metadata.RunID, markdownGateArtifactRule{Name: "plan_artifact", Artifact: "plan.md"}),
+		checkMarkdownGateArtifact(root, metadata.RunID, markdownGateArtifactRule{Name: "checklist_artifact", Artifact: "checklist.md"}),
+	}), nil
+}
+
+type markdownGateArtifactRule struct {
+	Name               string
+	Artifact           string
+	AllowNotApplicable bool
+}
+
+func checkMarkdownGateArtifact(root Root, runID string, rule markdownGateArtifactRule) GateCheck {
+	path, err := artifactPath(root, runID, rule.Artifact)
+	if err != nil {
+		return GateCheck{Name: rule.Name, Status: GateStatusFail, Message: "gate artifact path is invalid", Hint: "Use artifact init to create canonical artifact paths.", Field: "path", Expected: rule.Artifact, Actual: err.Error()}
+	}
+	info, err := os.Lstat(path.Absolute)
+	if os.IsNotExist(err) {
+		return GateCheck{Name: rule.Name, Status: GateStatusFail, Path: path.Relative, Message: "required gate artifact is missing", Hint: "Run artifact init, then record the required gate evidence.", Field: "path", Expected: "existing regular file", Actual: "missing"}
+	}
+	if err != nil {
+		return GateCheck{Name: rule.Name, Status: GateStatusFail, Path: path.Relative, Message: "cannot inspect gate artifact", Hint: "Check run artifact permissions before checking gates.", Field: "path", Expected: "inspectable regular file", Actual: err.Error()}
+	}
+	if !info.Mode().IsRegular() {
+		actual := "non-regular"
+		if info.IsDir() {
+			actual = "directory"
+		}
+		return GateCheck{Name: rule.Name, Status: GateStatusFail, Path: path.Relative, Message: "gate artifact must be a regular file", Hint: "Move the conflicting path and re-run artifact init.", Field: "path", Expected: "regular file", Actual: actual}
+	}
+	if info.Size() == 0 {
+		return GateCheck{Name: rule.Name, Status: GateStatusFail, Path: path.Relative, Message: "gate artifact is empty", Hint: "Record the required gate evidence before checking this gate.", Field: "path", Expected: "non-empty file", Actual: "empty"}
+	}
+	content, err := os.ReadFile(path.Absolute)
+	if err != nil {
+		return GateCheck{Name: rule.Name, Status: GateStatusFail, Path: path.Relative, Message: "cannot read gate artifact", Hint: "Check run artifact permissions before checking gates.", Field: "path", Expected: "readable file", Actual: err.Error()}
+	}
+	return validateMarkdownGateArtifact(rule, path.Relative, content)
+}
+
+func validateMarkdownGateArtifact(rule markdownGateArtifactRule, relative string, content []byte) GateCheck {
+	fields := parseMarkdownFields(string(content))
+	status := strings.ToLower(strings.TrimSpace(fields["status"]))
+	switch status {
+	case "complete":
+		return GateCheck{Name: rule.Name, Status: GateStatusPass, Path: relative, Message: "gate artifact is complete"}
+	case "not_applicable":
+		_, reason := NotApplicableReason(content)
+		if rule.AllowNotApplicable && reason != "" {
+			return GateCheck{Name: rule.Name, Status: GateStatusPass, Path: relative, Message: "explicit not-applicable reason is recorded", Field: "reason", Actual: reason}
+		}
+		actual := "not_applicable without reason"
+		if !rule.AllowNotApplicable {
+			actual = "not_applicable"
+		}
+		return GateCheck{Name: rule.Name, Status: GateStatusFail, Path: relative, Message: "gate artifact cannot satisfy this gate as not applicable", Hint: "Use Status: complete, or record not_applicable only where the gate explicitly permits it.", Field: "status", Expected: expectedMarkdownGateStatus(rule.AllowNotApplicable), Actual: actual}
+	case "pending":
+		return GateCheck{Name: rule.Name, Status: GateStatusFail, Path: relative, Message: "gate artifact still has the baseline pending status", Hint: "Replace the baseline with completed gate evidence.", Field: "status", Expected: expectedMarkdownGateStatus(rule.AllowNotApplicable), Actual: status}
+	case "":
+		return GateCheck{Name: rule.Name, Status: GateStatusFail, Path: relative, Message: "gate artifact status is missing", Hint: "Set Status: complete after recording gate evidence.", Field: "status", Expected: expectedMarkdownGateStatus(rule.AllowNotApplicable), Actual: "missing"}
+	default:
+		return GateCheck{Name: rule.Name, Status: GateStatusFail, Path: relative, Message: "gate artifact status is invalid", Hint: "Use Status: complete for gate evidence.", Field: "status", Expected: expectedMarkdownGateStatus(rule.AllowNotApplicable), Actual: status}
+	}
+}
+
+func expectedMarkdownGateStatus(allowNotApplicable bool) string {
+	if allowNotApplicable {
+		return "complete or not_applicable with Reason"
+	}
+	return "complete"
+}
+
+func gateResultFromChecks(runID string, gate string, checks []GateCheck) GateCheckResult {
+	status := GateStatusPass
+	missing := []string{}
+	for _, check := range checks {
+		if check.Status == GateStatusFail {
+			status = GateStatusFail
+			if check.Path != "" {
+				missing = appendUnique(missing, check.Path)
+			}
+		}
+	}
+	return GateCheckResult{RunID: runID, Gate: gate, Status: status, Checks: checks, MissingEvidence: missing}
 }
 
 func gateResultFromArtifactValidation(result ArtifactValidateResult) GateCheckResult {
