@@ -53,7 +53,7 @@ Status values: `Planned`, `In Progress`, `Blocked`, `Completed`, `Deferred`.
 
 | Task ID | Title | Status | Work guide | Notes |
 |---|---|---|---|---|
-| gates-001 | Gate engine and `gate check` command | Planned | Create a small declarative gate model and implement `gate check <run_id> <gate>` with pass/fail/blocked results, exact missing evidence, and stable JSON output. | Foundation for all later gates. |
+| gates-001 | Gate engine and `gate check` command | Completed | Create a small declarative gate model and implement `gate check <run_id> <gate>` with pass/fail/blocked results, exact missing evidence, and stable JSON output. | Implemented mutating gate checks with `gate_state`, `gate_summary`, `gate.passed` / `gate.failed` / `gate.checked` events, intake validation reuse, and blocked placeholders for later gates. |
 | gates-002 | SOT, roadmap, and plan gates | Planned | Implement checks for SOT basis or Path B SOT creation, roadmap trace or explicit exception, acceptance criteria, `plan.md`, and `checklist.md`. | Covers pre-implementation safety. |
 | gates-003 | Backend evidence gate | Planned | Validate `selected-cli.json`, `capability-check.md`, `bridge-session-snapshot.json`, and `bridge-events.md` shape and declared status. Never choose or override the backend. | Bridge-aware, deterministic only. |
 | gates-004 | Verification, docs, and final readiness gates | Planned | Validate implementation evidence, review/red-team artifacts, `test-log.md`, `verification.md`, `docs-update.md`, blocker state, and `final-report.md`. Add `gate final`. | Main PR-ready boundary. |

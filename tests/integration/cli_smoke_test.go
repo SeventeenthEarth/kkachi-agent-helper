@@ -175,6 +175,85 @@ func TestProjectInitCreatesStateAndRefusesOverwrite(t *testing.T) {
 	}
 }
 
+func TestGates001GateCheckWorkflow(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	binary := buildHelperBinary(t)
+
+	runHelper(t, binary, repo, "project", "init", "--json")
+	createdOutput := runHelper(t, binary, repo,
+		"run", "create",
+		"--title", "Gate check workflow",
+		"--work-path", "A_development_execution",
+		"--work-mode", "standard",
+		"--urgency", "normal",
+		"--sot-policy", "existing_sot_basis",
+		"--execution-mode", "production_write",
+		"--commander", "Gongmyeong",
+		"--task-id", "gates-001",
+		"--json",
+	)
+	var created struct {
+		RunID    string `json:"run_id"`
+		EventID  string `json:"event_id"`
+		Metadata struct {
+			WorkPath  string `json:"work_path"`
+			WorkMode  string `json:"work_mode"`
+			SOTPolicy string `json:"sot_policy"`
+			Urgency   string `json:"urgency"`
+		} `json:"metadata"`
+	}
+	if err := json.Unmarshal(createdOutput, &created); err != nil {
+		t.Fatalf("run create output is not JSON: %v\n%s", err, string(createdOutput))
+	}
+	if created.EventID != "evt-000002" {
+		t.Fatalf("created event id = %q, want evt-000002", created.EventID)
+	}
+	runHelper(t, binary, repo, "artifact", "init", created.RunID, "--json")
+
+	pendingOutput, err := runHelperAllowError(binary, repo, "gate", "check", created.RunID, "intake", "--json")
+	if err == nil {
+		t.Fatalf("gate check succeeded with pending intake\n%s", string(pendingOutput))
+	}
+	var pending gateCheckOutput
+	if err := json.Unmarshal(pendingOutput, &pending); err != nil {
+		t.Fatalf("pending gate output is not JSON: %v\n%s", err, string(pendingOutput))
+	}
+	if pending.RunID != created.RunID || pending.Gate != "intake" || pending.Status != "fail" || pending.EventID != "evt-000004" || len(pending.MissingEvidence) == 0 || !gateCheckListed(pending.Checks, "intake_status", "fail") {
+		t.Fatalf("pending gate = %#v, want intake fail with evidence and evt-000004", pending)
+	}
+	assertOutputContains(t, readFile(t, filepath.Join(repo, ".kkachi", "events.jsonl")), `"type":"gate.failed"`, "events after failed gate check")
+	assertOutputContains(t, readFile(t, filepath.Join(repo, ".kkachi", "status.json")), `"event_id": "evt-000004"`, "status after failed gate check")
+	assertOutputContains(t, readFile(t, filepath.Join(repo, ".kkachi", "runs", created.RunID, "run-metadata.json")), `"status": "fail"`, "metadata after failed gate check")
+
+	writeIntegrationIntake(t, repo, created.RunID, created.Metadata.WorkPath, created.Metadata.WorkMode, created.Metadata.SOTPolicy, created.Metadata.Urgency, "")
+	passOutput := runHelper(t, binary, repo, "gate", "check", created.RunID[:24], "intake", "--json")
+	var passed gateCheckOutput
+	if err := json.Unmarshal(passOutput, &passed); err != nil {
+		t.Fatalf("passing gate output is not JSON: %v\n%s", err, string(passOutput))
+	}
+	if passed.RunID != created.RunID || passed.Gate != "intake" || passed.Status != "pass" || passed.EventID != "evt-000005" || len(passed.MissingEvidence) != 0 || !gateCheckListed(passed.Checks, "required_artifacts", "pass") {
+		t.Fatalf("passed gate = %#v, want intake pass with evt-000005", passed)
+	}
+	assertOutputContains(t, readFile(t, filepath.Join(repo, ".kkachi", "events.jsonl")), `"type":"gate.passed"`, "events after passing gate check")
+	assertOutputContains(t, readFile(t, filepath.Join(repo, ".kkachi", "status.json")), `"status": "pass"`, "status after passing gate check")
+	assertOutputContains(t, readFile(t, filepath.Join(repo, ".kkachi", "runs", created.RunID, "run-metadata.json")), `"event_id": "evt-000005"`, "metadata after passing gate check")
+
+	blockedOutput, err := runHelperAllowError(binary, repo, "gate", "check", created.RunID, "plan", "--json")
+	if err == nil {
+		t.Fatalf("future gate check succeeded, want blocked exit\n%s", string(blockedOutput))
+	}
+	var blocked gateCheckOutput
+	if err := json.Unmarshal(blockedOutput, &blocked); err != nil {
+		t.Fatalf("blocked gate output is not JSON: %v\n%s", err, string(blockedOutput))
+	}
+	if blocked.Status != "blocked" || blocked.EventID != "evt-000006" || len(blocked.MissingEvidence) != 1 || !gateCheckListed(blocked.Checks, "plan_implemented", "blocked") {
+		t.Fatalf("blocked gate = %#v, want blocked future gate", blocked)
+	}
+}
+
 func TestRunwf002LockWorkflow(t *testing.T) {
 	repo := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
@@ -476,6 +555,29 @@ func TestRunwf004ArtifactValidateLightPathBWorkflow(t *testing.T) {
 	assertOutputContains(t, passOutput, `"status":"pass"`, "Path B light validate")
 	assertOutputContains(t, passOutput, `"name":"work_path_sot_policy","status":"pass"`, "Path B light validate")
 	assertOutputContains(t, passOutput, `"name":"light_mode_reason","status":"pass"`, "Path B light validate")
+}
+
+type gateCheckOutput struct {
+	RunID           string      `json:"run_id"`
+	Gate            string      `json:"gate"`
+	Status          string      `json:"status"`
+	EventID         string      `json:"event_id"`
+	MissingEvidence []string    `json:"missing_evidence"`
+	Checks          []gateCheck `json:"checks"`
+}
+
+type gateCheck struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+}
+
+func gateCheckListed(checks []gateCheck, name string, status string) bool {
+	for _, check := range checks {
+		if check.Name == name && check.Status == status {
+			return true
+		}
+	}
+	return false
 }
 
 func buildHelperBinary(t *testing.T) string {

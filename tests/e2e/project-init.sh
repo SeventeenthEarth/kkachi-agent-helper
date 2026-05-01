@@ -156,15 +156,35 @@ if [ "$event_count_after_validate" != "3" ]; then
   exit 1
 fi
 
+(cd "$repo" && "$helper" gate check "$run_prefix" intake --json > "$tmpdir/gate-check.json" 2> "$tmpdir/gate-check.err")
+assert_contains "$tmpdir/gate-check.json" '"run_id":"'"$run_id"'"' "gate check JSON"
+assert_contains "$tmpdir/gate-check.json" '"gate":"intake"' "gate check JSON"
+assert_contains "$tmpdir/gate-check.json" '"status":"pass"' "gate check JSON"
+assert_contains "$tmpdir/gate-check.json" '"event_id":"evt-000004"' "gate check JSON"
+assert_contains "$tmpdir/gate-check.json" '"missing_evidence":[]' "gate check JSON"
+assert_contains "$repo/.kkachi/events.jsonl" '"type":"gate.passed"' "events.jsonl after gate check"
+assert_contains "$repo/.kkachi/status.json" '"gate_summary": {' "status.json after gate check"
+assert_contains "$repo/.kkachi/status.json" '"intake": {' "status.json after gate check"
+assert_contains "$repo/.kkachi/status.json" '"event_id": "evt-000004"' "status.json after gate check"
+assert_contains "$repo/.kkachi/runs/$run_id/run-metadata.json" '"gate_state": {' "run-metadata.json after gate check"
+assert_contains "$repo/.kkachi/runs/$run_id/run-metadata.json" '"status": "pass"' "run-metadata.json after gate check"
+
+event_count_after_gate="$(wc -l < "$repo/.kkachi/events.jsonl" | tr -d ' ')"
+if [ "$event_count_after_gate" != "4" ]; then
+  echo "events.jsonl line count after gate check = $event_count_after_gate, want 4" >&2
+  cat "$repo/.kkachi/events.jsonl" >&2
+  exit 1
+fi
+
 (cd "$repo" && "$helper" run activate "$run_id" --json > "$tmpdir/run-activate.json" 2> "$tmpdir/run-activate.err")
 assert_contains "$tmpdir/run-activate.json" '"state":"active"' "run activate JSON"
-assert_contains "$tmpdir/run-activate.json" '"event_id":"evt-000004"' "run activate JSON"
+assert_contains "$tmpdir/run-activate.json" '"event_id":"evt-000005"' "run activate JSON"
 assert_contains "$repo/.kkachi/status.json" '"active_run_id": "'"$run_id"'"' "status.json after run activate"
 assert_contains "$repo/.kkachi/status.json" '"active_run_state": "active"' "status.json after run activate"
 
 (cd "$repo" && "$helper" run close "$run_id" --json > "$tmpdir/run-close.json" 2> "$tmpdir/run-close.err")
 assert_contains "$tmpdir/run-close.json" '"state":"closed"' "run close JSON"
-assert_contains "$tmpdir/run-close.json" '"event_id":"evt-000005"' "run close JSON"
+assert_contains "$tmpdir/run-close.json" '"event_id":"evt-000006"' "run close JSON"
 assert_contains "$repo/.kkachi/status.json" '"active_run_id": null' "status.json after run close"
 assert_contains "$repo/.kkachi/status.json" '"active_run_state": null' "status.json after run close"
 assert_contains "$repo/.kkachi/events.jsonl" '"type":"run.closed"' "events.jsonl after run close"
@@ -177,22 +197,22 @@ done
 
 (cd "$repo" && "$helper" event append artifact.written --run run-abc --payload '{"path":"impl-log.md"}' --json > "$tmpdir/event.json" 2> "$tmpdir/event.err")
 
-assert_contains "$tmpdir/event.json" '"event_id":"evt-000006"' "event append JSON"
-assert_contains "$tmpdir/event.json" '"previous_id":"evt-000005"' "event append JSON"
-assert_contains "$repo/.kkachi/status.json" '"last_event_id": "evt-000006"' "status.json after event append"
-assert_contains "$repo/.kkachi/events.jsonl" '"event_id":"evt-000006"' "events.jsonl after event append"
+assert_contains "$tmpdir/event.json" '"event_id":"evt-000007"' "event append JSON"
+assert_contains "$tmpdir/event.json" '"previous_id":"evt-000006"' "event append JSON"
+assert_contains "$repo/.kkachi/status.json" '"last_event_id": "evt-000007"' "status.json after event append"
+assert_contains "$repo/.kkachi/events.jsonl" '"event_id":"evt-000007"' "events.jsonl after event append"
 assert_contains "$repo/.kkachi/events.jsonl" '"type":"artifact.written"' "events.jsonl after event append"
 assert_contains "$repo/.kkachi/events.jsonl" '"run_id":"run-abc"' "events.jsonl after event append"
 
 event_count_after_append="$(wc -l < "$repo/.kkachi/events.jsonl" | tr -d ' ')"
-if [ "$event_count_after_append" != "6" ]; then
-  echo "events.jsonl line count after append = $event_count_after_append, want 6" >&2
+if [ "$event_count_after_append" != "7" ]; then
+  echo "events.jsonl line count after append = $event_count_after_append, want 7" >&2
   cat "$repo/.kkachi/events.jsonl" >&2
   exit 1
 fi
 
 cat >> "$repo/.kkachi/events.jsonl" <<'EOF_CRASH'
-{"version":"0.1","event_id":"evt-000007","occurred_at":"2026-04-30T03:00:00Z","run_id":"run-abc","type":"run.created","actor":"helper","payload":{}}
+{"version":"0.1","event_id":"evt-000008","occurred_at":"2026-04-30T03:00:00Z","run_id":"run-abc","type":"run.created","actor":"helper","payload":{}}
 EOF_CRASH
 
 if (cd "$repo" && "$helper" event append artifact.written --run run-abc --payload '{}' --json > "$tmpdir/mismatch.json" 2> "$tmpdir/mismatch.err"); then
@@ -202,7 +222,7 @@ fi
 
 assert_contains "$tmpdir/mismatch.err" '"code":"last_event_id_mismatch"' "mismatch stderr"
 assert_contains "$tmpdir/mismatch.err" '"exit_code":3' "mismatch stderr"
-assert_contains "$repo/.kkachi/status.json" '"last_event_id": "evt-000006"' "status.json after refused mismatch append"
+assert_contains "$repo/.kkachi/status.json" '"last_event_id": "evt-000007"' "status.json after refused mismatch append"
 
 if (cd "$repo" && "$helper" project doctor --json > "$tmpdir/mismatch-doctor.json" 2> "$tmpdir/mismatch-doctor.err"); then
   echo "project doctor succeeded despite last_event_id mismatch" >&2
@@ -210,12 +230,12 @@ if (cd "$repo" && "$helper" project doctor --json > "$tmpdir/mismatch-doctor.jso
 fi
 assert_contains "$tmpdir/mismatch-doctor.json" '"health":"fail"' "mismatch doctor JSON"
 assert_contains "$tmpdir/mismatch-doctor.json" '"name":"coherence"' "mismatch doctor JSON"
-assert_contains "$tmpdir/mismatch-doctor.json" '"expected":"evt-000007"' "mismatch doctor JSON"
-assert_contains "$tmpdir/mismatch-doctor.json" '"actual":"evt-000006"' "mismatch doctor JSON"
+assert_contains "$tmpdir/mismatch-doctor.json" '"expected":"evt-000008"' "mismatch doctor JSON"
+assert_contains "$tmpdir/mismatch-doctor.json" '"actual":"evt-000007"' "mismatch doctor JSON"
 
 event_count_after_refused_append="$(wc -l < "$repo/.kkachi/events.jsonl" | tr -d ' ')"
-if [ "$event_count_after_refused_append" != "7" ]; then
-  echo "events.jsonl line count after refused append = $event_count_after_refused_append, want 7" >&2
+if [ "$event_count_after_refused_append" != "8" ]; then
+  echo "events.jsonl line count after refused append = $event_count_after_refused_append, want 8" >&2
   cat "$repo/.kkachi/events.jsonl" >&2
   exit 1
 fi

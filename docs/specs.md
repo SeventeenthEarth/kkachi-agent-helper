@@ -331,6 +331,45 @@ kkachi-agent-helper install skills --source <path-or-version>
 kkachi-agent-helper install templates --source <path-or-version>
 ```
 
+### `gate check`
+
+`gates-001` introduces a small declarative gate registry and the mutating readiness command `gate check <run_id> <gate>`. Run id lookup accepts full ids or unique prefixes through the same policy as `run show`.
+
+Stable JSON output has the following shape:
+
+```json
+{
+  "run_id": "run-...",
+  "gate": "intake",
+  "status": "pass|fail|blocked",
+  "checks": [
+    {
+      "name": "required_artifacts",
+      "status": "pass|fail|blocked",
+      "path": ".kkachi/runs/.../run-metadata.json",
+      "message": "...",
+      "hint": "...",
+      "field": "...",
+      "expected": "...",
+      "actual": "..."
+    }
+  ],
+  "missing_evidence": [],
+  "event_id": "evt-000004"
+}
+```
+
+Behavior in `gates-001`:
+
+- `intake` is implemented by reusing the deterministic intake checks from `artifact validate`.
+- `sot`, `roadmap`, `plan`, `backend`, `implementation`, `review`, `verification`, `docs`, and `final` are declared but return `blocked` until later gates tasks implement their artifact-specific rules.
+- Unknown gate names are usage errors.
+- `gate final <run_id>` remains reserved for `gates-004` and is not implemented by `gates-001`.
+- Passing checks append `gate.passed`; failing checks append `gate.failed`; blocked checks append `gate.checked`.
+- Every successful `gate check` updates both `run-metadata.json.gate_state[gate]` and `status.json.gate_summary[gate]` with the status, event id, and checked timestamp.
+- A passing gate exits `0`; failed or blocked gates exit `3`.
+- `gate check` is serialized by `.kkachi/project_write.lock` and refuses status/event incoherence before mutation.
+
 Command UX rules:
 
 - `--json` emits machine-readable output and no decorative text.

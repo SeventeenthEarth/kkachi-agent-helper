@@ -441,7 +441,7 @@ func TestKnownCommandGroupJSONError(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	exitCode := Run([]string{"gate", "check", "run-1", "final", "--json"}, &stdout, &stderr, testBuildInfo())
+	exitCode := Run([]string{"schema", "validate", "file", "--json"}, &stdout, &stderr, testBuildInfo())
 
 	if exitCode == 0 {
 		t.Fatal("exitCode = 0, want non-zero")
@@ -453,7 +453,7 @@ func TestKnownCommandGroupJSONError(t *testing.T) {
 	if env.Error.Code != "not_implemented" {
 		t.Fatalf("error code = %q, want not_implemented", env.Error.Code)
 	}
-	if !strings.Contains(env.Error.Message, "gate") {
+	if !strings.Contains(env.Error.Message, "schema") {
 		t.Fatalf("message = %q, want command group name", env.Error.Message)
 	}
 	if env.Error.ExitCode != ExitUsage {
@@ -1338,6 +1338,106 @@ func writeCLIIntakeClassification(t *testing.T, repo string, metadata project.Ru
 }
 
 func cliValidationCheckStatus(checks []project.ArtifactValidationCheck, name string, status string) bool {
+	for _, check := range checks {
+		if check.Name == name && check.Status == status {
+			return true
+		}
+	}
+	return false
+}
+
+func TestGateCheckCLIJSONHumanAndBlocked(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions(runCreateArgs("Gate check", "--task-id", "gates-001", "--json"), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("run create exit = %d stderr=%s", code, stderr.String())
+	}
+	var created runCreateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"artifact", "init", created.RunID, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("artifact init exit = %d stderr=%s", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"gate", "check", created.RunID, "intake", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitSafety {
+		t.Fatalf("gate check pending exit = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var failed gateCheckOutput
+	if err := json.Unmarshal(stdout.Bytes(), &failed); err != nil {
+		t.Fatalf("decode failed gate check: %v\n%s", err, stdout.String())
+	}
+	if failed.Status != project.GateStatusFail || failed.EventID != "evt-000004" || !cliGateCheckStatus(failed.Checks, "intake_status", project.GateStatusFail) || len(failed.MissingEvidence) == 0 {
+		t.Fatalf("failed gate = %#v, want intake failure with missing evidence", failed)
+	}
+	if text := readCLIText(t, filepath.Join(repo, ".kkachi", "events.jsonl")); !strings.Contains(text, `"type":"gate.failed"`) {
+		t.Fatalf("events missing gate.failed: %s", text)
+	}
+	if text := readCLIText(t, filepath.Join(repo, ".kkachi", "runs", created.RunID, "run-metadata.json")); !strings.Contains(text, `"gate_state"`) || !strings.Contains(text, `"event_id": "evt-000004"`) {
+		t.Fatalf("metadata missing recorded gate state: %s", text)
+	}
+	if text := readCLIText(t, filepath.Join(repo, ".kkachi", "status.json")); !strings.Contains(text, `"gate_summary"`) || !strings.Contains(text, `"intake"`) || !strings.Contains(text, `"event_id": "evt-000004"`) {
+		t.Fatalf("status missing gate summary: %s", text)
+	}
+
+	writeCLIIntakeClassification(t, repo, created.Metadata, "")
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"gate", "check", created.RunID[:24], "intake", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("gate check pass exit = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var passed gateCheckOutput
+	if err := json.Unmarshal(stdout.Bytes(), &passed); err != nil {
+		t.Fatalf("decode passed gate check: %v\n%s", err, stdout.String())
+	}
+	if passed.RunID != created.RunID || passed.Gate != project.GateIntake || passed.Status != project.GateStatusPass || passed.EventID != "evt-000005" {
+		t.Fatalf("passed gate = %#v, want pass evt-000005", passed)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"gate", "check", created.RunID, "plan", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitSafety {
+		t.Fatalf("gate check plan exit = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var blocked gateCheckOutput
+	if err := json.Unmarshal(stdout.Bytes(), &blocked); err != nil {
+		t.Fatalf("decode blocked gate check: %v\n%s", err, stdout.String())
+	}
+	if blocked.Status != project.GateStatusBlocked || blocked.EventID != "evt-000006" || !cliGateCheckStatus(blocked.Checks, "plan_implemented", project.GateStatusBlocked) {
+		t.Fatalf("blocked gate = %#v, want blocked plan", blocked)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"gate", "check", created.RunID, "intake"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("gate check human exit = %d stderr=%s", code, stderr.String())
+	}
+	if output := stdout.String(); !strings.Contains(output, "gate check for run: "+created.RunID) || !strings.Contains(output, "status: pass") || !strings.Contains(output, "event_id: evt-000007") {
+		t.Fatalf("human gate output = %q, want pass summary", output)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	assertCLIErrorCode(t, runWithOptions([]string{"gate", "check", created.RunID, "bogus", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitUsage, "gate_unknown")
+	stdout.Reset()
+	stderr.Reset()
+	assertCLIErrorCode(t, runWithOptions([]string{"gate", "check", created.RunID, "   ", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitUsage, "gate_unknown")
+	stdout.Reset()
+	stderr.Reset()
+	assertCLIErrorCode(t, runWithOptions([]string{"gate", "final", created.RunID, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitUsage, "not_implemented")
+}
+
+func cliGateCheckStatus(checks []project.GateCheck, name string, status string) bool {
 	for _, check := range checks {
 		if check.Name == name && check.Status == status {
 			return true

@@ -111,6 +111,15 @@ type artifactValidateOutput struct {
 	Checks []project.ArtifactValidationCheck `json:"checks"`
 }
 
+type gateCheckOutput struct {
+	RunID           string              `json:"run_id"`
+	Gate            string              `json:"gate"`
+	Status          string              `json:"status"`
+	Checks          []project.GateCheck `json:"checks"`
+	MissingEvidence []string            `json:"missing_evidence"`
+	EventID         string              `json:"event_id"`
+}
+
 type runListOutput struct {
 	Runs []project.RunSummary `json:"runs"`
 }
@@ -231,6 +240,9 @@ func runWithOptions(args []string, stdout io.Writer, stderr io.Writer, info Buil
 			}
 			if command == "lock" {
 				return runLockCommand(opts.args[1:], root, stdout, stderr, opts.json)
+			}
+			if command == "gate" {
+				return runGateCommand(opts.args[1:], root, stdout, stderr, opts.json)
 			}
 			writeError(stderr, opts.json, cliError{
 				Code:     "not_implemented",
@@ -467,6 +479,62 @@ func parseRunCreateOptions(args []string, stderr io.Writer, jsonMode bool) (proj
 		}
 	}
 	return options, true
+}
+
+func runGateCommand(args []string, root project.Root, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
+	if len(args) == 0 {
+		writeError(stderr, jsonMode, cliError{Code: "gate_subcommand_required", Message: "gate subcommand is required", Hint: gateUsageHint(), ExitCode: ExitUsage})
+		return ExitUsage
+	}
+	switch args[0] {
+	case "check":
+		runID, gate, cliErr := parseGateCheckArgs(args)
+		if cliErr != nil {
+			writeError(stderr, jsonMode, *cliErr)
+			return cliErr.ExitCode
+		}
+		result, err := project.CheckGate(root, project.GateCheckOptions{RunID: runID, Gate: gate})
+		if err != nil {
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writeGateCheckResult(stdout, result, jsonMode)
+		if result.Status == project.GateStatusPass {
+			return ExitOK
+		}
+		return ExitSafety
+	case "final":
+		writeError(stderr, jsonMode, cliError{Code: "not_implemented", Message: "gate final is not implemented yet", Hint: "Use gate check <run_id> <gate>; gate final is reserved for gates-004.", ExitCode: ExitUsage, Field: "subcommand", Expected: "check", Actual: "final"})
+		return ExitUsage
+	default:
+		writeError(stderr, jsonMode, cliError{Code: "not_implemented", Message: "gate command is not implemented yet", Hint: gateUsageHint(), ExitCode: ExitUsage})
+		return ExitUsage
+	}
+}
+
+func parseGateCheckArgs(args []string) (string, string, *cliError) {
+	if len(args) != 3 {
+		actual := fmt.Sprintf("%d arguments", len(args)-1)
+		if len(args) > 1 && strings.HasPrefix(args[len(args)-1], "--") {
+			return "", "", &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown gate check option %q", args[len(args)-1]), Hint: gateUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "run id and gate name only", Actual: args[len(args)-1]}
+		}
+		return "", "", &cliError{Code: "gate_check_arguments_required", Message: "gate check requires a run id and gate name", Hint: gateUsageHint(), ExitCode: ExitUsage, Field: "arguments", Expected: "gate check <run_id> <gate>", Actual: actual}
+	}
+	gate := args[2]
+	if !knownGate(gate) {
+		return "", "", &cliError{Code: "gate_unknown", Message: "gate is not defined", Hint: "Use one of: " + strings.Join(project.KnownGates(), ", ") + ".", ExitCode: ExitUsage, Field: "gate", Expected: strings.Join(project.KnownGates(), ","), Actual: gate}
+	}
+	return args[1], gate, nil
+}
+
+func knownGate(gate string) bool {
+	for _, known := range project.KnownGates() {
+		if gate == known {
+			return true
+		}
+	}
+	return false
 }
 
 func runArtifactCommand(args []string, root project.Root, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
@@ -726,6 +794,10 @@ func lockRecoverUsageHint() string {
 	return "Use lock recover <active-run|project-write|all> --reason <text> [--run <run_id>] with optional global --json."
 }
 
+func gateUsageHint() string {
+	return "Use gate check <run_id> <gate> with optional global --json. Known gates: " + strings.Join(project.KnownGates(), ", ") + "."
+}
+
 func eventAppendUsageHint() string {
 	return "Use event append <type> --run <run_id> --payload <json-object>."
 }
@@ -924,6 +996,36 @@ func writeArtifactListResult(w io.Writer, runID string, artifacts []project.Arti
 			}
 		}
 		fmt.Fprintf(w, "- %s %s state=%s bytes=%d\n", artifact.Path, required, state, artifact.Bytes)
+	}
+}
+
+func writeGateCheckResult(w io.Writer, result project.GateCheckResult, jsonMode bool) {
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(gateCheckOutput{RunID: result.RunID, Gate: result.Gate, Status: result.Status, Checks: result.Checks, MissingEvidence: result.MissingEvidence, EventID: result.EventID})
+		return
+	}
+	fmt.Fprintf(w, "gate check for run: %s\n", result.RunID)
+	fmt.Fprintf(w, "gate: %s\n", result.Gate)
+	fmt.Fprintf(w, "status: %s\n", result.Status)
+	fmt.Fprintf(w, "event_id: %s\n", result.EventID)
+	if len(result.MissingEvidence) > 0 {
+		fmt.Fprintln(w, "missing_evidence:")
+		for _, evidence := range result.MissingEvidence {
+			fmt.Fprintf(w, "- %s\n", evidence)
+		}
+	}
+	for _, check := range result.Checks {
+		fmt.Fprintf(w, "%s %s", check.Name, check.Status)
+		if check.Path != "" {
+			fmt.Fprintf(w, " path=%s", check.Path)
+		}
+		if check.Field != "" {
+			fmt.Fprintf(w, " field=%s", check.Field)
+		}
+		if check.Actual != "" {
+			fmt.Fprintf(w, " actual=%s", check.Actual)
+		}
+		fmt.Fprintf(w, " message=%s\n", check.Message)
 	}
 }
 
@@ -1149,7 +1251,7 @@ func exitCodeForProblem(code string) int {
 		return ExitNotFound
 	case "artifact_baseline_encode_failed":
 		return ExitInternal
-	case "absolute_path", "empty_path", "path_escape", "repo_root_path", "symlink_escape", "symlink_resolution_failed", "path_inspection_failed", "repo_root_required", "helper_state_exists", "last_event_id_mismatch", "status_invalid_json", "status_last_event_id_invalid", "status_active_run_invalid", "event_log_invalid", "event_log_empty", "event_id_invalid", "event_id_exhausted", "run_metadata_invalid", "run_metadata_invalid_json", "active_run_conflict", "run_transition_invalid", "run_not_found", "run_id_ambiguous", "run_root_read_failed", "run_metadata_read_failed", "run_id_collision", "run_artifact_init_invalid_state", "artifact_inspection_failed", "artifact_path_invalid", "lock_conflict", "lock_stale_recovery_required", "lock_metadata_invalid", "lock_not_found", "lock_identity_mismatch", "lock_release_failed":
+	case "absolute_path", "empty_path", "path_escape", "repo_root_path", "symlink_escape", "symlink_resolution_failed", "path_inspection_failed", "repo_root_required", "helper_state_exists", "last_event_id_mismatch", "status_invalid_json", "status_last_event_id_invalid", "status_active_run_invalid", "event_log_invalid", "event_log_empty", "event_id_invalid", "event_id_exhausted", "run_metadata_invalid", "run_metadata_invalid_json", "active_run_conflict", "run_transition_invalid", "run_not_found", "run_id_ambiguous", "run_root_read_failed", "run_metadata_read_failed", "run_id_collision", "run_artifact_init_invalid_state", "artifact_inspection_failed", "artifact_path_invalid", "status_gate_summary_invalid", "lock_conflict", "lock_stale_recovery_required", "lock_metadata_invalid", "lock_not_found", "lock_identity_mismatch", "lock_release_failed":
 		return ExitSafety
 	default:
 		return ExitUsage
