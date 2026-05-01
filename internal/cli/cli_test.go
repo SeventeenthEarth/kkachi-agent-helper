@@ -1154,3 +1154,95 @@ func readCLIText(t *testing.T, path string) string {
 	}
 	return string(data)
 }
+
+func TestArtifactInitListCLI(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	createArgs := runCreateArgs("Artifact run", "--task-id", "runwf-003", "--json")
+	if code := runWithOptions(createArgs, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("run create exit = %d stderr=%s", code, stderr.String())
+	}
+	var created runCreateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"artifact", "init", created.RunID, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("artifact init exit = %d stderr=%s", code, stderr.String())
+	}
+	var initialized artifactInitOutput
+	if err := json.Unmarshal(stdout.Bytes(), &initialized); err != nil {
+		t.Fatalf("artifact init stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if initialized.RunID != created.RunID || initialized.EventID != "evt-000003" || len(initialized.Created) == 0 || len(initialized.RequiredArtifacts) == 0 {
+		t.Fatalf("initialized = %#v, want artifact init payload", initialized)
+	}
+	if text := readCLIText(t, filepath.Join(repo, ".kkachi", "events.jsonl")); !strings.Contains(text, `"type":"artifact.written"`) {
+		t.Fatalf("events = %s, want artifact.written", text)
+	}
+	if text := readCLIText(t, filepath.Join(repo, ".kkachi", "runs", created.RunID, "run-metadata.json")); !strings.Contains(text, `"required_artifacts": [`) || !strings.Contains(text, `"diff.patch"`) {
+		t.Fatalf("metadata = %s, want required artifacts", text)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"artifact", "list", created.RunID[:24], "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("artifact list exit = %d stderr=%s", code, stderr.String())
+	}
+	var listed artifactListOutput
+	if err := json.Unmarshal(stdout.Bytes(), &listed); err != nil {
+		t.Fatalf("artifact list stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if listed.RunID != created.RunID || len(listed.Artifacts) == 0 || !listed.Artifacts[0].Exists {
+		t.Fatalf("listed = %#v, want initialized artifacts", listed)
+	}
+}
+
+func TestArtifactCLIValidationAndHumanOutput(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions(runCreateArgs("Artifact human"), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("run create exit = %d stderr=%s", code, stderr.String())
+	}
+	runID := onlyRunID(t, repo)
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"artifact", "init", runID}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("artifact init exit = %d stderr=%s", code, stderr.String())
+	}
+	if output := stdout.String(); !strings.Contains(output, "initialized artifacts for run: "+runID) || !strings.Contains(output, "event_id: evt-000003") || !strings.Contains(output, "required_artifacts:") {
+		t.Fatalf("artifact init output = %q, want human summary", output)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"artifact", "list", runID}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("artifact list exit = %d stderr=%s", code, stderr.String())
+	}
+	if output := stdout.String(); !strings.Contains(output, "artifacts for run: "+runID) || !strings.Contains(output, "intake-classification.md required state=present") {
+		t.Fatalf("artifact list output = %q, want human list", output)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	assertCLIErrorCode(t, runWithOptions([]string{"artifact", "list", runID, "--bogus", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitUsage, "unknown_option")
+
+	stdout.Reset()
+	stderr.Reset()
+	assertCLIErrorCode(t, runWithOptions([]string{"artifact", "init", "missing", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitSafety, "run_not_found")
+}

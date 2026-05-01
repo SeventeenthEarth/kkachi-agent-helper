@@ -218,6 +218,34 @@ Run lifecycle commands in `runwf-001` use these state transitions. In `runwf-002
 
 `runwf-001` does not define artifact manifests or baseline artifact files; those remain scoped to `runwf-003`. `runwf-002` adds transient lock-file enforcement around mutating project and run lifecycle operations.
 
+`runwf-003` initializes the canonical run artifact home after run creation:
+
+- `artifact init <run_id>` resolves full run ids or unique prefixes through the same run lookup policy as `run show`.
+- `artifact init` is a mutating helper-state command and is serialized by `.kkachi/project_write.lock`.
+- Before writing artifacts, `artifact init` verifies status/event-log coherence and refuses to mutate when `status.last_event_id` does not match the event tail.
+- `artifact init` only accepts runs in `created` or `active` state. Closed and aborted runs are preserved read-only.
+- The command derives `required_artifacts` from `work_path`, `work_mode`, `execution_mode`, and `redteam`, ordered by the canonical artifact list in [Canonical project layout](#5-canonical-project-layout).
+- The command creates baseline non-empty files for every canonical run artifact listed in the layout, including nested `redteam/` and `discovery/` artifacts.
+- Existing non-empty artifact files are preserved exactly. Existing empty artifact files are reinitialized with baseline content.
+- On success, the command updates `run-metadata.json.required_artifacts`, appends one `artifact.written` event, and advances `status.last_event_id`.
+- If an artifact write succeeds but the later metadata/status update fails, the project is intentionally left fail-closed through the existing status/event coherence checks rather than silently rewriting history.
+- `artifact list <run_id> [--json]` is read-only. It does not append events, create files, repair files, create locks, remove locks, or rewrite metadata. It reports every canonical artifact path with required/present/empty/byte status.
+
+Initial required-artifact derivation:
+
+| Run metadata condition | Required artifacts added |
+|---|---|
+| All runs | `intake-classification.md`, `acceptance-criteria.md`, `test-log.md`, `verification.md`, `docs-update.md`, `final-report.md` |
+| `work_path=A_development_execution` | `sot-basis.md`, `roadmap-update.md`, `plan.md`, `checklist.md` |
+| `work_path=B_discovery_shaping` | `discovery/existing-docs-review.md`, `discovery/problem-framing.md`, `discovery/research-notes.md`, `discovery/strategy-options.md`, `discovery/selected-strategy.md`, `discovery/task-breakdown.md`, `discovery/implementation-readiness.md`, `discovery/handoff-to-development.md`, `sot-update.md`, `roadmap-update.md` |
+| `work_mode=standard` | `task-brief.md`, `prompt.md`, `context-pack.md` |
+| `execution_mode=production_write` or `readiness_hardening` | `diff.patch`, `impl-log.md`, `review.md`, `redteam/impl-review.md`, `redteam/test-review.md`, `redteam/final-gate-review.md` |
+| `execution_mode=adapter_qa` | `selected-cli.json`, `capability-check.md`, `bridge-session-snapshot.json`, `bridge-events.md`, `cli-output.md`, `redteam/qa-review.md` |
+| `execution_mode=research` | `discovery/research-notes.md`, `discovery/strategy-options.md`, `discovery/selected-strategy.md` |
+| `execution_mode=verification` | `review.md` |
+| `execution_mode=docs_only` | `sot-update.md`, `roadmap-update.md` |
+| `redteam` assigned | `redteam/plan-review.md`, `redteam/shaping-review.md`, `redteam/final-gate-review.md` |
+
 ## 8. Work paths and gates
 
 ### Path A: development execution

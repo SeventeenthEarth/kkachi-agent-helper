@@ -258,6 +258,135 @@ func TestRunwf002LockWorkflow(t *testing.T) {
 	runHelper(t, binary, repo, runwf002CreateRunArgs("After recovery")...)
 }
 
+func TestRunwf003ArtifactWorkflow(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	binary := buildHelperBinary(t)
+
+	runHelper(t, binary, repo, "project", "init", "--json")
+	createdOutput := runHelper(t, binary, repo, runwf003CreateRunArgs("Artifact workflow")...)
+	var created struct {
+		RunID string `json:"run_id"`
+	}
+	if err := json.Unmarshal(createdOutput, &created); err != nil {
+		t.Fatalf("run create output is not JSON: %v\n%s", err, string(createdOutput))
+	}
+	runDir := filepath.Join(repo, ".kkachi", "runs", created.RunID)
+	if err := os.WriteFile(filepath.Join(runDir, "plan.md"), []byte("custom integration plan\n"), 0o600); err != nil {
+		t.Fatalf("write custom plan: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "checklist.md"), nil, 0o600); err != nil {
+		t.Fatalf("write empty checklist: %v", err)
+	}
+
+	initOutput := runHelper(t, binary, repo, "artifact", "init", created.RunID, "--json")
+	var initialized struct {
+		RunID             string             `json:"run_id"`
+		EventID           string             `json:"event_id"`
+		Created           []artifactPathOnly `json:"created"`
+		Reinitialized     []artifactPathOnly `json:"reinitialized"`
+		Preserved         []artifactPathOnly `json:"preserved"`
+		RequiredArtifacts []string           `json:"required_artifacts"`
+	}
+	if err := json.Unmarshal(initOutput, &initialized); err != nil {
+		t.Fatalf("artifact init output is not JSON: %v\n%s", err, string(initOutput))
+	}
+	if initialized.RunID != created.RunID || initialized.EventID != "evt-000003" || len(initialized.Created) == 0 || len(initialized.RequiredArtifacts) == 0 {
+		t.Fatalf("initialized = %#v, want created artifacts and required manifest", initialized)
+	}
+	if !artifactPathListed(initialized.Preserved, "plan.md") || !artifactPathListed(initialized.Reinitialized, "checklist.md") {
+		t.Fatalf("preserved=%#v reinitialized=%#v, want plan preserved and checklist reinitialized", initialized.Preserved, initialized.Reinitialized)
+	}
+	assertOutputContains(t, readFile(t, filepath.Join(runDir, "plan.md")), "custom integration plan", "preserved plan")
+	assertOutputContains(t, readFile(t, filepath.Join(runDir, "checklist.md")), "Status: pending", "reinitialized checklist")
+	for _, relative := range []string{"intake-classification.md", "sot-basis.md", "acceptance-criteria.md", "diff.patch", "impl-log.md", "test-log.md", "verification.md", "docs-update.md", "final-report.md", "redteam/final-gate-review.md"} {
+		info, err := os.Stat(filepath.Join(runDir, filepath.FromSlash(relative)))
+		if err != nil {
+			t.Fatalf("artifact %s was not created: %v", relative, err)
+		}
+		if info.Size() == 0 {
+			t.Fatalf("artifact %s is empty, want baseline content", relative)
+		}
+	}
+
+	metadata := readFile(t, filepath.Join(runDir, "run-metadata.json"))
+	assertOutputContains(t, metadata, `"required_artifacts": [`, "metadata after artifact init")
+	assertOutputContains(t, metadata, `"diff.patch"`, "metadata production manifest")
+	assertOutputContains(t, metadata, `"task-brief.md"`, "metadata standard mode manifest")
+	assertOutputContains(t, metadata, `"redteam/final-gate-review.md"`, "metadata redteam manifest")
+	assertOutputContains(t, readFile(t, filepath.Join(repo, ".kkachi", "events.jsonl")), `"type":"artifact.written"`, "events after artifact init")
+
+	listOutput := runHelper(t, binary, repo, "artifact", "list", created.RunID[:24], "--json")
+	var listed struct {
+		RunID     string                 `json:"run_id"`
+		Artifacts []artifactListedStatus `json:"artifacts"`
+	}
+	if err := json.Unmarshal(listOutput, &listed); err != nil {
+		t.Fatalf("artifact list output is not JSON: %v\n%s", err, string(listOutput))
+	}
+	if listed.RunID != created.RunID || !artifactStatusListed(listed.Artifacts, "intake-classification.md", true, true) || !artifactStatusListed(listed.Artifacts, "plan.md", true, true) {
+		t.Fatalf("listed = %#v, want initialized required artifacts", listed)
+	}
+}
+
+func TestRunwf003ArtifactInitSafety(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	binary := buildHelperBinary(t)
+
+	runHelper(t, binary, repo, "project", "init", "--json")
+	createdOutput := runHelper(t, binary, repo, runwf003CreateRunArgs("Artifact safety")...)
+	var created struct {
+		RunID string `json:"run_id"`
+	}
+	if err := json.Unmarshal(createdOutput, &created); err != nil {
+		t.Fatalf("run create output is not JSON: %v\n%s", err, string(createdOutput))
+	}
+
+	writeLockMetadata(t, repo, "project_write", lockMetadata{
+		Version:   "0.1",
+		LockName:  "project_write",
+		RunID:     created.RunID,
+		OwnerPID:  os.Getpid(),
+		Hostname:  mustHostname(t),
+		Command:   "integration artifact init",
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	})
+	output, err := runHelperAllowError(binary, repo, "artifact", "init", created.RunID, "--json")
+	if err == nil {
+		t.Fatalf("artifact init succeeded under fresh project_write lock\n%s", string(output))
+	}
+	assertOutputContains(t, output, `"code":"lock_conflict"`, "fresh project lock conflict")
+	if _, err := os.Stat(filepath.Join(repo, ".kkachi", "runs", created.RunID, "intake-classification.md")); !os.IsNotExist(err) {
+		t.Fatalf("artifact stat under lock = %v, want absent", err)
+	}
+	removeLock(t, repo, "project_write")
+
+	eventsPath := filepath.Join(repo, ".kkachi", "events.jsonl")
+	file, err := os.OpenFile(eventsPath, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatalf("open event log: %v", err)
+	}
+	if _, err := file.WriteString(`{"version":"0.1","event_id":"evt-000003","occurred_at":"2026-04-30T03:00:00Z","run_id":"` + created.RunID + `","type":"run.created","actor":"helper","payload":{}}` + "\n"); err != nil {
+		t.Fatalf("append crash event: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close event log: %v", err)
+	}
+	output, err = runHelperAllowError(binary, repo, "artifact", "init", created.RunID, "--json")
+	if err == nil {
+		t.Fatalf("artifact init succeeded under status/event mismatch\n%s", string(output))
+	}
+	assertOutputContains(t, output, `"code":"last_event_id_mismatch"`, "artifact init mismatch")
+	if _, err := os.Stat(filepath.Join(repo, ".kkachi", "runs", created.RunID, "intake-classification.md")); !os.IsNotExist(err) {
+		t.Fatalf("artifact stat under mismatch = %v, want absent", err)
+	}
+}
+
 func buildHelperBinary(t *testing.T) string {
 	t.Helper()
 
@@ -278,6 +407,18 @@ type lockMetadata struct {
 	Hostname  string `json:"hostname"`
 	Command   string `json:"command"`
 	CreatedAt string `json:"created_at"`
+}
+
+type artifactPathOnly struct {
+	Path string `json:"path"`
+}
+
+type artifactListedStatus struct {
+	Path     string `json:"path"`
+	Required bool   `json:"required"`
+	Exists   bool   `json:"exists"`
+	Empty    bool   `json:"empty"`
+	Bytes    int64  `json:"bytes"`
 }
 
 func runHelper(t *testing.T, binary string, repo string, args ...string) []byte {
@@ -308,6 +449,40 @@ func runwf002CreateRunArgs(title string) []string {
 		"--task-id", "runwf-002",
 		"--json",
 	}
+}
+
+func runwf003CreateRunArgs(title string) []string {
+	return []string{
+		"run", "create",
+		"--title", title,
+		"--work-path", "A_development_execution",
+		"--work-mode", "standard",
+		"--urgency", "normal",
+		"--sot-policy", "existing_sot_basis",
+		"--execution-mode", "production_write",
+		"--commander", "Gongmyeong",
+		"--redteam", "Reviewer",
+		"--task-id", "runwf-003",
+		"--json",
+	}
+}
+
+func artifactPathListed(artifacts []artifactPathOnly, path string) bool {
+	for _, artifact := range artifacts {
+		if artifact.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
+func artifactStatusListed(artifacts []artifactListedStatus, path string, required bool, exists bool) bool {
+	for _, artifact := range artifacts {
+		if artifact.Path == path {
+			return artifact.Required == required && artifact.Exists == exists && !artifact.Empty && artifact.Bytes > 0
+		}
+	}
+	return false
 }
 
 func writeLockMetadata(t *testing.T, repo string, name string, metadata lockMetadata) {

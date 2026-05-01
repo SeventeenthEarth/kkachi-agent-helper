@@ -88,6 +88,22 @@ type lockRecoverOutput struct {
 	Recovered []project.LockMetadata `json:"recovered"`
 }
 
+type artifactInitOutput struct {
+	RunID             string                   `json:"run_id"`
+	RunPath           string                   `json:"run_path"`
+	EventID           string                   `json:"event_id"`
+	Created           []project.ArtifactStatus `json:"created"`
+	Reinitialized     []project.ArtifactStatus `json:"reinitialized"`
+	Preserved         []project.ArtifactStatus `json:"preserved"`
+	RequiredArtifacts []string                 `json:"required_artifacts"`
+	Artifacts         []project.ArtifactStatus `json:"artifacts"`
+}
+
+type artifactListOutput struct {
+	RunID     string                   `json:"run_id"`
+	Artifacts []project.ArtifactStatus `json:"artifacts"`
+}
+
 type runListOutput struct {
 	Runs []project.RunSummary `json:"runs"`
 }
@@ -202,6 +218,9 @@ func runWithOptions(args []string, stdout io.Writer, stderr io.Writer, info Buil
 			}
 			if command == "event" {
 				return runEventCommand(opts.args[1:], root, stdout, stderr, opts.json)
+			}
+			if command == "artifact" {
+				return runArtifactCommand(opts.args[1:], root, stdout, stderr, opts.json)
 			}
 			if command == "lock" {
 				return runLockCommand(opts.args[1:], root, stdout, stderr, opts.json)
@@ -443,6 +462,55 @@ func parseRunCreateOptions(args []string, stderr io.Writer, jsonMode bool) (proj
 	return options, true
 }
 
+func runArtifactCommand(args []string, root project.Root, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
+	if len(args) == 0 {
+		writeError(stderr, jsonMode, cliError{Code: "artifact_subcommand_required", Message: "artifact subcommand is required", Hint: artifactUsageHint(), ExitCode: ExitUsage})
+		return ExitUsage
+	}
+	switch args[0] {
+	case "init":
+		if err := requireOneArtifactRunID(args); err != nil {
+			writeError(stderr, jsonMode, *err)
+			return ExitUsage
+		}
+		result, err := project.InitArtifacts(root, project.ArtifactInitOptions{RunID: args[1]})
+		if err != nil {
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writeArtifactInitResult(stdout, result, jsonMode)
+		return ExitOK
+	case "list":
+		if err := requireOneArtifactRunID(args); err != nil {
+			writeError(stderr, jsonMode, *err)
+			return ExitUsage
+		}
+		result, err := project.ListArtifacts(root, args[1])
+		if err != nil {
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writeArtifactListResult(stdout, result.RunID, result.Artifacts, jsonMode)
+		return ExitOK
+	default:
+		writeError(stderr, jsonMode, cliError{Code: "not_implemented", Message: "artifact command is not implemented yet", Hint: artifactUsageHint(), ExitCode: ExitUsage})
+		return ExitUsage
+	}
+}
+
+func requireOneArtifactRunID(args []string) *cliError {
+	command := args[0]
+	if len(args) == 2 {
+		return nil
+	}
+	if len(args) > 2 && strings.HasPrefix(args[2], "--") {
+		return &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown artifact %s option %q", command, args[2]), Hint: fmt.Sprintf("Use artifact %s <run_id> with optional global --json only.", command), ExitCode: ExitUsage, Field: "option", Expected: "no artifact command options", Actual: args[2]}
+	}
+	return &cliError{Code: "run_id_required", Message: fmt.Sprintf("artifact %s requires exactly one run id", command), Hint: fmt.Sprintf("Use artifact %s <run_id>.", command), ExitCode: ExitUsage, Field: "run_id", Expected: "one run id or unique prefix", Actual: fmt.Sprintf("%d arguments", len(args)-1)}
+}
+
 func runEventCommand(args []string, root project.Root, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
 	if len(args) < 2 || args[0] != "append" {
 		writeError(stderr, jsonMode, cliError{
@@ -614,6 +682,10 @@ func eventAppendUsageHint() string {
 	return "Use event append <type> --run <run_id> --payload <json-object>."
 }
 
+func artifactUsageHint() string {
+	return "Use artifact init <run_id> or artifact list <run_id> with optional global --json."
+}
+
 func runUsageHint() string {
 	return "Use run create|activate|close|abort|list|show."
 }
@@ -767,6 +839,43 @@ func writeLockRecoverResult(w io.Writer, result project.LockRecoveryResult, json
 	fmt.Fprintf(w, "recovered locks: %d\n", len(payload.Recovered))
 	for _, lock := range payload.Recovered {
 		fmt.Fprintf(w, "- %s pid=%d host=%s command=%s created_at=%s\n", lock.LockName, lock.OwnerPID, lock.Hostname, lock.Command, lock.CreatedAt)
+	}
+}
+
+func writeArtifactInitResult(w io.Writer, result project.ArtifactInitResult, jsonMode bool) {
+	payload := artifactInitOutput{RunID: result.RunID, RunPath: result.RunPath, EventID: result.EventID, Created: result.Created, Reinitialized: result.Reinitialized, Preserved: result.Preserved, RequiredArtifacts: result.RequiredArtifacts, Artifacts: result.Artifacts}
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(payload)
+		return
+	}
+	fmt.Fprintf(w, "initialized artifacts for run: %s\n", payload.RunID)
+	fmt.Fprintf(w, "run_path: %s\n", payload.RunPath)
+	fmt.Fprintf(w, "event_id: %s\n", payload.EventID)
+	fmt.Fprintf(w, "created: %d\n", len(payload.Created))
+	fmt.Fprintf(w, "reinitialized: %d\n", len(payload.Reinitialized))
+	fmt.Fprintf(w, "preserved: %d\n", len(payload.Preserved))
+	fmt.Fprintf(w, "required_artifacts: %d\n", len(payload.RequiredArtifacts))
+}
+
+func writeArtifactListResult(w io.Writer, runID string, artifacts []project.ArtifactStatus, jsonMode bool) {
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(artifactListOutput{RunID: runID, Artifacts: artifacts})
+		return
+	}
+	fmt.Fprintf(w, "artifacts for run: %s\n", runID)
+	for _, artifact := range artifacts {
+		required := "optional"
+		if artifact.Required {
+			required = "required"
+		}
+		state := "missing"
+		if artifact.Exists {
+			state = "present"
+			if artifact.Empty {
+				state = "empty"
+			}
+		}
+		fmt.Fprintf(w, "- %s %s state=%s bytes=%d\n", artifact.Path, required, state, artifact.Bytes)
 	}
 }
 
@@ -969,7 +1078,9 @@ func exitCodeForProblem(code string) int {
 	switch code {
 	case "repo_root_not_found":
 		return ExitNotFound
-	case "absolute_path", "empty_path", "path_escape", "repo_root_path", "symlink_escape", "symlink_resolution_failed", "path_inspection_failed", "repo_root_required", "helper_state_exists", "last_event_id_mismatch", "status_invalid_json", "status_last_event_id_invalid", "status_active_run_invalid", "event_log_invalid", "event_log_empty", "event_id_invalid", "event_id_exhausted", "run_metadata_invalid", "run_metadata_invalid_json", "active_run_conflict", "run_transition_invalid", "run_not_found", "run_id_ambiguous", "run_root_read_failed", "run_metadata_read_failed", "run_id_collision", "lock_conflict", "lock_stale_recovery_required", "lock_metadata_invalid", "lock_not_found", "lock_identity_mismatch", "lock_release_failed":
+	case "artifact_baseline_encode_failed":
+		return ExitInternal
+	case "absolute_path", "empty_path", "path_escape", "repo_root_path", "symlink_escape", "symlink_resolution_failed", "path_inspection_failed", "repo_root_required", "helper_state_exists", "last_event_id_mismatch", "status_invalid_json", "status_last_event_id_invalid", "status_active_run_invalid", "event_log_invalid", "event_log_empty", "event_id_invalid", "event_id_exhausted", "run_metadata_invalid", "run_metadata_invalid_json", "active_run_conflict", "run_transition_invalid", "run_not_found", "run_id_ambiguous", "run_root_read_failed", "run_metadata_read_failed", "run_id_collision", "run_artifact_init_invalid_state", "artifact_inspection_failed", "artifact_path_invalid", "lock_conflict", "lock_stale_recovery_required", "lock_metadata_invalid", "lock_not_found", "lock_identity_mismatch", "lock_release_failed":
 		return ExitSafety
 	default:
 		return ExitUsage
