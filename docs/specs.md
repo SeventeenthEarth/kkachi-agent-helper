@@ -231,6 +231,15 @@ Run lifecycle commands in `runwf-001` use these state transitions. In `runwf-002
 - If an artifact write succeeds but the later metadata/status update fails, the project is intentionally left fail-closed through the existing status/event coherence checks rather than silently rewriting history.
 - `artifact list <run_id> [--json]` is read-only. It does not append events, create files, repair files, create locks, remove locks, or rewrite metadata. It reports every canonical artifact path with required/present/empty/byte status.
 
+`runwf-004` adds read-only intake validation before later gate commands exist:
+
+- `artifact validate <run_id> [--gate intake]` resolves full run ids or unique prefixes through the same run lookup policy as `run show`. Omitting `--gate` validates `intake`. Unknown gates fail as usage errors until the `gates` epic implements the wider gate surface.
+- Validation does not append events, create files, repair files, create locks, remove locks, or rewrite metadata. Passing validation exits `0`; failed validation exits `3` and returns a report with `run_id`, `gate`, `status`, and `checks`.
+- Intake validation requires `run-metadata.json.required_artifacts` to match the current manifest, `intake-classification.md` to be a non-empty regular file, `Status: complete`, and exact metadata fields for `Work Path`, `Work Mode`, `SOT Policy`, and `Urgency`.
+- Path A (`A_development_execution`) requires `sot_policy=existing_sot_basis`. Path B (`B_discovery_shaping`) requires `sot_policy=minimal_sot_before_code` or `full_sot_before_code`.
+- Light mode must retain the safety artifact requirements and record `Light Mode Reason: <reason>` in `intake-classification.md`.
+- Explicit not-applicable markdown records use `Status: not_applicable` plus `Reason: <non-empty reason>`. Intake classification itself cannot be marked not applicable.
+
 Initial required-artifact derivation:
 
 | Run metadata condition | Required artifacts added |
@@ -312,7 +321,7 @@ kkachi-agent-helper run close <run_id-or-prefix>
 kkachi-agent-helper run abort <run_id-or-prefix>
 kkachi-agent-helper artifact init <run_id>
 kkachi-agent-helper artifact list <run_id> [--json]
-kkachi-agent-helper artifact validate <run_id> [--gate <gate>]
+kkachi-agent-helper artifact validate <run_id> [--gate intake]
 kkachi-agent-helper gate check <run_id> <gate>
 kkachi-agent-helper gate final <run_id>
 kkachi-agent-helper event append <type> --run <run_id> --payload <json>

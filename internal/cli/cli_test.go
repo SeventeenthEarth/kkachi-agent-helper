@@ -1246,3 +1246,102 @@ func TestArtifactCLIValidationAndHumanOutput(t *testing.T) {
 	stderr.Reset()
 	assertCLIErrorCode(t, runWithOptions([]string{"artifact", "init", "missing", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitSafety, "run_not_found")
 }
+
+func TestArtifactValidateCLIJSONHumanAndFailures(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions(runCreateArgs("Artifact validate", "--task-id", "runwf-004", "--json"), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("run create exit = %d stderr=%s", code, stderr.String())
+	}
+	var created runCreateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"artifact", "init", created.RunID, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("artifact init exit = %d stderr=%s", code, stderr.String())
+	}
+	beforeEvents := readCLIText(t, filepath.Join(repo, ".kkachi", "events.jsonl"))
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"artifact", "validate", created.RunID, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitSafety {
+		t.Fatalf("artifact validate pending exit = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var failed artifactValidateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &failed); err != nil {
+		t.Fatalf("decode failed validate: %v\n%s", err, stdout.String())
+	}
+	if failed.Status != project.ValidationStatusFail || !cliValidationCheckStatus(failed.Checks, "intake_status", project.ValidationStatusFail) {
+		t.Fatalf("failed validate = %#v, want intake_status failure", failed)
+	}
+	if afterEvents := readCLIText(t, filepath.Join(repo, ".kkachi", "events.jsonl")); afterEvents != beforeEvents {
+		t.Fatalf("artifact validate mutated events\nbefore=%s\nafter=%s", beforeEvents, afterEvents)
+	}
+
+	writeCLIIntakeClassification(t, repo, created.Metadata, "")
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"artifact", "validate", created.RunID[:24], "--gate", "intake", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("artifact validate pass exit = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var passed artifactValidateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &passed); err != nil {
+		t.Fatalf("decode passed validate: %v\n%s", err, stdout.String())
+	}
+	if passed.RunID != created.RunID || passed.Gate != project.ArtifactGateIntake || passed.Status != project.ValidationStatusPass {
+		t.Fatalf("passed validate = %#v, want pass", passed)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"artifact", "validate", created.RunID}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("artifact validate human exit = %d stderr=%s", code, stderr.String())
+	}
+	if output := stdout.String(); !strings.Contains(output, "artifact validation for run: "+created.RunID) || !strings.Contains(output, "status: pass") || !strings.Contains(output, "required_artifacts pass") {
+		t.Fatalf("human validate output = %q, want pass summary", output)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	assertCLIErrorCode(t, runWithOptions([]string{"artifact", "validate", created.RunID, "--gate", "final", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitUsage, "unsupported_gate")
+
+	stdout.Reset()
+	stderr.Reset()
+	assertCLIErrorCode(t, runWithOptions([]string{"artifact", "validate", created.RunID, "--bogus", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitUsage, "unknown_option")
+}
+
+func writeCLIIntakeClassification(t *testing.T, repo string, metadata project.RunMetadata, extra string) {
+	t.Helper()
+	content := strings.Join([]string{
+		"# intake-classification.md",
+		"",
+		"Status: complete",
+		"Work Path: " + metadata.WorkPath,
+		"Work Mode: " + metadata.WorkMode,
+		"SOT Policy: " + metadata.SOTPolicy,
+		"Urgency: " + metadata.Urgency,
+		strings.TrimRight(extra, "\n"),
+		"",
+	}, "\n")
+	path := filepath.Join(repo, ".kkachi", "runs", metadata.RunID, "intake-classification.md")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write intake classification: %v", err)
+	}
+}
+
+func cliValidationCheckStatus(checks []project.ArtifactValidationCheck, name string, status string) bool {
+	for _, check := range checks {
+		if check.Name == name && check.Status == status {
+			return true
+		}
+	}
+	return false
+}

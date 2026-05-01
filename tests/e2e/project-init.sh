@@ -127,6 +127,35 @@ done
 assert_contains "$tmpdir/artifact-list.json" '"run_id":"'"$run_id"'"' "artifact list JSON"
 assert_contains "$tmpdir/artifact-list.json" '"path":"intake-classification.md","required":true,"exists":true' "artifact list JSON"
 
+if (cd "$repo" && "$helper" artifact validate "$run_id" --json > "$tmpdir/artifact-validate-pending.json" 2> "$tmpdir/artifact-validate-pending.err"); then
+  echo "artifact validate succeeded with baseline pending intake" >&2
+  exit 1
+fi
+assert_contains "$tmpdir/artifact-validate-pending.json" '"status":"fail"' "pending artifact validate JSON"
+assert_contains "$tmpdir/artifact-validate-pending.json" '"name":"intake_status"' "pending artifact validate JSON"
+
+cat > "$repo/.kkachi/runs/$run_id/intake-classification.md" <<EOF_INTAKE
+# intake-classification.md
+
+Status: complete
+Work Path: A_development_execution
+Work Mode: standard
+SOT Policy: existing_sot_basis
+Urgency: normal
+EOF_INTAKE
+
+(cd "$repo" && "$helper" artifact validate "$run_prefix" --gate intake --json > "$tmpdir/artifact-validate.json" 2> "$tmpdir/artifact-validate.err")
+assert_contains "$tmpdir/artifact-validate.json" '"run_id":"'"$run_id"'"' "artifact validate JSON"
+assert_contains "$tmpdir/artifact-validate.json" '"gate":"intake"' "artifact validate JSON"
+assert_contains "$tmpdir/artifact-validate.json" '"status":"pass"' "artifact validate JSON"
+assert_contains "$tmpdir/artifact-validate.json" '"name":"required_artifacts","status":"pass"' "artifact validate JSON"
+event_count_after_validate="$(wc -l < "$repo/.kkachi/events.jsonl" | tr -d ' ')"
+if [ "$event_count_after_validate" != "3" ]; then
+  echo "events.jsonl line count after artifact validate = $event_count_after_validate, want 3" >&2
+  cat "$repo/.kkachi/events.jsonl" >&2
+  exit 1
+fi
+
 (cd "$repo" && "$helper" run activate "$run_id" --json > "$tmpdir/run-activate.json" 2> "$tmpdir/run-activate.err")
 assert_contains "$tmpdir/run-activate.json" '"state":"active"' "run activate JSON"
 assert_contains "$tmpdir/run-activate.json" '"event_id":"evt-000004"' "run activate JSON"

@@ -104,6 +104,13 @@ type artifactListOutput struct {
 	Artifacts []project.ArtifactStatus `json:"artifacts"`
 }
 
+type artifactValidateOutput struct {
+	RunID  string                            `json:"run_id"`
+	Gate   string                            `json:"gate"`
+	Status string                            `json:"status"`
+	Checks []project.ArtifactValidationCheck `json:"checks"`
+}
+
 type runListOutput struct {
 	Runs []project.RunSummary `json:"runs"`
 }
@@ -494,6 +501,23 @@ func runArtifactCommand(args []string, root project.Root, stdout io.Writer, stde
 		}
 		writeArtifactListResult(stdout, result.RunID, result.Artifacts, jsonMode)
 		return ExitOK
+	case "validate":
+		runID, gate, cliErr := parseArtifactValidateArgs(args)
+		if cliErr != nil {
+			writeError(stderr, jsonMode, *cliErr)
+			return cliErr.ExitCode
+		}
+		result, err := project.ValidateArtifacts(root, project.ArtifactValidateOptions{RunID: runID, Gate: gate})
+		if err != nil {
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writeArtifactValidateResult(stdout, result, jsonMode)
+		if result.Status == project.ValidationStatusFail {
+			return ExitSafety
+		}
+		return ExitOK
 	default:
 		writeError(stderr, jsonMode, cliError{Code: "not_implemented", Message: "artifact command is not implemented yet", Hint: artifactUsageHint(), ExitCode: ExitUsage})
 		return ExitUsage
@@ -509,6 +533,30 @@ func requireOneArtifactRunID(args []string) *cliError {
 		return &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown artifact %s option %q", command, args[2]), Hint: fmt.Sprintf("Use artifact %s <run_id> with optional global --json only.", command), ExitCode: ExitUsage, Field: "option", Expected: "no artifact command options", Actual: args[2]}
 	}
 	return &cliError{Code: "run_id_required", Message: fmt.Sprintf("artifact %s requires exactly one run id", command), Hint: fmt.Sprintf("Use artifact %s <run_id>.", command), ExitCode: ExitUsage, Field: "run_id", Expected: "one run id or unique prefix", Actual: fmt.Sprintf("%d arguments", len(args)-1)}
+}
+
+func parseArtifactValidateArgs(args []string) (string, string, *cliError) {
+	if len(args) < 2 || strings.HasPrefix(args[1], "--") {
+		return "", "", &cliError{Code: "run_id_required", Message: "artifact validate requires exactly one run id", Hint: "Use artifact validate <run_id> [--gate intake].", ExitCode: ExitUsage, Field: "run_id", Expected: "one run id or unique prefix", Actual: fmt.Sprintf("%d arguments", len(args)-1)}
+	}
+	runID := args[1]
+	gate := project.ArtifactGateIntake
+	for i := 2; i < len(args); i++ {
+		switch args[i] {
+		case "--gate":
+			if i+1 >= len(args) {
+				return "", "", &cliError{Code: "missing_option_value", Message: "--gate requires a value", Hint: "Use artifact validate <run_id> --gate intake.", ExitCode: ExitUsage, Field: "--gate", Expected: project.ArtifactGateIntake, Actual: "missing"}
+			}
+			gate = args[i+1]
+			if gate != project.ArtifactGateIntake {
+				return "", "", &cliError{Code: "unsupported_gate", Message: "artifact validation gate is not supported", Hint: "Use artifact validate <run_id> --gate intake.", ExitCode: ExitUsage, Field: "gate", Expected: project.ArtifactGateIntake, Actual: gate}
+			}
+			i++
+		default:
+			return "", "", &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown artifact validate option %q", args[i]), Hint: "Use artifact validate <run_id> [--gate intake] with optional global --json.", ExitCode: ExitUsage, Field: "option", Expected: "--gate", Actual: args[i]}
+		}
+	}
+	return runID, gate, nil
 }
 
 func runEventCommand(args []string, root project.Root, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
@@ -683,7 +731,7 @@ func eventAppendUsageHint() string {
 }
 
 func artifactUsageHint() string {
-	return "Use artifact init <run_id> or artifact list <run_id> with optional global --json."
+	return "Use artifact init <run_id>, artifact list <run_id>, or artifact validate <run_id> [--gate intake] with optional global --json."
 }
 
 func runUsageHint() string {
@@ -876,6 +924,27 @@ func writeArtifactListResult(w io.Writer, runID string, artifacts []project.Arti
 			}
 		}
 		fmt.Fprintf(w, "- %s %s state=%s bytes=%d\n", artifact.Path, required, state, artifact.Bytes)
+	}
+}
+
+func writeArtifactValidateResult(w io.Writer, result project.ArtifactValidateResult, jsonMode bool) {
+	if jsonMode {
+		payload := artifactValidateOutput{RunID: result.RunID, Gate: result.Gate, Status: result.Status, Checks: result.Checks}
+		_ = json.NewEncoder(w).Encode(payload)
+		return
+	}
+	fmt.Fprintf(w, "artifact validation for run: %s\n", result.RunID)
+	fmt.Fprintf(w, "gate: %s\n", result.Gate)
+	fmt.Fprintf(w, "status: %s\n", result.Status)
+	for _, check := range result.Checks {
+		fmt.Fprintf(w, "- %s %s", check.Name, check.Status)
+		if check.Path != "" {
+			fmt.Fprintf(w, " path=%s", check.Path)
+		}
+		if check.Field != "" {
+			fmt.Fprintf(w, " field=%s", check.Field)
+		}
+		fmt.Fprintf(w, " message=%s\n", check.Message)
 	}
 }
 

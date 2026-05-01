@@ -387,6 +387,97 @@ func TestRunwf003ArtifactInitSafety(t *testing.T) {
 	}
 }
 
+func TestRunwf004ArtifactValidateWorkflow(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	binary := buildHelperBinary(t)
+
+	runHelper(t, binary, repo, "project", "init", "--json")
+	createdOutput := runHelper(t, binary, repo, runwf004CreateRunArgs("Validate workflow")...)
+	var created struct {
+		RunID    string `json:"run_id"`
+		Metadata struct {
+			WorkPath  string `json:"work_path"`
+			WorkMode  string `json:"work_mode"`
+			SOTPolicy string `json:"sot_policy"`
+			Urgency   string `json:"urgency"`
+		} `json:"metadata"`
+	}
+	if err := json.Unmarshal(createdOutput, &created); err != nil {
+		t.Fatalf("run create output is not JSON: %v\n%s", err, string(createdOutput))
+	}
+	runHelper(t, binary, repo, "artifact", "init", created.RunID, "--json")
+	beforeEvents := readFile(t, filepath.Join(repo, ".kkachi", "events.jsonl"))
+
+	output, err := runHelperAllowError(binary, repo, "artifact", "validate", created.RunID, "--json")
+	if err == nil {
+		t.Fatalf("artifact validate succeeded with pending intake\n%s", string(output))
+	}
+	assertOutputContains(t, output, `"status":"fail"`, "pending intake validate")
+	assertOutputContains(t, output, `"name":"intake_status"`, "pending intake validate")
+	if got := readFile(t, filepath.Join(repo, ".kkachi", "events.jsonl")); string(got) != string(beforeEvents) {
+		t.Fatalf("artifact validate mutated events\nbefore=%s\nafter=%s", string(beforeEvents), string(got))
+	}
+
+	writeIntegrationIntake(t, repo, created.RunID, created.Metadata.WorkPath, created.Metadata.WorkMode, created.Metadata.SOTPolicy, created.Metadata.Urgency, "")
+	passOutput := runHelper(t, binary, repo, "artifact", "validate", created.RunID[:24], "--gate", "intake", "--json")
+	assertOutputContains(t, passOutput, `"run_id":"`+created.RunID+`"`, "passing intake validate")
+	assertOutputContains(t, passOutput, `"gate":"intake"`, "passing intake validate")
+	assertOutputContains(t, passOutput, `"status":"pass"`, "passing intake validate")
+	assertOutputContains(t, passOutput, `"name":"required_artifacts","status":"pass"`, "passing intake validate")
+
+	output, err = runHelperAllowError(binary, repo, "artifact", "validate", created.RunID, "--gate", "final", "--json")
+	if err == nil {
+		t.Fatalf("artifact validate succeeded with unsupported gate\n%s", string(output))
+	}
+	assertOutputContains(t, output, `"code":"unsupported_gate"`, "unsupported gate validate")
+}
+
+func TestRunwf004ArtifactValidateLightPathBWorkflow(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	binary := buildHelperBinary(t)
+
+	runHelper(t, binary, repo, "project", "init", "--json")
+	createdOutput := runHelper(t, binary, repo,
+		"run", "create",
+		"--title", "Path B light validate",
+		"--work-path", "B_discovery_shaping",
+		"--work-mode", "light",
+		"--urgency", "critical",
+		"--sot-policy", "minimal_sot_before_code",
+		"--execution-mode", "research",
+		"--commander", "Gongmyeong",
+		"--task-id", "runwf-004",
+		"--json",
+	)
+	var created struct {
+		RunID string `json:"run_id"`
+	}
+	if err := json.Unmarshal(createdOutput, &created); err != nil {
+		t.Fatalf("run create output is not JSON: %v\n%s", err, string(createdOutput))
+	}
+	runHelper(t, binary, repo, "artifact", "init", created.RunID, "--json")
+	writeIntegrationIntake(t, repo, created.RunID, "B_discovery_shaping", "light", "minimal_sot_before_code", "critical", "")
+
+	output, err := runHelperAllowError(binary, repo, "artifact", "validate", created.RunID, "--json")
+	if err == nil {
+		t.Fatalf("artifact validate succeeded without light mode reason\n%s", string(output))
+	}
+	assertOutputContains(t, output, `"name":"light_mode_reason"`, "missing light reason validate")
+	assertOutputContains(t, output, `"status":"fail"`, "missing light reason validate")
+
+	writeIntegrationIntake(t, repo, created.RunID, "B_discovery_shaping", "light", "minimal_sot_before_code", "critical", "Light Mode Reason: discovery is low-risk and still records safety artifacts\n")
+	passOutput := runHelper(t, binary, repo, "artifact", "validate", created.RunID, "--json")
+	assertOutputContains(t, passOutput, `"status":"pass"`, "Path B light validate")
+	assertOutputContains(t, passOutput, `"name":"work_path_sot_policy","status":"pass"`, "Path B light validate")
+	assertOutputContains(t, passOutput, `"name":"light_mode_reason","status":"pass"`, "Path B light validate")
+}
+
 func buildHelperBinary(t *testing.T) string {
 	t.Helper()
 
@@ -464,6 +555,40 @@ func runwf003CreateRunArgs(title string) []string {
 		"--redteam", "Reviewer",
 		"--task-id", "runwf-003",
 		"--json",
+	}
+}
+
+func runwf004CreateRunArgs(title string) []string {
+	return []string{
+		"run", "create",
+		"--title", title,
+		"--work-path", "A_development_execution",
+		"--work-mode", "standard",
+		"--urgency", "normal",
+		"--sot-policy", "existing_sot_basis",
+		"--execution-mode", "production_write",
+		"--commander", "Gongmyeong",
+		"--task-id", "runwf-004",
+		"--json",
+	}
+}
+
+func writeIntegrationIntake(t *testing.T, repo string, runID string, workPath string, workMode string, sotPolicy string, urgency string, extra string) {
+	t.Helper()
+	content := strings.Join([]string{
+		"# intake-classification.md",
+		"",
+		"Status: complete",
+		"Work Path: " + workPath,
+		"Work Mode: " + workMode,
+		"SOT Policy: " + sotPolicy,
+		"Urgency: " + urgency,
+		strings.TrimRight(extra, "\n"),
+		"",
+	}, "\n")
+	path := filepath.Join(repo, ".kkachi", "runs", runID, "intake-classification.md")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write intake classification: %v", err)
 	}
 }
 
