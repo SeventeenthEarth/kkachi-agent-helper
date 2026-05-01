@@ -505,8 +505,21 @@ func runGateCommand(args []string, root project.Root, stdout io.Writer, stderr i
 		}
 		return ExitSafety
 	case "final":
-		writeError(stderr, jsonMode, cliError{Code: "not_implemented", Message: "gate final is not implemented yet", Hint: "Use gate check <run_id> <gate>; gate final is reserved for gates-004.", ExitCode: ExitUsage, Field: "subcommand", Expected: "check", Actual: "final"})
-		return ExitUsage
+		if err := requireOneRunID(args); err != nil {
+			writeError(stderr, jsonMode, *err)
+			return ExitUsage
+		}
+		result, err := project.CheckGate(root, project.GateCheckOptions{RunID: args[1], Gate: project.GateFinal})
+		if err != nil {
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writeGateCheckResult(stdout, result, jsonMode)
+		if result.Status == project.GateStatusPass {
+			return ExitOK
+		}
+		return ExitSafety
 	default:
 		writeError(stderr, jsonMode, cliError{Code: "not_implemented", Message: "gate command is not implemented yet", Hint: gateUsageHint(), ExitCode: ExitUsage})
 		return ExitUsage

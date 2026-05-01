@@ -694,3 +694,378 @@ func writeJSONArtifact(t *testing.T, repo string, runID string, artifact string,
 	path := filepath.Join(repo, ".kkachi", "runs", runID, filepath.FromSlash(artifact))
 	mustWriteFile(t, path, append(data, '\n'))
 }
+
+func TestCheckGateImplementationPassesAndFails(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+		t.Fatalf("InitArtifacts() error = %v", err)
+	}
+
+	// diff.patch baseline is non-empty, so only impl_log fails.
+	failed, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateImplementation, Now: testRunNow(5)})
+	if err != nil {
+		t.Fatalf("CheckGate(implementation fail) error = %v", err)
+	}
+	if failed.Status != GateStatusFail || failed.EventID != "evt-000004" || !gateCheckStatus(failed.Checks, "impl_log", GateStatusFail) {
+		t.Fatalf("failed = %#v, want impl_log failure", failed)
+	}
+
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "impl-log.md", "Status: complete\nImplementation: done\n")
+	passed, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateImplementation, Now: testRunNow(6)})
+	if err != nil {
+		t.Fatalf("CheckGate(implementation pass) error = %v", err)
+	}
+	if passed.Status != GateStatusPass || passed.EventID != "evt-000005" || !gateCheckStatus(passed.Checks, "diff_patch", GateStatusPass) || !gateCheckStatus(passed.Checks, "impl_log", GateStatusPass) {
+		t.Fatalf("passed = %#v, want implementation pass", passed)
+	}
+}
+
+func TestCheckGateImplementationRequiresCliOutputWhenManifestRequires(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created := createAdapterQARunWithArtifacts(t, root)
+	writeDiffPatch(t, repo, created.Metadata.RunID)
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "impl-log.md", "Status: complete\nImplementation: done\n")
+
+	result, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateImplementation, Now: testRunNow(5)})
+	if err != nil {
+		t.Fatalf("CheckGate(implementation adapter_qa) error = %v", err)
+	}
+	if result.Status != GateStatusFail || !gateCheckStatus(result.Checks, "cli_output", GateStatusFail) {
+		t.Fatalf("result = %#v, want cli_output failure when required by manifest", result)
+	}
+
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "cli-output.md", "Status: complete\nOutput: captured\n")
+	passed, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateImplementation, Now: testRunNow(6)})
+	if err != nil {
+		t.Fatalf("CheckGate(implementation adapter_qa pass) error = %v", err)
+	}
+	if passed.Status != GateStatusPass || !gateCheckStatus(passed.Checks, "cli_output", GateStatusPass) {
+		t.Fatalf("passed = %#v, want cli_output pass", passed)
+	}
+}
+
+func TestCheckGateReviewPassesAndFails(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.Redteam = "red-team-alpha"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+		t.Fatalf("InitArtifacts() error = %v", err)
+	}
+
+	failed, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateReview, Now: testRunNow(5)})
+	if err != nil {
+		t.Fatalf("CheckGate(review fail) error = %v", err)
+	}
+	if failed.Status != GateStatusFail || !gateCheckStatus(failed.Checks, "review", GateStatusFail) || !gateCheckStatus(failed.Checks, "redteam_plan-review", GateStatusFail) {
+		t.Fatalf("failed = %#v, want review and redteam failures", failed)
+	}
+
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "review.md", "Status: complete\nReview: approved\n")
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "redteam/plan-review.md", "Status: complete\nReview: no issues\n")
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "redteam/shaping-review.md", "Status: complete\nReview: no issues\n")
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "redteam/impl-review.md", "Status: complete\nReview: no issues\n")
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "redteam/test-review.md", "Status: complete\nReview: no issues\n")
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "redteam/final-gate-review.md", "Status: complete\nReview: no issues\n")
+	passed, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateReview, Now: testRunNow(6)})
+	if err != nil {
+		t.Fatalf("CheckGate(review pass) error = %v", err)
+	}
+	if passed.Status != GateStatusPass || passed.EventID != "evt-000005" || !gateCheckStatus(passed.Checks, "review", GateStatusPass) || !gateCheckStatus(passed.Checks, "redteam_plan-review", GateStatusPass) {
+		t.Fatalf("passed = %#v, want review pass", passed)
+	}
+}
+
+func TestCheckGateVerificationPassesAndFails(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+		t.Fatalf("InitArtifacts() error = %v", err)
+	}
+
+	failed, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateVerification, Now: testRunNow(5)})
+	if err != nil {
+		t.Fatalf("CheckGate(verification fail) error = %v", err)
+	}
+	if failed.Status != GateStatusFail || !gateCheckStatus(failed.Checks, "test_log", GateStatusFail) || !gateCheckStatus(failed.Checks, "verification", GateStatusFail) {
+		t.Fatalf("failed = %#v, want test_log and verification failure", failed)
+	}
+
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "test-log.md", "Status: complete\nTests: all pass\n")
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "verification.md", "Status: complete\nVerdict: pass\n")
+	passed, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateVerification, Now: testRunNow(6)})
+	if err != nil {
+		t.Fatalf("CheckGate(verification pass) error = %v", err)
+	}
+	if passed.Status != GateStatusPass || passed.EventID != "evt-000005" || !gateCheckStatus(passed.Checks, "test_log", GateStatusPass) || !gateCheckStatus(passed.Checks, "verification", GateStatusPass) {
+		t.Fatalf("passed = %#v, want verification pass", passed)
+	}
+
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "verification.md", "Status: complete\nVerdict: fail\n")
+	failVerdict, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateVerification, Now: testRunNow(7)})
+	if err != nil {
+		t.Fatalf("CheckGate(verification fail verdict) error = %v", err)
+	}
+	if failVerdict.Status != GateStatusPass || !gateCheckStatus(failVerdict.Checks, "verification", GateStatusPass) || !gateCheckActual(failVerdict.Checks, "verification", "fail") {
+		t.Fatalf("failVerdict = %#v, want verification pass with fail verdict", failVerdict)
+	}
+
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "verification.md", "Status: complete\nVerdict: unknown\n")
+	invalidVerdict, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateVerification, Now: testRunNow(8)})
+	if err != nil {
+		t.Fatalf("CheckGate(verification invalid verdict) error = %v", err)
+	}
+	if invalidVerdict.Status != GateStatusFail || !gateCheckStatus(invalidVerdict.Checks, "verification", GateStatusFail) || !gateCheckActual(invalidVerdict.Checks, "verification", "unknown") {
+		t.Fatalf("invalidVerdict = %#v, want verification failure with invalid verdict", invalidVerdict)
+	}
+}
+
+func TestCheckGateDocsPassesAndFails(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+		t.Fatalf("InitArtifacts() error = %v", err)
+	}
+
+	failed, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateDocs, Now: testRunNow(5)})
+	if err != nil {
+		t.Fatalf("CheckGate(docs fail) error = %v", err)
+	}
+	if failed.Status != GateStatusFail || !gateCheckStatus(failed.Checks, "docs_update", GateStatusFail) {
+		t.Fatalf("failed = %#v, want docs_update failure", failed)
+	}
+
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "docs-update.md", "Status: complete\nChanged Docs: README.md\n")
+	passed, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateDocs, Now: testRunNow(6)})
+	if err != nil {
+		t.Fatalf("CheckGate(docs pass) error = %v", err)
+	}
+	if passed.Status != GateStatusPass || passed.EventID != "evt-000005" || !gateCheckStatus(passed.Checks, "docs_update", GateStatusPass) {
+		t.Fatalf("passed = %#v, want docs pass", passed)
+	}
+
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "docs-update.md", "Status: complete\nNo Change Reason: no user-visible changes\n")
+	noChange, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateDocs, Now: testRunNow(7)})
+	if err != nil {
+		t.Fatalf("CheckGate(docs no change) error = %v", err)
+	}
+	if noChange.Status != GateStatusPass || !gateCheckStatus(noChange.Checks, "docs_update", GateStatusPass) {
+		t.Fatalf("noChange = %#v, want docs no-change pass", noChange)
+	}
+}
+
+func TestCheckGateFinalPassesAndFails(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+		t.Fatalf("InitArtifacts() error = %v", err)
+	}
+
+	// All prior gates unchecked: final should fail on missing gate states.
+	failed, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateFinal, Now: testRunNow(5)})
+	if err != nil {
+		t.Fatalf("CheckGate(final fail unchecked) error = %v", err)
+	}
+	if failed.Status != GateStatusFail || failed.EventID != "evt-000004" || !gateCheckStatus(failed.Checks, "final_report", GateStatusFail) || !gateCheckStatus(failed.Checks, "intake_gate", GateStatusFail) {
+		t.Fatalf("failed = %#v, want final_report and intake_gate failure", failed)
+	}
+
+	// Pass all required gates and final-report.
+	passAllPriorGates(t, root, repo, created.Metadata.RunID)
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "final-report.md", "Status: complete\nReport: done\n")
+	passed, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateFinal, Now: testRunNow(15)})
+	if err != nil {
+		t.Fatalf("CheckGate(final pass) error = %v", err)
+	}
+	if passed.Status != GateStatusPass || passed.EventID != "evt-000013" || !gateCheckStatus(passed.Checks, "final_report", GateStatusPass) || !gateCheckStatus(passed.Checks, "intake_gate", GateStatusPass) {
+		t.Fatalf("passed = %#v, want final pass", passed)
+	}
+
+	// Fail one prior gate and verify final fails.
+	metadata := readRunMetadata(t, repo, created.Metadata.RunID)
+	metadata.GateState[GatePlan] = map[string]any{"status": GateStatusFail, "event_id": "evt-000009"}
+	writeRunMetadataForTest(t, repo, metadata)
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "final-report.md", "Status: complete\nReport: done\n")
+	planFail, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateFinal, Now: testRunNow(16)})
+	if err != nil {
+		t.Fatalf("CheckGate(final plan fail) error = %v", err)
+	}
+	if planFail.Status != GateStatusFail || !gateCheckStatus(planFail.Checks, "plan_gate", GateStatusFail) {
+		t.Fatalf("planFail = %#v, want plan_gate failure", planFail)
+	}
+}
+
+func TestCheckGateFinalRequiresBackendGateWhenManifestRequires(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created := createAdapterQARunWithArtifacts(t, root)
+	writeValidBackendEvidence(t, repo, created.Metadata.RunID)
+
+	passAllPriorGates(t, root, repo, created.Metadata.RunID, GateBackend)
+	// backend gate is not passed; final should fail because backend is required.
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "final-report.md", "Status: complete\nReport: done\n")
+	result, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateFinal, Now: testRunNow(15)})
+	if err != nil {
+		t.Fatalf("CheckGate(final backend missing) error = %v", err)
+	}
+	if result.Status != GateStatusFail || !gateCheckStatus(result.Checks, "backend_gate", GateStatusFail) {
+		t.Fatalf("result = %#v, want backend_gate failure", result)
+	}
+
+	// Now pass backend gate and retry final.
+	_, err = CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateBackend, Now: testRunNow(16)})
+	if err != nil {
+		t.Fatalf("CheckGate(backend) error = %v", err)
+	}
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "final-report.md", "Status: complete\nReport: done\n")
+	passed, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateFinal, Now: testRunNow(17)})
+	if err != nil {
+		t.Fatalf("CheckGate(final pass with backend) error = %v", err)
+	}
+	if passed.Status != GateStatusPass || !gateCheckStatus(passed.Checks, "backend_gate", GateStatusPass) {
+		t.Fatalf("passed = %#v, want final pass with backend", passed)
+	}
+}
+
+func passAllPriorGates(t *testing.T, root Root, repo string, runID string, skip ...string) {
+	t.Helper()
+	skipSet := stringSet(skip)
+	metadata := readRunMetadata(t, repo, runID)
+	writeIntakeClassification(t, repo, metadata, "")
+	writeMarkdownArtifact(t, repo, runID, "sot-basis.md", "Status: complete\nSource: docs/specs.md\n")
+	writeMarkdownArtifact(t, repo, runID, "roadmap-update.md", "Status: complete\nTrace: docs/roadmap.md\n")
+	writeCompletedPlanArtifacts(t, repo, runID)
+	writeDiffPatch(t, repo, runID)
+	writeMarkdownArtifact(t, repo, runID, "impl-log.md", "Status: complete\nImplementation: done\n")
+	writeMarkdownArtifact(t, repo, runID, "review.md", "Status: complete\nReview: approved\n")
+	writeMarkdownArtifact(t, repo, runID, "test-log.md", "Status: complete\nTests: all pass\n")
+	writeMarkdownArtifact(t, repo, runID, "verification.md", "Status: complete\nVerdict: pass\n")
+	writeMarkdownArtifact(t, repo, runID, "docs-update.md", "Status: complete\nChanged Docs: README.md\n")
+
+	required := ArtifactManifest(metadata)
+	requiredSet := stringSet(required)
+	if requiredSet["cli-output.md"] {
+		writeMarkdownArtifact(t, repo, runID, "cli-output.md", "Status: complete\nOutput: captured\n")
+	}
+	if requiredSet["redteam/impl-review.md"] {
+		writeMarkdownArtifact(t, repo, runID, "redteam/impl-review.md", "Status: complete\nReview: no issues\n")
+	}
+	if requiredSet["redteam/test-review.md"] {
+		writeMarkdownArtifact(t, repo, runID, "redteam/test-review.md", "Status: complete\nReview: no issues\n")
+	}
+	if requiredSet["redteam/qa-review.md"] {
+		writeMarkdownArtifact(t, repo, runID, "redteam/qa-review.md", "Status: complete\nReview: no issues\n")
+	}
+	if requiredSet["redteam/plan-review.md"] {
+		writeMarkdownArtifact(t, repo, runID, "redteam/plan-review.md", "Status: complete\nReview: no issues\n")
+	}
+	if requiredSet["redteam/shaping-review.md"] {
+		writeMarkdownArtifact(t, repo, runID, "redteam/shaping-review.md", "Status: complete\nReview: no issues\n")
+	}
+	if requiredSet["redteam/final-gate-review.md"] {
+		writeMarkdownArtifact(t, repo, runID, "redteam/final-gate-review.md", "Status: complete\nReview: no issues\n")
+	}
+
+	gates := []string{GateIntake, GateSOT, GateRoadmap, GatePlan, GateImplementation, GateReview, GateVerification, GateDocs}
+	if backendGateRequired(required) && !skipSet[GateBackend] {
+		gates = append(gates, GateBackend)
+	}
+	for i, gate := range gates {
+		_, err := CheckGate(root, GateCheckOptions{RunID: runID, Gate: gate, Now: testRunNow(6 + i)})
+		if err != nil {
+			t.Fatalf("CheckGate(%s) error = %v", gate, err)
+		}
+	}
+}
+
+func writeDiffPatch(t *testing.T, repo string, runID string) {
+	t.Helper()
+	path := filepath.Join(repo, ".kkachi", "runs", runID, "diff.patch")
+	mustWriteFile(t, path, []byte("diff --git a/file.txt b/file.txt\n+change\n"))
+}
+
+func TestCheckGateReviewWithoutRedteam(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.Redteam = ""
+	options.ExecutionMode = "research"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+		t.Fatalf("InitArtifacts() error = %v", err)
+	}
+
+	failed, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateReview, Now: testRunNow(5)})
+	if err != nil {
+		t.Fatalf("CheckGate(review fail) error = %v", err)
+	}
+	if failed.Status != GateStatusFail || !gateCheckStatus(failed.Checks, "review", GateStatusFail) {
+		t.Fatalf("failed = %#v, want review failure", failed)
+	}
+	for _, check := range failed.Checks {
+		if strings.HasPrefix(check.Name, "redteam_") {
+			t.Fatalf("unexpected redteam check when redteam is not assigned and execution_mode is research: %s", check.Name)
+		}
+	}
+
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "review.md", "Status: complete\nReview: approved\n")
+	passed, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateReview, Now: testRunNow(6)})
+	if err != nil {
+		t.Fatalf("CheckGate(review pass) error = %v", err)
+	}
+	if passed.Status != GateStatusPass || !gateCheckStatus(passed.Checks, "review", GateStatusPass) {
+		t.Fatalf("passed = %#v, want review pass", passed)
+	}
+}
+
+func TestCheckGateFinalFailsMissingFinalReportOnly(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+		t.Fatalf("InitArtifacts() error = %v", err)
+	}
+
+	passAllPriorGates(t, root, repo, created.Metadata.RunID)
+
+	result, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateFinal, Now: testRunNow(15)})
+	if err != nil {
+		t.Fatalf("CheckGate(final) error = %v", err)
+	}
+	if result.Status != GateStatusFail || !gateCheckStatus(result.Checks, "final_report", GateStatusFail) {
+		t.Fatalf("result = %#v, want final_report failure", result)
+	}
+	for _, gate := range []string{GateIntake, GateSOT, GateRoadmap, GatePlan, GateImplementation, GateReview, GateVerification, GateDocs} {
+		if !gateCheckStatus(result.Checks, gate+"_gate", GateStatusPass) {
+			t.Fatalf("result = %#v, want %s_gate pass", result, gate)
+		}
+	}
+}

@@ -359,16 +359,20 @@ Stable JSON output has the following shape:
 }
 ```
 
-Behavior in `gates-001` through `gates-003`:
+Behavior in `gates-001` through `gates-004`:
 
 - `intake` is implemented by reusing the deterministic intake checks from `artifact validate`.
 - `sot` is implemented by requiring completed `sot-basis.md` for Path A or completed `sot-update.md` for Path B.
 - `roadmap` is implemented by accepting a non-empty run metadata `task_id`, completed `roadmap-update.md`, or `roadmap-update.md` with `Status: not_applicable` plus a non-empty `Reason:`.
 - `plan` is implemented by requiring completed `acceptance-criteria.md`, `plan.md`, and `checklist.md`.
 - `backend` is implemented as a manifest-driven gate. If `required_artifacts` includes backend evidence, it validates `selected-cli.json`, `capability-check.md`, `bridge-session-snapshot.json`, and `bridge-events.md`; if not, it passes as not applicable with a check tied to `run-metadata.json`.
-- `implementation`, `review`, `verification`, `docs`, and `final` are declared but return `blocked` until later gates tasks implement their artifact-specific rules.
+- `implementation` is implemented by requiring a non-empty `diff.patch`, completed `impl-log.md`, and `cli-output.md` only when the run manifest requires it.
+- `review` is implemented by requiring completed `review.md` and every `redteam/*` artifact listed in `required_artifacts`.
+- `verification` is implemented by requiring completed `test-log.md` and completed `verification.md` that declares `Verdict: pass` or `Verdict: fail`.
+- `docs` is implemented by requiring completed `docs-update.md` that records either `Changed Docs` or `No Change Reason`.
+- `final` is implemented by requiring completed `final-report.md` and `pass` status in `metadata.GateState` for `intake`, `sot`, `roadmap`, `plan`, `implementation`, `review`, `verification`, and `docs`. The `backend` gate is also required when the run manifest includes backend evidence artifacts.
+- `gate final <run_id>` is implemented with the same lock, event, and status-update contract as `gate check`. It exits `0` on pass and `3` on fail.
 - Unknown gate names are usage errors.
-- `gate final <run_id>` remains reserved for `gates-004` and is not implemented yet.
 - Passing checks append `gate.passed`; failing checks append `gate.failed`; blocked checks append `gate.checked`.
 - Every successful `gate check` updates both `run-metadata.json.gate_state[gate]` and `status.json.gate_summary[gate]` with the status, event id, and checked timestamp.
 - A passing gate exits `0`; failed or blocked gates exit `3`.

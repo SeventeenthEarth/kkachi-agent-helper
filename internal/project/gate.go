@@ -30,11 +30,11 @@ var gateDefinitions = []GateDefinition{
 	{Name: GateRoadmap, Implemented: true, Description: "roadmap trace or explicit exception evidence"},
 	{Name: GatePlan, Implemented: true, Description: "acceptance criteria, plan.md, and checklist.md"},
 	{Name: GateBackend, Implemented: true, Description: "bridge backend evidence artifacts"},
-	{Name: GateImplementation, Description: "implementation evidence artifacts"},
-	{Name: GateReview, Description: "review and red-team evidence artifacts"},
-	{Name: GateVerification, Description: "test-log and verification verdict artifacts"},
-	{Name: GateDocs, Description: "docs-update decision artifacts"},
-	{Name: GateFinal, Description: "all required gates pass and final-report.md exists"},
+	{Name: GateImplementation, Implemented: true, Description: "implementation evidence artifacts"},
+	{Name: GateReview, Implemented: true, Description: "review and red-team evidence artifacts"},
+	{Name: GateVerification, Implemented: true, Description: "test-log and verification verdict artifacts"},
+	{Name: GateDocs, Implemented: true, Description: "docs-update decision artifacts"},
+	{Name: GateFinal, Implemented: true, Description: "all required gates pass and final-report.md exists"},
 }
 
 var gateRegistry = gateDefinitionMap(gateDefinitions)
@@ -149,6 +149,16 @@ func checkGateResult(root Root, metadata RunMetadata, metadataRelative string, d
 		return checkPlanGate(root, metadata)
 	case GateBackend:
 		return checkBackendGate(root, metadata, metadataRelative)
+	case GateImplementation:
+		return checkImplementationGate(root, metadata)
+	case GateReview:
+		return checkReviewGate(root, metadata)
+	case GateVerification:
+		return checkVerificationGate(root, metadata)
+	case GateDocs:
+		return checkDocsGate(root, metadata)
+	case GateFinal:
+		return checkFinalGate(root, metadata, metadataRelative)
 	}
 	return blockedGateResult(metadata.RunID, definition), nil
 }

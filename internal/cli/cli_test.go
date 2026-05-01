@@ -1434,7 +1434,6 @@ func TestGateCheckCLIJSONHumanAndPlanFailure(t *testing.T) {
 	assertCLIErrorCode(t, runWithOptions([]string{"gate", "check", created.RunID, "   ", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitUsage, "gate_unknown")
 	stdout.Reset()
 	stderr.Reset()
-	assertCLIErrorCode(t, runWithOptions([]string{"gate", "final", created.RunID, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitUsage, "not_implemented")
 }
 
 func cliGateCheckStatus(checks []project.GateCheck, name string, status string) bool {
@@ -1536,7 +1535,88 @@ func writeCLIJSONArtifact(t *testing.T, repo string, runID string, artifact stri
 func writeCLITextArtifact(t *testing.T, repo string, runID string, artifact string, content string) {
 	t.Helper()
 	path := filepath.Join(repo, ".kkachi", "runs", runID, filepath.FromSlash(artifact))
+	if dir := filepath.Dir(path); dir != path {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write %s: %v", artifact, err)
+	}
+}
+
+func TestGateFinalCLI(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions(runCreateArgs("Final gate", "--json"), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("run create exit = %d stderr=%s", code, stderr.String())
+	}
+	var created runCreateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"artifact", "init", created.RunID, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("artifact init exit = %d stderr=%s", code, stderr.String())
+	}
+
+	writeCLIIntakeClassification(t, repo, created.Metadata, "")
+	writeCLITextArtifact(t, repo, created.RunID, "sot-basis.md", "Status: complete\n")
+	writeCLITextArtifact(t, repo, created.RunID, "roadmap-update.md", "Status: complete\n")
+	writeCLITextArtifact(t, repo, created.RunID, "acceptance-criteria.md", "Status: complete\n")
+	writeCLITextArtifact(t, repo, created.RunID, "plan.md", "Status: complete\n")
+	writeCLITextArtifact(t, repo, created.RunID, "checklist.md", "Status: complete\n")
+	writeCLITextArtifact(t, repo, created.RunID, "diff.patch", "diff --git a/f b/f\n+change\n")
+	writeCLITextArtifact(t, repo, created.RunID, "impl-log.md", "Status: complete\n")
+	writeCLITextArtifact(t, repo, created.RunID, "review.md", "Status: complete\n")
+	writeCLITextArtifact(t, repo, created.RunID, "redteam/impl-review.md", "Status: complete\n")
+	writeCLITextArtifact(t, repo, created.RunID, "redteam/test-review.md", "Status: complete\n")
+	writeCLITextArtifact(t, repo, created.RunID, "redteam/final-gate-review.md", "Status: complete\n")
+	writeCLITextArtifact(t, repo, created.RunID, "test-log.md", "Status: complete\n")
+	writeCLITextArtifact(t, repo, created.RunID, "verification.md", "Status: complete\nVerdict: pass\n")
+	writeCLITextArtifact(t, repo, created.RunID, "docs-update.md", "Status: complete\nChanged Docs: README.md\n")
+
+	for _, gate := range []string{project.GateIntake, project.GateSOT, project.GateRoadmap, project.GatePlan, project.GateImplementation, project.GateReview, project.GateVerification, project.GateDocs} {
+		stdout.Reset()
+		stderr.Reset()
+		if code := runWithOptions([]string{"gate", "check", created.RunID, gate, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+			t.Fatalf("gate check %s exit = %d stderr=%s", gate, code, stderr.String())
+		}
+	}
+
+	// gate final without final-report.md should fail
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"gate", "final", created.RunID, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitSafety {
+		t.Fatalf("gate final fail exit = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var finalFailed gateCheckOutput
+	if err := json.Unmarshal(stdout.Bytes(), &finalFailed); err != nil {
+		t.Fatalf("decode final failed: %v\n%s", err, stdout.String())
+	}
+	if finalFailed.Status != project.GateStatusFail || !cliGateCheckStatus(finalFailed.Checks, "final_report", project.GateStatusFail) {
+		t.Fatalf("finalFailed = %#v, want final_report failure", finalFailed)
+	}
+
+	// Write final-report.md and retry
+	writeCLITextArtifact(t, repo, created.RunID, "final-report.md", "Status: complete\n")
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"gate", "final", created.RunID, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("gate final pass exit = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var finalPassed gateCheckOutput
+	if err := json.Unmarshal(stdout.Bytes(), &finalPassed); err != nil {
+		t.Fatalf("decode final passed: %v\n%s", err, stdout.String())
+	}
+	if finalPassed.Status != project.GateStatusPass || !cliGateCheckStatus(finalPassed.Checks, "final_report", project.GateStatusPass) {
+		t.Fatalf("finalPassed = %#v, want final pass", finalPassed)
 	}
 }
