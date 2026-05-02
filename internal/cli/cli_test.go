@@ -197,7 +197,7 @@ func TestProjectInitJSONOutput(t *testing.T) {
 	if payload.InitialEventID != "evt-000001" {
 		t.Fatalf("initial event id = %q, want evt-000001", payload.InitialEventID)
 	}
-	if len(payload.CreatedPaths) != 3 || len(payload.SchemaPaths) != 5 {
+	if len(payload.CreatedPaths) != 3 || len(payload.SchemaPaths) != 6 {
 		t.Fatalf("payload paths = %#v/%#v, want created and schema paths", payload.CreatedPaths, payload.SchemaPaths)
 	}
 }
@@ -437,7 +437,7 @@ func TestProjectStatusReportsCoherenceMismatch(t *testing.T) {
 	}
 }
 
-func TestKnownCommandGroupJSONError(t *testing.T) {
+func TestSchemaValidateRequiresSchemaJSONError(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
@@ -450,8 +450,8 @@ func TestKnownCommandGroupJSONError(t *testing.T) {
 		t.Fatalf("stdout = %q, want empty", stdout.String())
 	}
 	env := decodeErrorEnvelope(t, stderr.Bytes())
-	if env.Error.Code != "not_implemented" {
-		t.Fatalf("error code = %q, want not_implemented", env.Error.Code)
+	if env.Error.Code != "missing_required_option" {
+		t.Fatalf("error code = %q, want missing_required_option", env.Error.Code)
 	}
 	if !strings.Contains(env.Error.Message, "schema") {
 		t.Fatalf("message = %q, want command group name", env.Error.Message)
@@ -460,6 +460,143 @@ func TestKnownCommandGroupJSONError(t *testing.T) {
 		t.Fatalf("exit code = %d, want %d", env.Error.ExitCode, ExitUsage)
 	}
 	assertNoHumanDecoration(t, stderr.String())
+}
+
+func TestSchemaValidateAndExportCLI(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"schema", "validate", ".kkachi/status.json", "--schema", "status", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("schema validate status exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	var validated schemaValidateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &validated); err != nil {
+		t.Fatalf("schema validate stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if validated.Schema != "status" || validated.Status != "pass" || validated.FilePath != ".kkachi/status.json" || len(validated.Checks) == 0 {
+		t.Fatalf("validated = %#v, want passing status validation", validated)
+	}
+
+	statusPath := filepath.Join(repo, ".kkachi", "status.json")
+	if err := os.WriteFile(statusPath, []byte(`{"version":"0.1","project_id":"p","active_run_id":null,"active_run_state":null,"last_event_id":"bad","updated_at":"2026-04-30T01:02:03Z","gate_summary":{}}`+"\n"), 0o600); err != nil {
+		t.Fatalf("write invalid status: %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"schema", "validate", ".kkachi/status.json", "--schema", ".kkachi/schemas/status.schema.json", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitSafety {
+		t.Fatalf("invalid schema validate exit = %d want %d stderr=%s stdout=%s", code, ExitSafety, stderr.String(), stdout.String())
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &validated); err != nil {
+		t.Fatalf("invalid schema validate stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if validated.Status != "fail" || !schemaCheckListed(validated.Checks, "last_event_id", "fail") {
+		t.Fatalf("validated = %#v, want last_event_id failure", validated)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"schema", "export", "--schema", "status", "--dry-run", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("schema dry-run exit = %d stderr=%s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"schema", "export", "--schema", "status", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitSafety {
+		t.Fatalf("schema export under incoherent status exit = %d want safety stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+}
+
+func schemaCheckListed(checks []project.SchemaCheck, name string, status string) bool {
+	for _, check := range checks {
+		if check.Name == name && check.Status == status {
+			return true
+		}
+	}
+	return false
+}
+
+func TestSchemaCLIUsageAndSafetyErrors(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+
+	cases := []struct {
+		name     string
+		args     []string
+		exitCode int
+		code     string
+	}{
+		{name: "unknown schema", args: []string{"schema", "validate", ".kkachi/status.json", "--schema", "unknown", "--json"}, exitCode: ExitUsage, code: "schema_unknown"},
+		{name: "duplicate validate schema", args: []string{"schema", "validate", ".kkachi/status.json", "--schema", "status", "--schema", "event", "--json"}, exitCode: ExitUsage, code: "duplicate_option"},
+		{name: "missing file", args: []string{"schema", "validate", ".kkachi/missing.json", "--schema", "status", "--json"}, exitCode: ExitSafety, code: "schema_validation_read_failed"},
+		{name: "absolute file", args: []string{"schema", "validate", filepath.Join(repo, ".kkachi", "status.json"), "--schema", "status", "--json"}, exitCode: ExitSafety, code: "absolute_path"},
+		{name: "export selector conflict", args: []string{"schema", "export", "--all", "--schema", "status", "--json"}, exitCode: ExitUsage, code: "schema_export_selector_conflict"},
+		{name: "duplicate export all", args: []string{"schema", "export", "--all", "--all", "--json"}, exitCode: ExitUsage, code: "duplicate_option"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			stdout.Reset()
+			stderr.Reset()
+			assertCLIErrorCode(t, runWithOptions(tt.args, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, tt.exitCode, tt.code)
+		})
+	}
+}
+
+func TestSchemaExportCLIWritesAllIdempotentAndRespectsLocks(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+
+	oldConfigSchema := filepath.Join(repo, ".kkachi", "schemas", "config.schema.json")
+	if err := os.WriteFile(oldConfigSchema, []byte(`{"$id":"https://kkachi.local/schemas/config.schema.json","version":"0.1"}`+"\n"), 0o600); err != nil {
+		t.Fatalf("write old config schema: %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"schema", "export", "--all", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("schema export --all exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	var exported schemaExportOutput
+	if err := json.Unmarshal(stdout.Bytes(), &exported); err != nil {
+		t.Fatalf("schema export stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if exported.EventID != "evt-000002" || len(exported.Schemas) != 6 || len(exported.Written) != 1 || exported.Written[0] != ".kkachi/schemas/config.schema.json" || len(exported.Unchanged) != 5 {
+		t.Fatalf("exported = %#v, want one refreshed config schema, five unchanged, and evt-000002", exported)
+	}
+	if !strings.Contains(readCLIText(t, filepath.Join(repo, ".kkachi", "events.jsonl")), `"type":"schema.exported"`) {
+		t.Fatalf("events missing schema.exported")
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"schema", "export", "--all", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("idempotent schema export exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	exported = schemaExportOutput{}
+	if err := json.Unmarshal(stdout.Bytes(), &exported); err != nil {
+		t.Fatalf("idempotent export stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if exported.EventID != "" || len(exported.Written) != 0 || len(exported.Unchanged) != 6 {
+		t.Fatalf("idempotent exported = %#v, want no writes and no event", exported)
+	}
+
+	fresh := project.LockMetadata{Version: project.LockVersion, LockName: project.ProjectWriteLockName, OwnerPID: os.Getpid(), Hostname: cliMustHostname(t), Command: "fresh schema export", CreatedAt: time.Now().UTC().Format(time.RFC3339)}
+	writeCLILock(t, repo, project.ProjectWriteLockName, fresh)
+	stdout.Reset()
+	stderr.Reset()
+	code := runWithOptions([]string{"schema", "export", "--schema", "status", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	assertCLIErrorCode(t, code, stdout, stderr, ExitSafety, "lock_conflict")
 }
 
 func TestCommandGroupRequiresRepositoryRoot(t *testing.T) {

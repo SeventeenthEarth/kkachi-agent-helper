@@ -28,9 +28,10 @@ var statePaths = []string{
 }
 
 var schemaPaths = []string{
+	".kkachi/schemas/config.schema.json",
 	".kkachi/schemas/status.schema.json",
-	".kkachi/schemas/run-metadata.schema.json",
 	".kkachi/schemas/event.schema.json",
+	".kkachi/schemas/run-metadata.schema.json",
 	".kkachi/schemas/selected-cli.schema.json",
 	".kkachi/schemas/bridge-session-snapshot.schema.json",
 }
@@ -203,7 +204,15 @@ func initFiles(projectName string, projectID string, occurredAt string) map[stri
 		EventsPath: append(mustCompactJSON(event), '\n'),
 	}
 	for _, path := range schemaPaths {
-		files[path] = append(mustJSON(schemaFor(path)), '\n')
+		name, err := ResolveSchemaName(path)
+		if err != nil {
+			panic(err)
+		}
+		content, err := SchemaDocument(name)
+		if err != nil {
+			panic(err)
+		}
+		files[path] = content
 	}
 	return files
 }
@@ -225,21 +234,6 @@ compat:
   required_skills: null
   required_bridge: null
 `, projectName)
-}
-
-func schemaFor(path string) map[string]any {
-	title := strings.TrimSuffix(filepath.Base(path), ".schema.json")
-	return map[string]any{
-		"$schema":              "https://json-schema.org/draft/2020-12/schema",
-		"$id":                  "https://kkachi.local/schemas/" + filepath.Base(path),
-		"title":                title,
-		"type":                 "object",
-		"additionalProperties": true,
-		"required":             []string{"version"},
-		"properties": map[string]any{
-			"version": map[string]any{"type": "string"},
-		},
-	}
 }
 
 func mustJSON(value any) []byte {

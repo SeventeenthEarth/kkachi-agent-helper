@@ -59,7 +59,7 @@ func TestProjectInitCreatesStateAndRefusesOverwrite(t *testing.T) {
 	if payload.ProjectID == "" || payload.ProjectName == "" || payload.InitialEventID != "evt-000001" {
 		t.Fatalf("payload = %#v, want project identity and initial event", payload)
 	}
-	if len(payload.CreatedPaths) != 3 || len(payload.SchemaPaths) != 5 {
+	if len(payload.CreatedPaths) != 3 || len(payload.SchemaPaths) != 6 {
 		t.Fatalf("paths = %#v/%#v, want state and schema paths", payload.CreatedPaths, payload.SchemaPaths)
 	}
 
@@ -83,13 +83,54 @@ func TestProjectInitCreatesStateAndRefusesOverwrite(t *testing.T) {
 		t.Fatalf("project doctor output = %s, want healthy checks", string(doctorOutput))
 	}
 
+	schemaValidate := exec.Command(binary, "schema", "validate", ".kkachi/status.json", "--schema", "status", "--json")
+	schemaValidate.Dir = repo
+	schemaOutput, err := schemaValidate.CombinedOutput()
+	if err != nil {
+		t.Fatalf("schema validate failed: %v\n%s", err, string(schemaOutput))
+	}
+	if !strings.Contains(string(schemaOutput), `"schema":"status"`) || !strings.Contains(string(schemaOutput), `"status":"pass"`) {
+		t.Fatalf("schema validate output = %s, want status pass", string(schemaOutput))
+	}
+	writeIntegrationJSONFile(t, filepath.Join(repo, ".kkachi", "selected-cli.json"), map[string]any{
+		"version":           "0.1",
+		"status":            "supported",
+		"backend_type":      "codex",
+		"adapter_type":      "openai-codex",
+		"source_ledger_ref": "docs/ledger.md#codex",
+		"caveats":           []string{},
+	})
+	writeIntegrationJSONFile(t, filepath.Join(repo, ".kkachi", "bridge-session-snapshot.json"), map[string]any{
+		"session_id":      "session-123",
+		"backend_type":    "codex",
+		"adapter_type":    "openai-codex",
+		"state":           "running",
+		"lifecycle_class": "interactive",
+		"open_pendings":   0,
+	})
+	for _, args := range [][]string{
+		{"schema", "validate", ".kkachi/selected-cli.json", "--schema", "selected-cli", "--json"},
+		{"schema", "validate", ".kkachi/bridge-session-snapshot.json", "--schema", "bridge-session-snapshot", "--json"},
+	} {
+		validateCmd := exec.Command(binary, args...)
+		validateCmd.Dir = repo
+		validateOutput, err := validateCmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v failed: %v\n%s", args, err, string(validateOutput))
+		}
+		if !strings.Contains(string(validateOutput), `"status":"pass"`) {
+			t.Fatalf("%v output = %s, want pass", args, string(validateOutput))
+		}
+	}
+
 	required := []string{
 		".kkachi/config.yaml",
 		".kkachi/status.json",
 		".kkachi/events.jsonl",
+		".kkachi/schemas/config.schema.json",
 		".kkachi/schemas/status.schema.json",
-		".kkachi/schemas/run-metadata.schema.json",
 		".kkachi/schemas/event.schema.json",
+		".kkachi/schemas/run-metadata.schema.json",
 		".kkachi/schemas/selected-cli.schema.json",
 		".kkachi/schemas/bridge-session-snapshot.schema.json",
 	}
@@ -97,6 +138,29 @@ func TestProjectInitCreatesStateAndRefusesOverwrite(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(repo, filepath.FromSlash(relative))); err != nil {
 			t.Fatalf("%s was not created: %v", relative, err)
 		}
+	}
+
+	oldSchemaPath := filepath.Join(repo, ".kkachi", "schemas", "selected-cli.schema.json")
+	if err := os.WriteFile(oldSchemaPath, []byte(`{"$id":"https://kkachi.local/schemas/selected-cli.schema.json","required":["version"]}`+"\n"), 0o600); err != nil {
+		t.Fatalf("write old schema: %v", err)
+	}
+	schemaExport := exec.Command(binary, "schema", "export", "--schema", "selected-cli", "--json")
+	schemaExport.Dir = repo
+	exportOutput, err := schemaExport.CombinedOutput()
+	if err != nil {
+		t.Fatalf("schema export failed: %v\n%s", err, string(exportOutput))
+	}
+	if !strings.Contains(string(exportOutput), `"written":[".kkachi/schemas/selected-cli.schema.json"]`) || !strings.Contains(string(exportOutput), `"event_id":"evt-000002"`) {
+		t.Fatalf("schema export output = %s, want written selected-cli schema and event", string(exportOutput))
+	}
+	schemaExportAll := exec.Command(binary, "schema", "export", "--all", "--json")
+	schemaExportAll.Dir = repo
+	exportAllOutput, err := schemaExportAll.CombinedOutput()
+	if err != nil {
+		t.Fatalf("schema export --all failed: %v\n%s", err, string(exportAllOutput))
+	}
+	if !strings.Contains(string(exportAllOutput), `"written":null`) || strings.Contains(string(exportAllOutput), `"event_id"`) {
+		t.Fatalf("schema export --all output = %s, want no event_id field and no writes", string(exportAllOutput))
 	}
 
 	runCreate := exec.Command(binary, "run", "create", "--title", "Run workflow metadata", "--work-path", "A_development_execution", "--work-mode", "standard", "--urgency", "normal", "--sot-policy", "existing_sot_basis", "--execution-mode", "production_write", "--commander", "Gongmyeong", "--task-id", "runwf-001", "--json")
@@ -113,8 +177,8 @@ func TestProjectInitCreatesStateAndRefusesOverwrite(t *testing.T) {
 	if err := json.Unmarshal(runCreateOutput, &createdRun); err != nil {
 		t.Fatalf("run create output is not JSON: %v\n%s", err, string(runCreateOutput))
 	}
-	if !strings.HasPrefix(createdRun.RunID, "run-") || createdRun.State != "created" || createdRun.EventID != "evt-000002" {
-		t.Fatalf("createdRun = %#v, want created evt-000002", createdRun)
+	if !strings.HasPrefix(createdRun.RunID, "run-") || createdRun.State != "created" || createdRun.EventID != "evt-000003" {
+		t.Fatalf("createdRun = %#v, want created evt-000003", createdRun)
 	}
 
 	runShow := exec.Command(binary, "run", "show", createdRun.RunID, "--json")
@@ -126,6 +190,15 @@ func TestProjectInitCreatesStateAndRefusesOverwrite(t *testing.T) {
 	if !strings.Contains(string(runShowOutput), `"task_id":"runwf-001"`) || !strings.Contains(string(runShowOutput), `"required_artifacts":[]`) {
 		t.Fatalf("run show output = %s, want metadata", string(runShowOutput))
 	}
+	runMetadataValidate := exec.Command(binary, "schema", "validate", ".kkachi/runs/"+createdRun.RunID+"/run-metadata.json", "--schema", "run-metadata", "--json")
+	runMetadataValidate.Dir = repo
+	runMetadataValidateOutput, err := runMetadataValidate.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run metadata schema validate failed: %v\n%s", err, string(runMetadataValidateOutput))
+	}
+	if !strings.Contains(string(runMetadataValidateOutput), `"schema":"run-metadata"`) || !strings.Contains(string(runMetadataValidateOutput), `"status":"pass"`) {
+		t.Fatalf("run metadata schema validate output = %s, want pass", string(runMetadataValidateOutput))
+	}
 
 	runActivate := exec.Command(binary, "run", "activate", createdRun.RunID, "--json")
 	runActivate.Dir = repo
@@ -133,8 +206,8 @@ func TestProjectInitCreatesStateAndRefusesOverwrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run activate failed: %v\n%s", err, string(runActivateOutput))
 	}
-	if !strings.Contains(string(runActivateOutput), `"state":"active"`) || !strings.Contains(string(runActivateOutput), `"event_id":"evt-000003"`) {
-		t.Fatalf("run activate output = %s, want active evt-000003", string(runActivateOutput))
+	if !strings.Contains(string(runActivateOutput), `"state":"active"`) || !strings.Contains(string(runActivateOutput), `"event_id":"evt-000004"`) {
+		t.Fatalf("run activate output = %s, want active evt-000004", string(runActivateOutput))
 	}
 
 	runClose := exec.Command(binary, "run", "close", createdRun.RunID, "--json")
@@ -143,8 +216,8 @@ func TestProjectInitCreatesStateAndRefusesOverwrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run close failed: %v\n%s", err, string(runCloseOutput))
 	}
-	if !strings.Contains(string(runCloseOutput), `"state":"closed"`) || !strings.Contains(string(runCloseOutput), `"event_id":"evt-000004"`) {
-		t.Fatalf("run close output = %s, want closed evt-000004", string(runCloseOutput))
+	if !strings.Contains(string(runCloseOutput), `"state":"closed"`) || !strings.Contains(string(runCloseOutput), `"event_id":"evt-000005"`) {
+		t.Fatalf("run close output = %s, want closed evt-000005", string(runCloseOutput))
 	}
 
 	appendCmd := exec.Command(binary, "event", "append", "artifact.written", "--run", "run-abc", "--payload", `{"path":"impl-log.md"}`, "--json")
@@ -153,15 +226,15 @@ func TestProjectInitCreatesStateAndRefusesOverwrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("event append failed: %v\n%s", err, string(appendOutput))
 	}
-	if !strings.Contains(string(appendOutput), `"event_id":"evt-000005"`) {
-		t.Fatalf("event append output = %s, want evt-000005", string(appendOutput))
+	if !strings.Contains(string(appendOutput), `"event_id":"evt-000006"`) {
+		t.Fatalf("event append output = %s, want evt-000006", string(appendOutput))
 	}
 	statusBytes, err := os.ReadFile(filepath.Join(repo, ".kkachi", "status.json"))
 	if err != nil {
 		t.Fatalf("read status after event append: %v", err)
 	}
-	if !strings.Contains(string(statusBytes), `"last_event_id": "evt-000005"`) {
-		t.Fatalf("status after event append = %s, want evt-000005", string(statusBytes))
+	if !strings.Contains(string(statusBytes), `"last_event_id": "evt-000006"`) {
+		t.Fatalf("status after event append = %s, want evt-000006", string(statusBytes))
 	}
 
 	retry := exec.Command(binary, "project", "init", "--json")
@@ -914,4 +987,15 @@ func mustHostname(t *testing.T) string {
 		t.Fatalf("hostname: %v", err)
 	}
 	return hostname
+}
+
+func writeIntegrationJSONFile(t *testing.T, path string, payload map[string]any) {
+	t.Helper()
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal JSON file %s: %v", path, err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		t.Fatalf("write JSON file %s: %v", path, err)
+	}
 }

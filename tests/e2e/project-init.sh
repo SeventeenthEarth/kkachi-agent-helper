@@ -20,9 +20,10 @@ required_files="
 .kkachi/config.yaml
 .kkachi/status.json
 .kkachi/events.jsonl
+.kkachi/schemas/config.schema.json
 .kkachi/schemas/status.schema.json
-.kkachi/schemas/run-metadata.schema.json
 .kkachi/schemas/event.schema.json
+.kkachi/schemas/run-metadata.schema.json
 .kkachi/schemas/selected-cli.schema.json
 .kkachi/schemas/bridge-session-snapshot.schema.json
 "
@@ -57,6 +58,36 @@ assert_contains "$tmpdir/status.json" '"event_tail_id":"evt-000001"' "status JSO
 assert_contains "$tmpdir/status.json" '"event_count":1' "status JSON"
 assert_contains "$tmpdir/doctor.json" '"health":"ok"' "doctor JSON"
 assert_contains "$tmpdir/doctor.json" '"failed":0' "doctor JSON"
+
+(cd "$repo" && "$helper" schema validate .kkachi/config.yaml --schema config --json > "$tmpdir/schema-config.json" 2> "$tmpdir/schema-config.err")
+(cd "$repo" && "$helper" schema validate .kkachi/status.json --schema .kkachi/schemas/status.schema.json --json > "$tmpdir/schema-status.json" 2> "$tmpdir/schema-status.err")
+(cd "$repo" && "$helper" schema validate .kkachi/events.jsonl --schema event --json > "$tmpdir/schema-events.json" 2> "$tmpdir/schema-events.err")
+assert_contains "$tmpdir/schema-config.json" '"schema":"config"' "schema config JSON"
+assert_contains "$tmpdir/schema-config.json" '"status":"pass"' "schema config JSON"
+assert_contains "$tmpdir/schema-status.json" '"schema":"status"' "schema status JSON"
+assert_contains "$tmpdir/schema-status.json" '"status":"pass"' "schema status JSON"
+assert_contains "$tmpdir/schema-events.json" '"schema":"event"' "schema events JSON"
+assert_contains "$tmpdir/schema-events.json" '"status":"pass"' "schema events JSON"
+
+export_repo="$tmpdir/export-repo"
+mkdir -p "$export_repo/.git"
+export_repo="$(cd "$export_repo" && pwd -P)"
+(cd "$export_repo" && "$helper" project init --json > "$tmpdir/export-init.json" 2> "$tmpdir/export-init.err")
+printf '%s\n' '{"$id":"https://kkachi.local/schemas/status.schema.json","version":"0.1"}' > "$export_repo/.kkachi/schemas/status.schema.json"
+(cd "$export_repo" && "$helper" schema export --all --dry-run --json > "$tmpdir/schema-export-dry-run.json" 2> "$tmpdir/schema-export-dry-run.err")
+assert_contains "$tmpdir/schema-export-dry-run.json" '"dry_run":true' "schema export dry-run JSON"
+assert_contains "$tmpdir/schema-export-dry-run.json" '"would_write":[".kkachi/schemas/status.schema.json"]' "schema export dry-run JSON"
+(cd "$export_repo" && "$helper" schema export --all --json > "$tmpdir/schema-export.json" 2> "$tmpdir/schema-export.err")
+assert_contains "$tmpdir/schema-export.json" '"written":[".kkachi/schemas/status.schema.json"]' "schema export JSON"
+assert_contains "$tmpdir/schema-export.json" '"event_id":"evt-000002"' "schema export JSON"
+assert_contains "$export_repo/.kkachi/events.jsonl" '"type":"schema.exported"' "schema export events"
+(cd "$export_repo" && "$helper" schema export --all --json > "$tmpdir/schema-export-idempotent.json" 2> "$tmpdir/schema-export-idempotent.err")
+assert_contains "$tmpdir/schema-export-idempotent.json" '"written":null' "schema export idempotent JSON"
+if grep -Fq '"event_id"' "$tmpdir/schema-export-idempotent.json"; then
+  echo "idempotent schema export unexpectedly recorded an event" >&2
+  cat "$tmpdir/schema-export-idempotent.json" >&2
+  exit 1
+fi
 
 assert_contains "$repo/.kkachi/config.yaml" 'version: "0.1"' "config.yaml"
 assert_contains "$repo/.kkachi/config.yaml" 'name: "repo"' "config.yaml"

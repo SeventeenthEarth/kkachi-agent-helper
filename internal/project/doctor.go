@@ -380,26 +380,18 @@ func inspectSchemas(root Root) []DiagnosticCheck {
 			checks = append(checks, failCheck("schemas", path.Relative, "schema file is not a valid JSON object", "Restore the generated schema file from backup.", "json", "JSON object schema", actual))
 			continue
 		}
-		if !schemaRequiresVersion(object) {
-			checks = append(checks, failCheck("schemas", path.Relative, "schema does not require the version property", "Restore the generated schema file so versioned state remains explicit.", "required", "array containing version", fmt.Sprintf("%v", object["required"])))
+		if !schemaDeclaresDocumentVersion(object) {
+			checks = append(checks, failCheck("schemas", path.Relative, "schema version is missing or empty", "Restore the generated schema file so schema contracts remain explicit.", "version", "non-empty string", fmt.Sprintf("%v", object["version"])))
 			continue
 		}
-		checks = append(checks, passCheck("schemas", path.Relative, "schema is readable and requires version"))
+		checks = append(checks, passCheck("schemas", path.Relative, "schema is readable and declares a version"))
 	}
 	return checks
 }
 
-func schemaRequiresVersion(object map[string]any) bool {
-	required, ok := object["required"].([]any)
-	if !ok {
-		return false
-	}
-	for _, value := range required {
-		if value == "version" {
-			return true
-		}
-	}
-	return false
+func schemaDeclaresDocumentVersion(object map[string]any) bool {
+	version, ok := object["version"].(string)
+	return ok && strings.TrimSpace(version) != ""
 }
 
 func inspectLocks(root Root) []DiagnosticCheck {

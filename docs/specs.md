@@ -57,9 +57,10 @@ Default target-project layout:
   active_run.lock
   project_write.lock
   schemas/
+    config.schema.json
     status.schema.json
-    run-metadata.schema.json
     event.schema.json
+    run-metadata.schema.json
     selected-cli.schema.json
     bridge-session-snapshot.schema.json
   runs/
@@ -183,6 +184,7 @@ Initial event types:
 - `run.blocked`
 - `run.closed`
 - `run.aborted`
+- `schema.exported`
 - `schema.migrated`
 
 ## 7. Run metadata
@@ -328,6 +330,7 @@ kkachi-agent-helper gate check <run_id> <gate>
 kkachi-agent-helper gate final <run_id>
 kkachi-agent-helper event append <type> --run <run_id> --payload <json>
 kkachi-agent-helper schema validate <file> --schema <schema>
+kkachi-agent-helper schema export [--schema <schema>|--all] [--dry-run]
 kkachi-agent-helper schema migrate --from <version> --to <version>
 kkachi-agent-helper install skills --source <path-or-version>
 kkachi-agent-helper install templates --source <path-or-version>
@@ -383,6 +386,49 @@ Behavior in `gates-001` through `gates-005`:
 - `gate check` is serialized by `.kkachi/project_write.lock` and refuses status/event incoherence before mutation.
 - `gates-005` regression fixtures cover valid and invalid gate outcomes for Path A Standard, Path A Light, Path B Standard, and Path B Light runs, including malformed evidence and missing artifact cases.
 
+### `schema validate` and `schema export`
+
+`packg-001` introduces deterministic schema validation and schema export.
+
+`schema validate <file> --schema <schema>` JSON output has the following stable shape:
+
+```json
+{
+  "schema": "status",
+  "file_path": ".kkachi/status.json",
+  "status": "pass|fail",
+  "checks": [
+    {
+      "name": "last_event_id",
+      "status": "pass|fail",
+      "path": ".kkachi/status.json",
+      "message": "...",
+      "hint": "...",
+      "field": "last_event_id",
+      "expected": "evt-000001-style event id or null",
+      "actual": "..."
+    }
+  ]
+}
+```
+
+The schema selector accepts canonical embedded names (`config`, `status`, `event`, `run-metadata`, `selected-cli`, `bridge-session-snapshot`) or canonical project-local schema paths under `.kkachi/schemas/`. Project-local schema paths are identity-checked, but validation remains embedded-registry-backed so a relaxed local schema cannot make invalid helper state pass.
+
+`schema export [--schema <schema>|--all] [--dry-run]` JSON output has the following stable shape:
+
+```json
+{
+  "dry_run": false,
+  "schemas": ["status"],
+  "written": [".kkachi/schemas/status.schema.json"],
+  "unchanged": [],
+  "would_write": [],
+  "event_id": "evt-000002"
+}
+```
+
+Dry-run exports are read-only and report `would_write` without an event. Real exports are serialized by `.kkachi/project_write.lock`, refuse status/event incoherence, replace only canonical schema files, and append `schema.exported` only when at least one schema file changes.
+
 Command UX rules:
 
 - `--json` emits machine-readable output and no decorative text.
@@ -424,12 +470,12 @@ Command UX rules:
 
 `project doctor` is a read-only diagnostic report. It checks:
 
-- `.kkachi/config.yaml` exists, is readable, and declares the core `corex-005` generated fields: `version`, `project.name`, and canonical `paths.run_root`, `paths.status_file`, and `paths.events_file`; fuller config schema validation, including root policy, lock policy, schema mode, and compatibility fields, is deferred to `packg-001`;
+- `.kkachi/config.yaml` exists, is readable, and declares the generated fields required by the embedded config schema: `version`, `project.name`, root policy, canonical paths, lock policy, schema mode, and compatibility declarations;
 - `.kkachi/status.json` is a JSON object with required typed fields, valid `last_event_id`, RFC3339 `updated_at`, and object `gate_summary`;
 - `.kkachi/events.jsonl` is readable, non-empty JSONL with no blank lines, valid event ids, and sequential `evt-000001`-style ids;
 - status/event coherence, requiring `status.last_event_id` to match the event-log tail id;
 - canonical `.kkachi/*` state, schema, and lock paths stay within the repository and do not symlink-escape;
-- the five initial schema files exist, are readable JSON objects, and require the `version` property;
+- the six canonical schema files exist, are readable JSON objects, and declare their own `version`;
 - lock files are absent, present, unreadable, or path-unsafe.
 
 JSON output has the following stable shape:
@@ -483,7 +529,9 @@ Lock requirements:
 ## 12. Schema and migration policy
 
 - Schemas live embedded in the binary and may also be copied under `.kkachi/schemas/` for transparency.
-- `project init` writes project-local minimal JSON Schema draft 2020-12 copies for the canonical schema names. These copies require `version` and remain intentionally permissive until `packg-001` adds the full registry and validator surface.
+- `project init` writes project-local JSON Schema draft 2020-12 copies from the embedded canonical registry for config, status, event, run metadata, selected CLI, and bridge session snapshot. These copies are transparency artifacts; validation uses the embedded registry so a relaxed local schema cannot make invalid helper state pass.
+- `schema validate <file> --schema <schema>` accepts embedded schema names, canonical schema filenames, or repository-confined `.kkachi/schemas/*.schema.json` references. It validates config YAML through the deterministic helper config parser, validates event JSONL line-by-line for `events.jsonl`, and validates JSON state/evidence objects for the other schemas. Passing validation exits `0`; schema failures exit `3`; usage errors exit `2`.
+- `schema export [--schema <schema>|--all] [--dry-run]` copies embedded schemas into `.kkachi/schemas/`. Dry runs are read-only previews. Real exports are serialized by `project_write.lock`, refuse status/event incoherence before mutation, write only canonical schema paths, append one `schema.exported` event when files change, and leave unchanged files untouched.
 - Every schema has a version.
 - Backward-compatible additions are allowed within a minor version when fields are optional.
 - Required field changes need a migration command and tests.
@@ -517,7 +565,7 @@ Initial `project init` defaults:
 - `status.project_id` uses `kkachi-project-<project-slug>-<random-hex>`.
 - `status.last_event_id` is `evt-000001`.
 - `.kkachi/events.jsonl` contains exactly one initial `project.initialized` JSONL record.
-- `.kkachi/schemas/` contains minimal local schema copies for status, run metadata, event, selected CLI, and bridge session snapshot.
+- `.kkachi/schemas/` contains local schema copies for config, status, event, run metadata, selected CLI, and bridge session snapshot.
 
 Skill and template installation should support:
 
@@ -535,8 +583,8 @@ Minimum implementation test layers:
 | Layer | Required coverage |
 |---|---|
 | Unit | schema validation, path safety, id generation, project status/doctor diagnostics, lock behavior, gate rules. |
-| Integration | project init, project status/doctor, run create/activate/close, event append, schema migration. |
-| Local E2E | User-visible CLI flows such as project init success, generated state files, status/doctor JSON output, event coherence failure, and unsafe overwrite refusal. |
+| Integration | project init, project status/doctor, run create/activate/close, event append, schema validation/export, and later schema migration. |
+| Local E2E | User-visible CLI flows such as project init success, generated state files, status/doctor JSON output, schema validate/export, event coherence failure, and unsafe overwrite refusal. |
 | Golden fixtures | valid and invalid `.kkachi/` workspaces. |
 | CLI tests | exit codes, JSON output, failure messages, dry-run behavior. |
 | Compatibility tests | migration from previous schema versions and helper-oc lessons where applicable. |
@@ -556,9 +604,7 @@ Minimum implementation test layers:
 The following items remain open until roadmap tasks close them:
 
 - release packaging strategy;
-- exact schema syntax and validator library;
 - run id format;
-- full config schema enforcement beyond the core `corex-005` generated fields;
 - exact lock stale detection policy;
 - skill/template package manifest format;
 - whether helper exports a library API in addition to the CLI;

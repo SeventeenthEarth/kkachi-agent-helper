@@ -164,6 +164,22 @@ type projectDoctorCheckOutput struct {
 	Actual   string `json:"actual"`
 }
 
+type schemaValidateOutput struct {
+	Schema   string                `json:"schema"`
+	FilePath string                `json:"file_path"`
+	Status   string                `json:"status"`
+	Checks   []project.SchemaCheck `json:"checks"`
+}
+
+type schemaExportOutput struct {
+	DryRun     bool     `json:"dry_run"`
+	Schemas    []string `json:"schemas"`
+	Written    []string `json:"written"`
+	Unchanged  []string `json:"unchanged"`
+	WouldWrite []string `json:"would_write"`
+	EventID    string   `json:"event_id,omitempty"`
+}
+
 type globalOptions struct {
 	json bool
 	args []string
@@ -244,6 +260,9 @@ func runWithOptions(args []string, stdout io.Writer, stderr io.Writer, info Buil
 			}
 			if command == "gate" {
 				return runGateCommand(opts.args[1:], root, stdout, stderr, opts.json)
+			}
+			if command == "schema" {
+				return runSchemaCommand(opts.args[1:], root, stdout, stderr, opts.json)
 			}
 			writeError(stderr, opts.json, cliError{
 				Code:     "not_implemented",
@@ -748,6 +767,107 @@ func runEventCommand(args []string, root project.Root, stdout io.Writer, stderr 
 	return ExitOK
 }
 
+func runSchemaCommand(args []string, root project.Root, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
+	if len(args) == 0 {
+		writeError(stderr, jsonMode, cliError{Code: "schema_subcommand_required", Message: "schema subcommand is required", Hint: schemaUsageHint(), ExitCode: ExitUsage})
+		return ExitUsage
+	}
+	switch args[0] {
+	case "validate":
+		file, schemaName, cliErr := parseSchemaValidateArgs(args)
+		if cliErr != nil {
+			writeError(stderr, jsonMode, *cliErr)
+			return cliErr.ExitCode
+		}
+		result, err := project.ValidateSchemaFile(root, project.SchemaValidateOptions{File: file, Schema: schemaName})
+		if err != nil {
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writeSchemaValidateResult(stdout, result, jsonMode)
+		if result.Status == "pass" {
+			return ExitOK
+		}
+		return ExitSafety
+	case "export":
+		options, cliErr := parseSchemaExportArgs(args)
+		if cliErr != nil {
+			writeError(stderr, jsonMode, *cliErr)
+			return cliErr.ExitCode
+		}
+		result, err := project.ExportSchemas(root, options)
+		if err != nil {
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writeSchemaExportResult(stdout, result, jsonMode)
+		return ExitOK
+	default:
+		writeError(stderr, jsonMode, cliError{Code: "not_implemented", Message: "schema command is not implemented yet", Hint: schemaUsageHint(), ExitCode: ExitUsage})
+		return ExitUsage
+	}
+}
+
+func parseSchemaValidateArgs(args []string) (string, string, *cliError) {
+	if len(args) < 2 || strings.HasPrefix(args[1], "--") {
+		return "", "", &cliError{Code: "schema_file_required", Message: "schema validate requires a file", Hint: "Use schema validate <file> --schema <schema>.", ExitCode: ExitUsage, Field: "file", Expected: "repository-relative file path", Actual: fmt.Sprintf("%d arguments", len(args)-1)}
+	}
+	file := args[1]
+	schemaName := ""
+	for i := 2; i < len(args); i++ {
+		switch args[i] {
+		case "--schema":
+			if i+1 >= len(args) {
+				return "", "", &cliError{Code: "missing_option_value", Message: "--schema requires a value", Hint: schemaUsageHint(), ExitCode: ExitUsage, Field: "--schema", Expected: "schema name", Actual: "missing"}
+			}
+			if schemaName != "" {
+				return "", "", &cliError{Code: "duplicate_option", Message: "duplicate schema validate option \"--schema\"", Hint: schemaUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: "--schema"}
+			}
+			schemaName = args[i+1]
+			i++
+		default:
+			return "", "", &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown schema validate option %q", args[i]), Hint: schemaUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "--schema", Actual: args[i]}
+		}
+	}
+	if strings.TrimSpace(schemaName) == "" {
+		return "", "", &cliError{Code: "missing_required_option", Message: "schema validate requires --schema", Hint: schemaUsageHint(), ExitCode: ExitUsage, Field: "--schema", Expected: "required option", Actual: "missing"}
+	}
+	return file, schemaName, nil
+}
+
+func parseSchemaExportArgs(args []string) (project.SchemaExportOptions, *cliError) {
+	options := project.SchemaExportOptions{}
+	seenSchema := false
+	seenAll := false
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--schema":
+			if i+1 >= len(args) {
+				return options, &cliError{Code: "missing_option_value", Message: "--schema requires a value", Hint: schemaUsageHint(), ExitCode: ExitUsage, Field: "--schema", Expected: "schema name", Actual: "missing"}
+			}
+			if seenSchema {
+				return options, &cliError{Code: "duplicate_option", Message: "duplicate schema export option \"--schema\"", Hint: schemaUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: "--schema"}
+			}
+			seenSchema = true
+			options.Schema = args[i+1]
+			i++
+		case "--all":
+			if seenAll {
+				return options, &cliError{Code: "duplicate_option", Message: "duplicate schema export option \"--all\"", Hint: schemaUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: "--all"}
+			}
+			seenAll = true
+			options.All = true
+		case "--dry-run":
+			options.DryRun = true
+		default:
+			return options, &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown schema export option %q", args[i]), Hint: schemaUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "--schema, --all, or --dry-run", Actual: args[i]}
+		}
+	}
+	return options, nil
+}
+
 func runLockCommand(args []string, root project.Root, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
 	if len(args) < 2 || args[0] != "recover" {
 		writeError(stderr, jsonMode, cliError{Code: "not_implemented", Message: "lock command is not implemented yet", Hint: lockRecoverUsageHint(), ExitCode: ExitUsage})
@@ -802,6 +922,10 @@ func isImplementedProjectSubcommand(command string) bool {
 	default:
 		return false
 	}
+}
+
+func schemaUsageHint() string {
+	return "Use schema validate <file> --schema <config|status|event|run-metadata|selected-cli|bridge-session-snapshot> or schema export [--schema <name>|--all] [--dry-run] with optional global --json."
 }
 
 func lockRecoverUsageHint() string {
@@ -962,6 +1086,49 @@ func writeProjectDoctorResult(w io.Writer, result project.DoctorReport, jsonMode
 			fmt.Fprintf(w, "  hint: %s\n", check.Hint)
 		}
 	}
+}
+
+func writeSchemaValidateResult(w io.Writer, result project.SchemaValidateResult, jsonMode bool) {
+	payload := schemaValidateOutput{Schema: result.Schema, FilePath: result.FilePath, Status: result.Status, Checks: result.Checks}
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(payload)
+		return
+	}
+	fmt.Fprintf(w, "schema validation: %s\n", payload.Status)
+	fmt.Fprintf(w, "schema: %s\n", payload.Schema)
+	fmt.Fprintf(w, "file_path: %s\n", payload.FilePath)
+	for _, check := range payload.Checks {
+		fmt.Fprintf(w, "- [%s] %s", check.Status, check.Name)
+		if check.Line != 0 {
+			fmt.Fprintf(w, " line=%d", check.Line)
+		}
+		if check.Field != "" {
+			fmt.Fprintf(w, " field=%s", check.Field)
+		}
+		if check.Actual != "" {
+			fmt.Fprintf(w, " actual=%s", check.Actual)
+		}
+		fmt.Fprintf(w, ": %s\n", check.Message)
+	}
+}
+
+func writeSchemaExportResult(w io.Writer, result project.SchemaExportResult, jsonMode bool) {
+	payload := schemaExportOutput{DryRun: result.DryRun, Schemas: result.Schemas, Written: result.Written, Unchanged: result.Unchanged, WouldWrite: result.WouldWrite, EventID: result.EventID}
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(payload)
+		return
+	}
+	mode := "exported"
+	if payload.DryRun {
+		mode = "schema export dry-run"
+	}
+	fmt.Fprintf(w, "%s: %d schemas\n", mode, len(payload.Schemas))
+	if payload.EventID != "" {
+		fmt.Fprintf(w, "event_id: %s\n", payload.EventID)
+	}
+	fmt.Fprintf(w, "written: %d\n", len(payload.Written))
+	fmt.Fprintf(w, "unchanged: %d\n", len(payload.Unchanged))
+	fmt.Fprintf(w, "would_write: %d\n", len(payload.WouldWrite))
 }
 
 func writeLockRecoverResult(w io.Writer, result project.LockRecoveryResult, jsonMode bool) {
@@ -1266,9 +1433,9 @@ func exitCodeForProblem(code string) int {
 	switch code {
 	case "repo_root_not_found":
 		return ExitNotFound
-	case "artifact_baseline_encode_failed":
+	case "artifact_baseline_encode_failed", "schema_encode_failed":
 		return ExitInternal
-	case "absolute_path", "empty_path", "path_escape", "repo_root_path", "symlink_escape", "symlink_resolution_failed", "path_inspection_failed", "repo_root_required", "helper_state_exists", "last_event_id_mismatch", "status_invalid_json", "status_last_event_id_invalid", "status_active_run_invalid", "event_log_invalid", "event_log_empty", "event_id_invalid", "event_id_exhausted", "run_metadata_invalid", "run_metadata_invalid_json", "active_run_conflict", "run_transition_invalid", "run_not_found", "run_id_ambiguous", "run_root_read_failed", "run_metadata_read_failed", "run_id_collision", "run_artifact_init_invalid_state", "artifact_inspection_failed", "artifact_path_invalid", "status_gate_summary_invalid", "lock_conflict", "lock_stale_recovery_required", "lock_metadata_invalid", "lock_not_found", "lock_identity_mismatch", "lock_release_failed":
+	case "absolute_path", "empty_path", "path_escape", "repo_root_path", "symlink_escape", "symlink_resolution_failed", "path_inspection_failed", "repo_root_required", "helper_state_exists", "last_event_id_mismatch", "status_invalid_json", "status_last_event_id_invalid", "status_active_run_invalid", "event_log_invalid", "event_log_empty", "event_id_invalid", "event_id_exhausted", "run_metadata_invalid", "run_metadata_invalid_json", "active_run_conflict", "run_transition_invalid", "run_not_found", "run_id_ambiguous", "run_root_read_failed", "run_metadata_read_failed", "run_id_collision", "run_artifact_init_invalid_state", "artifact_inspection_failed", "artifact_path_invalid", "status_gate_summary_invalid", "lock_conflict", "lock_stale_recovery_required", "lock_metadata_invalid", "lock_not_found", "lock_identity_mismatch", "lock_release_failed", "schema_validation_read_failed", "schema_reference_invalid", "schema_read_failed", "schema_export_inspection_failed", "schema_export_conflict", "schema_export_read_failed":
 		return ExitSafety
 	default:
 		return ExitUsage
