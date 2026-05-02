@@ -1,0 +1,10 @@
+[
+  {"name":"path_a_standard_valid","work_path":"A_development_execution","work_mode":"standard","sot_policy":"existing_sot_basis","execution_mode":"production_write","gate":"final","want_status":"pass"},
+  {"name":"path_a_standard_missing_artifact","work_path":"A_development_execution","work_mode":"standard","sot_policy":"existing_sot_basis","execution_mode":"production_write","gate":"verification","want_status":"fail","missing_artifact":"verification.md","want_check":"verification"},
+  {"name":"path_a_light_valid","work_path":"A_development_execution","work_mode":"light","sot_policy":"existing_sot_basis","execution_mode":"readiness_hardening","gate":"final","want_status":"pass"},
+  {"name":"path_a_light_malformed_evidence","work_path":"A_development_execution","work_mode":"light","sot_policy":"existing_sot_basis","execution_mode":"readiness_hardening","gate":"verification","want_status":"fail","malformed_artifact":"verification.md","malformed_body":"Status: complete\nVerdict: maybe\n","want_check":"verification"},
+  {"name":"path_b_standard_valid","work_path":"B_discovery_shaping","work_mode":"standard","sot_policy":"minimal_sot_before_code","execution_mode":"research","gate":"final","want_status":"pass"},
+  {"name":"path_b_standard_missing_artifact","work_path":"B_discovery_shaping","work_mode":"standard","sot_policy":"minimal_sot_before_code","execution_mode":"research","gate":"sot","want_status":"fail","missing_artifact":"sot-update.md","want_check":"sot_update"},
+  {"name":"path_b_light_valid","work_path":"B_discovery_shaping","work_mode":"light","sot_policy":"full_sot_before_code","execution_mode":"docs_only","gate":"final","want_status":"pass"},
+  {"name":"path_b_light_malformed_evidence","work_path":"B_discovery_shaping","work_mode":"light","sot_policy":"full_sot_before_code","execution_mode":"docs_only","gate":"roadmap","want_status":"fail","malformed_artifact":"roadmap-update.md","malformed_body":"Status: not_applicable\nReason:   \n","want_check":"roadmap_trace"}
+]

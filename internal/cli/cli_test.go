@@ -1377,8 +1377,11 @@ func TestGateCheckCLIJSONHumanAndPlanFailure(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &failed); err != nil {
 		t.Fatalf("decode failed gate check: %v\n%s", err, stdout.String())
 	}
-	if failed.Status != project.GateStatusFail || failed.EventID != "evt-000004" || !cliGateCheckStatus(failed.Checks, "intake_status", project.GateStatusFail) || len(failed.MissingEvidence) == 0 {
-		t.Fatalf("failed gate = %#v, want intake failure with missing evidence", failed)
+	if failed.Status != project.GateStatusFail || failed.EventID != "evt-000004" || failed.ReportPath == "" || !cliGateCheckStatus(failed.Checks, "intake_status", project.GateStatusFail) || len(failed.MissingEvidence) == 0 {
+		t.Fatalf("failed gate = %#v, want intake failure with report path and missing evidence", failed)
+	}
+	if text := readCLIText(t, filepath.Join(repo, failed.ReportPath)); !strings.Contains(text, `"status": "fail"`) || !strings.Contains(text, `"event_id": "evt-000004"`) {
+		t.Fatalf("gate report missing failed result: %s", text)
 	}
 	if text := readCLIText(t, filepath.Join(repo, ".kkachi", "events.jsonl")); !strings.Contains(text, `"type":"gate.failed"`) {
 		t.Fatalf("events missing gate.failed: %s", text)
@@ -1400,8 +1403,11 @@ func TestGateCheckCLIJSONHumanAndPlanFailure(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &passed); err != nil {
 		t.Fatalf("decode passed gate check: %v\n%s", err, stdout.String())
 	}
-	if passed.RunID != created.RunID || passed.Gate != project.GateIntake || passed.Status != project.GateStatusPass || passed.EventID != "evt-000005" {
-		t.Fatalf("passed gate = %#v, want pass evt-000005", passed)
+	if passed.RunID != created.RunID || passed.Gate != project.GateIntake || passed.Status != project.GateStatusPass || passed.EventID != "evt-000005" || passed.ReportPath != failed.ReportPath {
+		t.Fatalf("passed gate = %#v, want pass evt-000005 and same report path %q", passed, failed.ReportPath)
+	}
+	if text := readCLIText(t, filepath.Join(repo, passed.ReportPath)); !strings.Contains(text, `"status": "pass"`) || !strings.Contains(text, `"event_id": "evt-000005"`) {
+		t.Fatalf("gate report missing passed result: %s", text)
 	}
 
 	stdout.Reset()
@@ -1422,8 +1428,8 @@ func TestGateCheckCLIJSONHumanAndPlanFailure(t *testing.T) {
 	if code := runWithOptions([]string{"gate", "check", created.RunID, "intake"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("gate check human exit = %d stderr=%s", code, stderr.String())
 	}
-	if output := stdout.String(); !strings.Contains(output, "gate check for run: "+created.RunID) || !strings.Contains(output, "status: pass") || !strings.Contains(output, "event_id: evt-000007") {
-		t.Fatalf("human gate output = %q, want pass summary", output)
+	if output := stdout.String(); !strings.Contains(output, "gate check for run: "+created.RunID) || !strings.Contains(output, "status: pass") || !strings.Contains(output, "event_id: evt-000007") || !strings.Contains(output, "report_path: ") {
+		t.Fatalf("human gate output = %q, want pass summary with report path", output)
 	}
 
 	stdout.Reset()

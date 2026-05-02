@@ -1069,3 +1069,213 @@ func TestCheckGateFinalFailsMissingFinalReportOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckGateWritesRunLocalReport(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+		t.Fatalf("InitArtifacts() error = %v", err)
+	}
+
+	failed, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateIntake, Now: testRunNow(5)})
+	if err != nil {
+		t.Fatalf("CheckGate(fail) error = %v", err)
+	}
+	wantPath := filepath.ToSlash(filepath.Join(".kkachi", "runs", created.Metadata.RunID, "gate-reports", "intake.json"))
+	if failed.ReportPath != wantPath {
+		t.Fatalf("ReportPath = %q, want %q", failed.ReportPath, wantPath)
+	}
+	var report gateReport
+	readJSONFile(t, filepath.Join(repo, failed.ReportPath), &report)
+	if report.RunID != created.Metadata.RunID || report.Gate != GateIntake || report.Status != GateStatusFail || report.EventID != "evt-000004" || report.GeneratedAt != "2026-04-30T01:02:05Z" || report.ReportPath != wantPath {
+		t.Fatalf("report = %#v, want failed intake report with event/time/path", report)
+	}
+	if len(report.MissingEvidence) == 0 || !gateCheckStatus(report.Checks, "intake_status", GateStatusFail) {
+		t.Fatalf("report = %#v, want failed checks and missing evidence", report)
+	}
+
+	writeIntakeClassification(t, repo, created.Metadata, "")
+	passed, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateIntake, Now: testRunNow(6)})
+	if err != nil {
+		t.Fatalf("CheckGate(pass) error = %v", err)
+	}
+	if passed.ReportPath != wantPath {
+		t.Fatalf("passed ReportPath = %q, want %q", passed.ReportPath, wantPath)
+	}
+	readJSONFile(t, filepath.Join(repo, passed.ReportPath), &report)
+	if report.Status != GateStatusPass || report.EventID != "evt-000005" || len(report.MissingEvidence) != 0 || !gateCheckStatus(report.Checks, "intake_status", GateStatusPass) {
+		t.Fatalf("report = %#v, want overwritten passing intake report", report)
+	}
+	metadata := readRunMetadata(t, repo, created.Metadata.RunID)
+	state := metadata.GateState[GateIntake].(map[string]any)
+	if state["report_path"] != wantPath {
+		t.Fatalf("gate_state report_path = %#v, want %q", state["report_path"], wantPath)
+	}
+	var status map[string]any
+	readJSONFile(t, filepath.Join(repo, ".kkachi", "status.json"), &status)
+	summary := status["gate_summary"].(map[string]any)[GateIntake].(map[string]any)
+	if summary["report_path"] != wantPath {
+		t.Fatalf("status gate_summary report_path = %#v, want %q", summary["report_path"], wantPath)
+	}
+}
+
+type gateRegressionFixture struct {
+	Name              string `json:"name"`
+	WorkPath          string `json:"work_path"`
+	WorkMode          string `json:"work_mode"`
+	SOTPolicy         string `json:"sot_policy"`
+	ExecutionMode     string `json:"execution_mode"`
+	Gate              string `json:"gate"`
+	WantStatus        string `json:"want_status"`
+	MissingArtifact   string `json:"missing_artifact"`
+	MalformedArtifact string `json:"malformed_artifact"`
+	MalformedBody     string `json:"malformed_body"`
+	WantCheck         string `json:"want_check"`
+}
+
+func TestGateRegressionFixturesPathModeMatrix(t *testing.T) {
+	fixtures := loadGateRegressionFixtures(t)
+	seen := map[string]map[string]bool{}
+	for _, fixture := range fixtures {
+		fixture := fixture
+		t.Run(fixture.Name, func(t *testing.T) {
+			fixtureKey := fixture.WorkPath + "/" + fixture.WorkMode
+			if seen[fixtureKey] == nil {
+				seen[fixtureKey] = map[string]bool{}
+			}
+			seen[fixtureKey][fixture.WantStatus] = true
+
+			repo := initializedRepo(t)
+			root, _ := DiscoverRoot(repo)
+			options := deterministicCreateRunOptions()
+			options.TaskID = "gates-005"
+			options.WorkPath = fixture.WorkPath
+			options.WorkMode = fixture.WorkMode
+			options.SOTPolicy = fixture.SOTPolicy
+			options.ExecutionMode = fixture.ExecutionMode
+			options.Redteam = ""
+			created, err := CreateRun(root, options)
+			if err != nil {
+				t.Fatalf("CreateRun() error = %v", err)
+			}
+			if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+				t.Fatalf("InitArtifacts() error = %v", err)
+			}
+			metadata := readRunMetadata(t, repo, created.Metadata.RunID)
+			if fixture.Gate == GateRoadmap && fixture.MalformedArtifact == "roadmap-update.md" {
+				metadata.TaskID = nil
+				writeRunMetadataForTest(t, repo, metadata)
+			}
+			writeCompleteGateFixtureArtifacts(t, repo, metadata)
+			if fixture.MissingArtifact != "" {
+				if err := os.Remove(filepath.Join(repo, ".kkachi", "runs", metadata.RunID, filepath.FromSlash(fixture.MissingArtifact))); err != nil {
+					t.Fatalf("remove missing fixture artifact: %v", err)
+				}
+			}
+			if fixture.MalformedArtifact != "" {
+				mustWriteFile(t, filepath.Join(repo, ".kkachi", "runs", metadata.RunID, filepath.FromSlash(fixture.MalformedArtifact)), []byte(fixture.MalformedBody))
+			}
+
+			if fixture.Gate == GateFinal && fixture.WantStatus == GateStatusPass {
+				passFixturePriorGates(t, root, metadata.RunID)
+			}
+			result, err := CheckGate(root, GateCheckOptions{RunID: metadata.RunID, Gate: fixture.Gate, Now: testRunNow(20)})
+			if err != nil {
+				t.Fatalf("CheckGate(%s) error = %v", fixture.Gate, err)
+			}
+			if result.Status != fixture.WantStatus {
+				t.Fatalf("result = %#v, want status %s", result, fixture.WantStatus)
+			}
+			if fixture.WantCheck != "" && !gateCheckStatus(result.Checks, fixture.WantCheck, fixture.WantStatus) {
+				t.Fatalf("checks = %#v, want %s %s", result.Checks, fixture.WantCheck, fixture.WantStatus)
+			}
+			if result.ReportPath == "" {
+				t.Fatalf("result missing report path: %#v", result)
+			}
+			var report gateReport
+			readJSONFile(t, filepath.Join(repo, result.ReportPath), &report)
+			if report.Status != fixture.WantStatus || report.Gate != fixture.Gate || report.EventID != result.EventID || report.ReportPath != result.ReportPath {
+				t.Fatalf("report = %#v, want status/gate/event/path from result %#v", report, result)
+			}
+		})
+	}
+
+	for _, key := range []string{"A_development_execution/standard", "A_development_execution/light", "B_discovery_shaping/standard", "B_discovery_shaping/light"} {
+		if !seen[key][GateStatusPass] || !seen[key][GateStatusFail] {
+			t.Fatalf("fixtures for %s = %#v, want valid and invalid coverage", key, seen[key])
+		}
+	}
+}
+
+func loadGateRegressionFixtures(t *testing.T) []gateRegressionFixture {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", "gates-005", "scenarios.json"))
+	if err != nil {
+		t.Fatalf("read gates-005 fixtures: %v", err)
+	}
+	var fixtures []gateRegressionFixture
+	if err := json.Unmarshal(data, &fixtures); err != nil {
+		t.Fatalf("decode gates-005 fixtures: %v", err)
+	}
+	if len(fixtures) == 0 {
+		t.Fatal("gates-005 fixtures are empty")
+	}
+	return fixtures
+}
+
+func writeCompleteGateFixtureArtifacts(t *testing.T, repo string, metadata RunMetadata) {
+	t.Helper()
+	extra := ""
+	if metadata.WorkMode == "light" {
+		extra = "Light Mode Reason: fixture covers a low-risk abbreviated run\n"
+	}
+	writeIntakeClassification(t, repo, metadata, extra)
+	if metadata.WorkPath == "B_discovery_shaping" {
+		writeMarkdownArtifact(t, repo, metadata.RunID, "sot-update.md", "Status: complete\nSOT: created before handoff\n")
+	} else {
+		writeMarkdownArtifact(t, repo, metadata.RunID, "sot-basis.md", "Status: complete\nSource: fixture SOT\n")
+	}
+	writeMarkdownArtifact(t, repo, metadata.RunID, "roadmap-update.md", "Status: complete\nTrace: gates-005\n")
+	writeCompletedPlanArtifacts(t, repo, metadata.RunID)
+	writeDiffPatch(t, repo, metadata.RunID)
+	writeMarkdownArtifact(t, repo, metadata.RunID, "impl-log.md", "Status: complete\nImplementation: fixture\n")
+	writeMarkdownArtifact(t, repo, metadata.RunID, "review.md", "Status: complete\nReview: fixture approved\n")
+	writeMarkdownArtifact(t, repo, metadata.RunID, "test-log.md", "Status: complete\nTests: fixture pass\n")
+	writeMarkdownArtifact(t, repo, metadata.RunID, "verification.md", "Status: complete\nVerdict: pass\n")
+	writeMarkdownArtifact(t, repo, metadata.RunID, "docs-update.md", "Status: complete\nNo Change Reason: fixture only\n")
+	writeMarkdownArtifact(t, repo, metadata.RunID, "final-report.md", "Status: complete\nReport: fixture complete\n")
+	for _, artifact := range metadata.RequiredArtifacts {
+		if strings.HasPrefix(artifact, "redteam/") {
+			writeMarkdownArtifact(t, repo, metadata.RunID, artifact, "Status: complete\nReview: fixture no issues\n")
+		}
+	}
+}
+
+func passFixturePriorGates(t *testing.T, root Root, runID string) {
+	t.Helper()
+	for i, gate := range []string{GateIntake, GateSOT, GateRoadmap, GatePlan, GateImplementation, GateReview, GateVerification, GateDocs} {
+		result, err := CheckGate(root, GateCheckOptions{RunID: runID, Gate: gate, Now: testRunNow(10 + i)})
+		if err != nil {
+			t.Fatalf("CheckGate(%s) error = %v", gate, err)
+		}
+		if result.Status != GateStatusPass {
+			t.Fatalf("CheckGate(%s) = %#v, want pass before final", gate, result)
+		}
+	}
+}
+
+func TestGateReportPathRejectsUnsafeGateNames(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	for _, gate := range []string{"../intake", "nested/gate", `bad\\gate`, `bad:gate`, `bad?gate`, `bad<gate`} {
+		if _, err := gateReportPath(root, "run-20260430T010203Z-abcdef123456", gate); err == nil {
+			t.Fatalf("gateReportPath(%q) error = nil, want unsafe gate rejection", gate)
+		} else {
+			assertProblemCode(t, err, "gate_report_path_invalid")
+		}
+	}
+}

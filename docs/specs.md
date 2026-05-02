@@ -108,6 +108,8 @@ Default target-project layout:
         implementation-readiness.md
         handoff-to-development.md
       final-report.md
+      gate-reports/
+        <gate>.json
 ```
 
 Light mode may use the same artifact names with shorter content or explicit not-applicable records. It must not introduce an incompatible artifact schema without a versioned migration.
@@ -355,11 +357,12 @@ Stable JSON output has the following shape:
     }
   ],
   "missing_evidence": [],
-  "event_id": "evt-000004"
+  "event_id": "evt-000004",
+  "report_path": ".kkachi/runs/run-.../gate-reports/intake.json"
 }
 ```
 
-Behavior in `gates-001` through `gates-004`:
+Behavior in `gates-001` through `gates-005`:
 
 - `intake` is implemented by reusing the deterministic intake checks from `artifact validate`.
 - `sot` is implemented by requiring completed `sot-basis.md` for Path A or completed `sot-update.md` for Path B.
@@ -374,9 +377,11 @@ Behavior in `gates-001` through `gates-004`:
 - `gate final <run_id>` is implemented with the same lock, event, and status-update contract as `gate check`. It exits `0` on pass and `3` on fail.
 - Unknown gate names are usage errors.
 - Passing checks append `gate.passed`; failing checks append `gate.failed`; blocked checks append `gate.checked`.
-- Every successful `gate check` updates both `run-metadata.json.gate_state[gate]` and `status.json.gate_summary[gate]` with the status, event id, and checked timestamp.
+- Every successful `gate check` writes a run-local JSON report to `.kkachi/runs/<run_id>/gate-reports/<gate>.json` with `run_id`, `gate`, `status`, `event_id`, `generated_at`, `report_path`, `checks`, and `missing_evidence`. Re-checking a gate overwrites that gate's report with the latest result.
+- Every successful `gate check` updates both `run-metadata.json.gate_state[gate]` and `status.json.gate_summary[gate]` with the status, event id, checked timestamp, and report path.
 - A passing gate exits `0`; failed or blocked gates exit `3`.
 - `gate check` is serialized by `.kkachi/project_write.lock` and refuses status/event incoherence before mutation.
+- `gates-005` regression fixtures cover valid and invalid gate outcomes for Path A Standard, Path A Light, Path B Standard, and Path B Light runs, including malformed evidence and missing artifact cases.
 
 Command UX rules:
 

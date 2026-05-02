@@ -221,9 +221,11 @@ func TestGates001And002GateCheckWorkflow(t *testing.T) {
 	if err := json.Unmarshal(pendingOutput, &pending); err != nil {
 		t.Fatalf("pending gate output is not JSON: %v\n%s", err, string(pendingOutput))
 	}
-	if pending.RunID != created.RunID || pending.Gate != "intake" || pending.Status != "fail" || pending.EventID != "evt-000004" || len(pending.MissingEvidence) == 0 || !gateCheckListed(pending.Checks, "intake_status", "fail") {
-		t.Fatalf("pending gate = %#v, want intake fail with evidence and evt-000004", pending)
+	if pending.RunID != created.RunID || pending.Gate != "intake" || pending.Status != "fail" || pending.EventID != "evt-000004" || pending.ReportPath == "" || len(pending.MissingEvidence) == 0 || !gateCheckListed(pending.Checks, "intake_status", "fail") {
+		t.Fatalf("pending gate = %#v, want intake fail with report path, evidence, and evt-000004", pending)
 	}
+	assertOutputContains(t, readFile(t, filepath.Join(repo, pending.ReportPath)), `"status": "fail"`, "failed gate report")
+	assertOutputContains(t, readFile(t, filepath.Join(repo, pending.ReportPath)), `"event_id": "evt-000004"`, "failed gate report")
 	assertOutputContains(t, readFile(t, filepath.Join(repo, ".kkachi", "events.jsonl")), `"type":"gate.failed"`, "events after failed gate check")
 	assertOutputContains(t, readFile(t, filepath.Join(repo, ".kkachi", "status.json")), `"event_id": "evt-000004"`, "status after failed gate check")
 	assertOutputContains(t, readFile(t, filepath.Join(repo, ".kkachi", "runs", created.RunID, "run-metadata.json")), `"status": "fail"`, "metadata after failed gate check")
@@ -234,9 +236,11 @@ func TestGates001And002GateCheckWorkflow(t *testing.T) {
 	if err := json.Unmarshal(passOutput, &passed); err != nil {
 		t.Fatalf("passing gate output is not JSON: %v\n%s", err, string(passOutput))
 	}
-	if passed.RunID != created.RunID || passed.Gate != "intake" || passed.Status != "pass" || passed.EventID != "evt-000005" || len(passed.MissingEvidence) != 0 || !gateCheckListed(passed.Checks, "required_artifacts", "pass") {
-		t.Fatalf("passed gate = %#v, want intake pass with evt-000005", passed)
+	if passed.RunID != created.RunID || passed.Gate != "intake" || passed.Status != "pass" || passed.EventID != "evt-000005" || passed.ReportPath != pending.ReportPath || len(passed.MissingEvidence) != 0 || !gateCheckListed(passed.Checks, "required_artifacts", "pass") {
+		t.Fatalf("passed gate = %#v, want intake pass with same report path %q and evt-000005", passed, pending.ReportPath)
 	}
+	assertOutputContains(t, readFile(t, filepath.Join(repo, passed.ReportPath)), `"status": "pass"`, "passing gate report")
+	assertOutputContains(t, readFile(t, filepath.Join(repo, passed.ReportPath)), `"event_id": "evt-000005"`, "passing gate report")
 	assertOutputContains(t, readFile(t, filepath.Join(repo, ".kkachi", "events.jsonl")), `"type":"gate.passed"`, "events after passing gate check")
 	assertOutputContains(t, readFile(t, filepath.Join(repo, ".kkachi", "status.json")), `"status": "pass"`, "status after passing gate check")
 	assertOutputContains(t, readFile(t, filepath.Join(repo, ".kkachi", "runs", created.RunID, "run-metadata.json")), `"event_id": "evt-000005"`, "metadata after passing gate check")
@@ -666,6 +670,7 @@ type gateCheckOutput struct {
 	Gate            string      `json:"gate"`
 	Status          string      `json:"status"`
 	EventID         string      `json:"event_id"`
+	ReportPath      string      `json:"report_path"`
 	MissingEvidence []string    `json:"missing_evidence"`
 	Checks          []gateCheck `json:"checks"`
 }

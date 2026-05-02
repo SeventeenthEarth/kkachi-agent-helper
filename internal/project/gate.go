@@ -58,6 +58,7 @@ type GateCheckResult struct {
 	Checks          []GateCheck `json:"checks"`
 	MissingEvidence []string    `json:"missing_evidence"`
 	EventID         string      `json:"event_id"`
+	ReportPath      string      `json:"report_path,omitempty"`
 }
 
 type GateCheck struct {
@@ -108,12 +109,21 @@ func checkGateUnlocked(root Root, options GateCheckOptions) (GateCheckResult, er
 		return GateCheckResult{}, err
 	}
 	result.EventID = nextID
+	reportPath, err := gateReportPath(root, result.RunID, result.Gate)
+	if err != nil {
+		return GateCheckResult{}, err
+	}
+	result.ReportPath = reportPath.Relative
 	appendResult, err := appendEventWithStatusMutation(root, AppendEventOptions{Type: gateEventType(result.Status), RunID: metadata.RunID, Payload: gateEventPayload(result), Now: options.Now}, func(status map[string]any, occurredAt string) error {
-		metadata.GateState[gate] = gateStateSummary(result.Status, nextID, occurredAt, len(result.Checks), len(result.MissingEvidence))
+		// Write the report before metadata/status so fail-closed state preserves the gate evidence for the appended event.
+		if _, err := writeGateReport(reportPath, result, occurredAt); err != nil {
+			return err
+		}
+		metadata.GateState[gate] = gateStateSummary(result.Status, nextID, occurredAt, len(result.Checks), len(result.MissingEvidence), reportPath.Relative)
 		if err := writeRunMetadataExisting(metadataPath, metadata); err != nil {
 			return err
 		}
-		return updateStatusGateSummary(status, gate, metadata.RunID, result.Status, nextID, occurredAt)
+		return updateStatusGateSummary(status, gate, metadata.RunID, result.Status, nextID, occurredAt, reportPath.Relative)
 	})
 	if err != nil {
 		return GateCheckResult{}, err
@@ -344,14 +354,18 @@ func gateEventPayload(result GateCheckResult) map[string]any {
 			blocked++
 		}
 	}
-	return map[string]any{"run_id": result.RunID, "gate": result.Gate, "status": result.Status, "checks": len(result.Checks), "failed_checks": failed, "blocked_checks": blocked, "missing_evidence": result.MissingEvidence}
+	payload := map[string]any{"run_id": result.RunID, "gate": result.Gate, "status": result.Status, "checks": len(result.Checks), "failed_checks": failed, "blocked_checks": blocked, "missing_evidence": result.MissingEvidence}
+	if result.ReportPath != "" {
+		payload["report_path"] = result.ReportPath
+	}
+	return payload
 }
 
-func gateStateSummary(status string, eventID string, checkedAt string, checks int, missingEvidence int) map[string]any {
-	return map[string]any{"status": status, "event_id": eventID, "checked_at": checkedAt, "checks": checks, "missing_evidence": missingEvidence}
+func gateStateSummary(status string, eventID string, checkedAt string, checks int, missingEvidence int, reportPath string) map[string]any {
+	return map[string]any{"status": status, "event_id": eventID, "checked_at": checkedAt, "checks": checks, "missing_evidence": missingEvidence, "report_path": reportPath}
 }
 
-func updateStatusGateSummary(status map[string]any, gate string, runID string, gateStatus string, eventID string, checkedAt string) error {
+func updateStatusGateSummary(status map[string]any, gate string, runID string, gateStatus string, eventID string, checkedAt string, reportPath string) error {
 	summary, ok := status["gate_summary"].(map[string]any)
 	if !ok {
 		if status["gate_summary"] == nil {
@@ -360,7 +374,7 @@ func updateStatusGateSummary(status map[string]any, gate string, runID string, g
 			return &Problem{Code: "status_gate_summary_invalid", Message: "project status gate_summary must be an object", Hint: "Restore status.json from a coherent backup before checking gates.", Path: StatusPath, Field: "gate_summary", Expected: "object", Actual: fmt.Sprintf("%T", status["gate_summary"])}
 		}
 	}
-	summary[gate] = map[string]any{"run_id": runID, "status": gateStatus, "event_id": eventID, "checked_at": checkedAt}
+	summary[gate] = map[string]any{"run_id": runID, "status": gateStatus, "event_id": eventID, "checked_at": checkedAt, "report_path": reportPath}
 	status["gate_summary"] = summary
 	return nil
 }

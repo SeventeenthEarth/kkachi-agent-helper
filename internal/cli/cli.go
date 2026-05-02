@@ -118,6 +118,7 @@ type gateCheckOutput struct {
 	Checks          []project.GateCheck `json:"checks"`
 	MissingEvidence []string            `json:"missing_evidence"`
 	EventID         string              `json:"event_id"`
+	ReportPath      string              `json:"report_path,omitempty"`
 }
 
 type runListOutput struct {
@@ -1014,13 +1015,16 @@ func writeArtifactListResult(w io.Writer, runID string, artifacts []project.Arti
 
 func writeGateCheckResult(w io.Writer, result project.GateCheckResult, jsonMode bool) {
 	if jsonMode {
-		_ = json.NewEncoder(w).Encode(gateCheckOutput{RunID: result.RunID, Gate: result.Gate, Status: result.Status, Checks: result.Checks, MissingEvidence: result.MissingEvidence, EventID: result.EventID})
+		_ = json.NewEncoder(w).Encode(gateCheckOutput{RunID: result.RunID, Gate: result.Gate, Status: result.Status, Checks: result.Checks, MissingEvidence: result.MissingEvidence, EventID: result.EventID, ReportPath: result.ReportPath})
 		return
 	}
 	fmt.Fprintf(w, "gate check for run: %s\n", result.RunID)
 	fmt.Fprintf(w, "gate: %s\n", result.Gate)
 	fmt.Fprintf(w, "status: %s\n", result.Status)
 	fmt.Fprintf(w, "event_id: %s\n", result.EventID)
+	if result.ReportPath != "" {
+		fmt.Fprintf(w, "report_path: %s\n", result.ReportPath)
+	}
 	if len(result.MissingEvidence) > 0 {
 		fmt.Fprintln(w, "missing_evidence:")
 		for _, evidence := range result.MissingEvidence {
