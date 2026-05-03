@@ -34,6 +34,7 @@ var schemaPaths = []string{
 	".kkachi/schemas/run-metadata.schema.json",
 	".kkachi/schemas/selected-cli.schema.json",
 	".kkachi/schemas/bridge-session-snapshot.schema.json",
+	".kkachi/schemas/install-manifest.schema.json",
 }
 
 // InitOptions controls project initialization. Tests may inject deterministic

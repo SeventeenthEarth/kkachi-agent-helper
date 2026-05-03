@@ -332,8 +332,8 @@ kkachi-agent-helper event append <type> --run <run_id> --payload <json>
 kkachi-agent-helper schema validate <file> --schema <schema>
 kkachi-agent-helper schema export [--schema <schema>|--all] [--dry-run]
 kkachi-agent-helper schema migrate --from <version> --to <version>
-kkachi-agent-helper install skills --source <path-or-version>
-kkachi-agent-helper install templates --source <path-or-version>
+kkachi-agent-helper install skills --source <path-or-version> [--dry-run]
+kkachi-agent-helper install templates --source <path-or-version> [--dry-run]
 ```
 
 ### `gate check`
@@ -450,6 +450,54 @@ Dry-run exports are read-only and report `would_write` without an event. Real ex
 
 `packg-002` registers the first `0.1 -> 0.1` no-op migration. Dry-run migrations are read-only and report backup/migration intent without taking a lock, writing backups, or appending an event. Real migrations are serialized by `.kkachi/project_write.lock`, refuse status/event incoherence, refuse unknown source versions and unregistered paths, copy versioned helper state into `.kkachi/backups/schema-migrations/<timestamp>-<from>-to-<to>/`, and append `schema.migrated` after backup creation.
 
+### `install skills/templates --dry-run`
+
+`packg-003` freezes the initial install package contract without performing real installs. Local package sources contain a JSON manifest named `kkachi-install-manifest.json` at the source root. Versioned package sources remain future work.
+
+Manifest shape:
+
+```json
+{
+  "version": "0.1",
+  "kind": "skills",
+  "package": {"name": "kkachi-hermes-skills", "version": "0.1.0"},
+  "compat": {
+    "required_helper": ">=0.1.0",
+    "required_bridge": ">=0.1.0",
+    "required_skills": ">=0.1.0"
+  },
+  "items": [
+    {
+      "source": "skills/kkachi-orchestrate/SKILL.md",
+      "target": ".codex/skills/kkachi-orchestrate/SKILL.md",
+      "sha256": "64-lowercase-hex-digest",
+      "owner_marker": "<!-- kkachi-agent-helper:managed -->"
+    }
+  ]
+}
+```
+
+Dry-run JSON output has the following stable shape:
+
+```json
+{
+  "dry_run": true,
+  "kind": "skills",
+  "source": "/local/package",
+  "manifest_path": "/local/package/kkachi-install-manifest.json",
+  "package": {"name": "kkachi-hermes-skills", "version": "0.1.0"},
+  "compat": {"required_helper": ">=0.1.0"},
+  "summary": {"create": 1, "update": 0, "unchanged": 0, "preserve": 0, "conflict": 0},
+  "create": [{"target": ".codex/skills/x/SKILL.md", "source": "skills/x/SKILL.md", "sha256": "...", "owner_marker": "...", "reason": "..."}],
+  "update": [],
+  "unchanged": [],
+  "preserve": [],
+  "conflict": []
+}
+```
+
+Dry-run install is read-only: it does not take `.kkachi/project_write.lock`, does not append events, and does not create or replace target files. It validates manifest shape, command kind, source-root confinement, target repository confinement, duplicate targets, and SHA-256 checksums. Existing regular files containing the declared owner marker are classified as `unchanged` or `update`; existing regular files without the owner marker are classified as `preserve`; non-regular targets are reported as `conflict`. Real install/update, drift checks, and compatibility enforcement are reserved for `packg-004`.
+
 Command UX rules:
 
 - `--json` emits machine-readable output and no decorative text.
@@ -496,7 +544,7 @@ Command UX rules:
 - `.kkachi/events.jsonl` is readable, non-empty JSONL with no blank lines, valid event ids, and sequential `evt-000001`-style ids;
 - status/event coherence, requiring `status.last_event_id` to match the event-log tail id;
 - canonical `.kkachi/*` state, schema, and lock paths stay within the repository and do not symlink-escape;
-- the six canonical schema files exist, are readable JSON objects, and declare their own `version`;
+- the seven canonical schema files exist, are readable JSON objects, and declare their own `version`;
 - lock files are absent, present, unreadable, or path-unsafe.
 
 JSON output has the following stable shape:
@@ -628,7 +676,6 @@ The following items remain open until roadmap tasks close them:
 - release packaging strategy;
 - run id format;
 - exact lock stale detection policy;
-- skill/template package manifest format;
 - whether helper exports a library API in addition to the CLI;
 - whether bridge capability registry validation is direct or delegated to `kkachi-hermes-skills` assets;
 - release versioning and compatibility guarantees.

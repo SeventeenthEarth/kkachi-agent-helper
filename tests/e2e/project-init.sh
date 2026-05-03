@@ -26,6 +26,7 @@ required_files="
 .kkachi/schemas/run-metadata.schema.json
 .kkachi/schemas/selected-cli.schema.json
 .kkachi/schemas/bridge-session-snapshot.schema.json
+.kkachi/schemas/install-manifest.schema.json
 "
 
 for relative in $required_files; do
@@ -68,6 +69,62 @@ assert_contains "$tmpdir/schema-status.json" '"schema":"status"' "schema status 
 assert_contains "$tmpdir/schema-status.json" '"status":"pass"' "schema status JSON"
 assert_contains "$tmpdir/schema-events.json" '"schema":"event"' "schema events JSON"
 assert_contains "$tmpdir/schema-events.json" '"status":"pass"' "schema events JSON"
+
+
+install_source="$repo/fixtures/install-source"
+mkdir -p "$install_source/skills/create" "$install_source/skills/update" "$install_source/skills/preserve" "$repo/.codex/skills/update" "$repo/.codex/skills/preserve"
+printf '%s\ncreate\n' '<!-- kkachi-agent-helper:managed -->' > "$install_source/skills/create/SKILL.md"
+printf '%s\nnew\n' '<!-- kkachi-agent-helper:managed -->' > "$install_source/skills/update/SKILL.md"
+printf '%s\nupstream\n' '<!-- kkachi-agent-helper:managed -->' > "$install_source/skills/preserve/SKILL.md"
+printf '%s\nold\n' '<!-- kkachi-agent-helper:managed -->' > "$repo/.codex/skills/update/SKILL.md"
+printf 'user custom\n' > "$repo/.codex/skills/preserve/SKILL.md"
+python3 - "$install_source" <<'PY_INSTALL'
+import hashlib, json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+items = []
+for source, target in [
+    ("skills/create/SKILL.md", ".codex/skills/create/SKILL.md"),
+    ("skills/update/SKILL.md", ".codex/skills/update/SKILL.md"),
+    ("skills/preserve/SKILL.md", ".codex/skills/preserve/SKILL.md"),
+]:
+    data = (root / source).read_bytes()
+    items.append({"source": source, "target": target, "sha256": hashlib.sha256(data).hexdigest(), "owner_marker": "<!-- kkachi-agent-helper:managed -->"})
+manifest = {"version": "0.1", "kind": "skills", "package": {"name": "kkachi-e2e-pack", "version": "0.1.0"}, "compat": {"required_helper": ">=0.1.0", "required_bridge": ">=0.1.0", "required_skills": ">=0.1.0"}, "items": items}
+(root / "kkachi-install-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+PY_INSTALL
+install_events_before="$tmpdir/install-events-before.jsonl"
+cp "$repo/.kkachi/events.jsonl" "$install_events_before"
+(cd "$repo" && "$helper" install skills --source "$install_source" --dry-run --json > "$tmpdir/install-dry-run.json" 2> "$tmpdir/install-dry-run.err")
+assert_contains "$tmpdir/install-dry-run.json" '"dry_run":true' "install dry-run JSON"
+assert_contains "$tmpdir/install-dry-run.json" '"kind":"skills"' "install dry-run JSON"
+assert_contains "$tmpdir/install-dry-run.json" '"create":1' "install dry-run JSON"
+assert_contains "$tmpdir/install-dry-run.json" '"update":1' "install dry-run JSON"
+assert_contains "$tmpdir/install-dry-run.json" '"preserve":1' "install dry-run JSON"
+assert_contains "$tmpdir/install-dry-run.json" '"target":".codex/skills/create/SKILL.md"' "install dry-run JSON"
+assert_contains "$repo/.codex/skills/update/SKILL.md" 'old' "install dry-run target preservation"
+assert_contains "$repo/.codex/skills/preserve/SKILL.md" 'user custom' "install dry-run user-owned preservation"
+if [ -e "$repo/.codex/skills/create/SKILL.md" ]; then
+  echo "install dry-run unexpectedly created target" >&2
+  exit 1
+fi
+if ! cmp -s "$install_events_before" "$repo/.kkachi/events.jsonl"; then
+  echo "install dry-run unexpectedly mutated repo events" >&2
+  diff -u "$install_events_before" "$repo/.kkachi/events.jsonl" >&2 || true
+  exit 1
+fi
+if (cd "$repo" && "$helper" install skills --source "$install_source" --json > "$tmpdir/install-real.json" 2> "$tmpdir/install-real.err"); then
+  echo "non-dry-run install unexpectedly succeeded" >&2
+  exit 1
+fi
+assert_contains "$tmpdir/install-real.err" '"code":"install_real_not_implemented"' "install real error"
+if (cd "$repo" && "$helper" install skills --source "$repo/fixtures/missing-install-source" --dry-run --json > "$tmpdir/install-missing-source.json" 2> "$tmpdir/install-missing-source.err"); then
+  echo "missing source install unexpectedly succeeded" >&2
+  exit 1
+fi
+assert_contains "$tmpdir/install-missing-source.err" '"code":"install_source_invalid"' "install missing source error"
+(cd "$repo" && "$helper" schema validate fixtures/install-source/kkachi-install-manifest.json --schema install-manifest --json > "$tmpdir/install-manifest-schema.json" 2> "$tmpdir/install-manifest-schema.err")
+assert_contains "$tmpdir/install-manifest-schema.json" '"schema":"install-manifest"' "install manifest schema JSON"
+assert_contains "$tmpdir/install-manifest-schema.json" '"status":"pass"' "install manifest schema JSON"
 
 export_repo="$tmpdir/export-repo"
 mkdir -p "$export_repo/.git"
