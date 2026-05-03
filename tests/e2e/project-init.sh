@@ -113,10 +113,50 @@ if ! cmp -s "$install_events_before" "$repo/.kkachi/events.jsonl"; then
   exit 1
 fi
 if (cd "$repo" && "$helper" install skills --source "$install_source" --json > "$tmpdir/install-real.json" 2> "$tmpdir/install-real.err"); then
-  echo "non-dry-run install unexpectedly succeeded" >&2
+  echo "conflicting real install unexpectedly succeeded" >&2
   exit 1
 fi
-assert_contains "$tmpdir/install-real.err" '"code":"install_real_not_implemented"' "install real error"
+assert_contains "$tmpdir/install-real.err" '"code":"install_preflight_blocked"' "install real preflight error"
+
+install_real_repo="$tmpdir/install-real-repo"
+mkdir -p "$install_real_repo/.git"
+(cd "$install_real_repo" && "$helper" project init --json > "$tmpdir/install-real-init.json" 2> "$tmpdir/install-real-init.err")
+mkdir -p "$install_real_repo/fixtures/install-source/skills/create" "$install_real_repo/fixtures/install-source/skills/update" "$install_real_repo/.codex/skills/update"
+printf '%s\ncreate\n' '<!-- kkachi-agent-helper:managed -->' > "$install_real_repo/fixtures/install-source/skills/create/SKILL.md"
+printf '%s\nnew\n' '<!-- kkachi-agent-helper:managed -->' > "$install_real_repo/fixtures/install-source/skills/update/SKILL.md"
+printf '%s\nold\n' '<!-- kkachi-agent-helper:managed -->' > "$install_real_repo/.codex/skills/update/SKILL.md"
+python3 - "$install_real_repo/fixtures/install-source" <<'PY_INSTALL_REAL'
+import hashlib, json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+items = []
+for source, target in [
+    ("skills/create/SKILL.md", ".codex/skills/create/SKILL.md"),
+    ("skills/update/SKILL.md", ".codex/skills/update/SKILL.md"),
+]:
+    data = (root / source).read_bytes()
+    items.append({"source": source, "target": target, "sha256": hashlib.sha256(data).hexdigest(), "owner_marker": "<!-- kkachi-agent-helper:managed -->"})
+manifest = {"version": "0.1", "kind": "skills", "package": {"name": "kkachi-e2e-pack", "version": "0.1.0"}, "compat": {"required_helper": ">=0.1.0", "required_bridge": ">=0.1.0", "required_skills": ">=0.1.0"}, "items": items}
+(root / "kkachi-install-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+PY_INSTALL_REAL
+(cd "$install_real_repo" && "$helper" install skills --source fixtures/install-source --json > "$tmpdir/install-real-success.json" 2> "$tmpdir/install-real-success.err")
+assert_contains "$tmpdir/install-real-success.json" '"status":"applied"' "install real success JSON"
+assert_contains "$tmpdir/install-real-success.json" '"event_id":"evt-000002"' "install real success JSON"
+assert_contains "$install_real_repo/.codex/skills/create/SKILL.md" 'create' "install real create target"
+assert_contains "$install_real_repo/.codex/skills/update/SKILL.md" 'new' "install real update target"
+(cd "$install_real_repo" && "$helper" install skills --source fixtures/install-source --drift-check --json > "$tmpdir/install-drift-clean.json" 2> "$tmpdir/install-drift-clean.err")
+assert_contains "$tmpdir/install-drift-clean.json" '"status":"clean"' "install drift clean JSON"
+python3 - "$install_real_repo/fixtures/install-source/kkachi-install-manifest.json" <<'PY_INSTALL_COMPAT'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+manifest = json.loads(path.read_text())
+manifest["compat"]["required_helper"] = ">=9.0.0"
+path.write_text(json.dumps(manifest, indent=2) + "\n")
+PY_INSTALL_COMPAT
+if (cd "$install_real_repo" && "$helper" install skills --source fixtures/install-source --json > "$tmpdir/install-compat-fail.json" 2> "$tmpdir/install-compat-fail.err"); then
+  echo "incompatible install unexpectedly succeeded" >&2
+  exit 1
+fi
+assert_contains "$tmpdir/install-compat-fail.err" '"code":"install_compatibility_failed"' "install compatibility failure"
 if (cd "$repo" && "$helper" install skills --source "$repo/fixtures/missing-install-source" --dry-run --json > "$tmpdir/install-missing-source.json" 2> "$tmpdir/install-missing-source.err"); then
   echo "missing source install unexpectedly succeeded" >&2
   exit 1

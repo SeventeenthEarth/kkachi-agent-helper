@@ -197,18 +197,22 @@ type schemaMigrationOutput struct {
 }
 
 type installPlanOutput struct {
-	DryRun       bool                        `json:"dry_run"`
-	Kind         string                      `json:"kind"`
-	Source       string                      `json:"source"`
-	ManifestPath string                      `json:"manifest_path"`
-	Package      project.InstallPackage      `json:"package"`
-	Compat       project.InstallCompat       `json:"compat"`
-	Summary      project.InstallPlanSummary  `json:"summary"`
-	Create       []project.InstallPlanAction `json:"create"`
-	Update       []project.InstallPlanAction `json:"update"`
-	Unchanged    []project.InstallPlanAction `json:"unchanged"`
-	Preserve     []project.InstallPlanAction `json:"preserve"`
-	Conflict     []project.InstallPlanAction `json:"conflict"`
+	DryRun        bool                               `json:"dry_run"`
+	DriftCheck    bool                               `json:"drift_check"`
+	Status        string                             `json:"status"`
+	Kind          string                             `json:"kind"`
+	Source        string                             `json:"source"`
+	ManifestPath  string                             `json:"manifest_path"`
+	Package       project.InstallPackage             `json:"package"`
+	Compat        project.InstallCompat              `json:"compat"`
+	Compatibility project.InstallCompatibilityResult `json:"compatibility"`
+	Summary       project.InstallPlanSummary         `json:"summary"`
+	Create        []project.InstallPlanAction        `json:"create"`
+	Update        []project.InstallPlanAction        `json:"update"`
+	Unchanged     []project.InstallPlanAction        `json:"unchanged"`
+	Preserve      []project.InstallPlanAction        `json:"preserve"`
+	Conflict      []project.InstallPlanAction        `json:"conflict"`
+	EventID       string                             `json:"event_id,omitempty"`
 }
 
 type globalOptions struct {
@@ -296,7 +300,7 @@ func runWithOptions(args []string, stdout io.Writer, stderr io.Writer, info Buil
 				return runSchemaCommand(opts.args[1:], root, stdout, stderr, opts.json)
 			}
 			if command == "install" {
-				return runInstallCommand(opts.args[1:], root, options.workingDir, stdout, stderr, opts.json)
+				return runInstallCommand(opts.args[1:], root, options.workingDir, info, stdout, stderr, opts.json)
 			}
 			writeError(stderr, opts.json, cliError{
 				Code:     "not_implemented",
@@ -317,7 +321,7 @@ func runWithOptions(args []string, stdout io.Writer, stderr io.Writer, info Buil
 	}
 }
 
-func runInstallCommand(args []string, root project.Root, workingDir string, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
+func runInstallCommand(args []string, root project.Root, workingDir string, info BuildInfo, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
 	if len(args) == 0 {
 		writeError(stderr, jsonMode, cliError{Code: "install_subcommand_required", Message: "install subcommand is required", Hint: installUsageHint(), ExitCode: ExitUsage})
 		return ExitUsage
@@ -333,14 +337,15 @@ func runInstallCommand(args []string, root project.Root, workingDir string, stdo
 		return cliErr.ExitCode
 	}
 	options.Kind = kind
-	result, err := project.PlanInstall(root, options)
+	options.HelperVersion = info.Version
+	result, err := project.ApplyInstall(root, options)
 	if err != nil {
 		cliErr := errorFromProjectProblem(err)
 		writeError(stderr, jsonMode, cliErr)
 		return cliErr.ExitCode
 	}
 	writeInstallPlanResult(stdout, result, jsonMode)
-	if result.Summary.Conflict > 0 {
+	if result.DriftCheck && result.Status != project.InstallStatusClean {
 		return ExitSafety
 	}
 	return ExitOK
@@ -349,6 +354,8 @@ func runInstallCommand(args []string, root project.Root, workingDir string, stdo
 func parseInstallArgs(args []string, workingDir string) (project.InstallPlanOptions, *cliError) {
 	options := project.InstallPlanOptions{}
 	seenSource := false
+	seenDryRun := false
+	seenDriftCheck := false
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
 		case "--source":
@@ -362,9 +369,25 @@ func parseInstallArgs(args []string, workingDir string) (project.InstallPlanOpti
 			options.Source = absolutizeInstallSource(workingDir, args[i+1])
 			i++
 		case "--dry-run":
+			if seenDryRun {
+				return options, &cliError{Code: "duplicate_option", Message: "duplicate install option \"--dry-run\"", Hint: installUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: "--dry-run"}
+			}
+			if seenDriftCheck {
+				return options, &cliError{Code: "conflicting_option", Message: "--dry-run and --drift-check cannot be used together", Hint: installUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "one of --dry-run or --drift-check", Actual: "--dry-run --drift-check"}
+			}
+			seenDryRun = true
 			options.DryRun = true
+		case "--drift-check":
+			if seenDriftCheck {
+				return options, &cliError{Code: "duplicate_option", Message: "duplicate install option \"--drift-check\"", Hint: installUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: "--drift-check"}
+			}
+			if seenDryRun {
+				return options, &cliError{Code: "conflicting_option", Message: "--dry-run and --drift-check cannot be used together", Hint: installUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "one of --dry-run or --drift-check", Actual: "--dry-run --drift-check"}
+			}
+			seenDriftCheck = true
+			options.DriftCheck = true
 		default:
-			return options, &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown install option %q", args[i]), Hint: installUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "--source or --dry-run", Actual: args[i]}
+			return options, &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown install option %q", args[i]), Hint: installUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "--source, --dry-run, or --drift-check", Actual: args[i]}
 		}
 	}
 	if !seenSource {
@@ -1082,7 +1105,7 @@ func schemaUsageHint() string {
 }
 
 func installUsageHint() string {
-	return "Use install <skills|templates> --source <local-path> --dry-run with optional global --json. Real install/update is reserved for packg-004."
+	return "Use install <skills|templates> --source <local-path> [--dry-run|--drift-check] with optional global --json."
 }
 
 func lockRecoverUsageHint() string {
@@ -1315,12 +1338,21 @@ func writeSchemaMigrationResult(w io.Writer, result project.SchemaMigrationResul
 }
 
 func writeInstallPlanResult(w io.Writer, result project.InstallPlanResult, jsonMode bool) {
-	payload := installPlanOutput{DryRun: result.DryRun, Kind: result.Kind, Source: result.Source, ManifestPath: result.ManifestPath, Package: result.Package, Compat: result.Compat, Summary: result.Summary, Create: result.Create, Update: result.Update, Unchanged: result.Unchanged, Preserve: result.Preserve, Conflict: result.Conflict}
+	payload := installPlanOutput{DryRun: result.DryRun, DriftCheck: result.DriftCheck, Status: result.Status, Kind: result.Kind, Source: result.Source, ManifestPath: result.ManifestPath, Package: result.Package, Compat: result.Compat, Compatibility: result.Compatibility, Summary: result.Summary, Create: result.Create, Update: result.Update, Unchanged: result.Unchanged, Preserve: result.Preserve, Conflict: result.Conflict, EventID: result.EventID}
 	if jsonMode {
 		_ = json.NewEncoder(w).Encode(payload)
 		return
 	}
-	fmt.Fprintf(w, "install %s dry-run: create=%d update=%d unchanged=%d preserve=%d conflict=%d\n", payload.Kind, payload.Summary.Create, payload.Summary.Update, payload.Summary.Unchanged, payload.Summary.Preserve, payload.Summary.Conflict)
+	mode := "apply"
+	if payload.DryRun {
+		mode = "dry-run"
+	} else if payload.DriftCheck {
+		mode = "drift-check"
+	}
+	fmt.Fprintf(w, "install %s %s: status=%s create=%d update=%d unchanged=%d preserve=%d conflict=%d\n", payload.Kind, mode, payload.Status, payload.Summary.Create, payload.Summary.Update, payload.Summary.Unchanged, payload.Summary.Preserve, payload.Summary.Conflict)
+	if payload.EventID != "" {
+		fmt.Fprintf(w, "event_id: %s\n", payload.EventID)
+	}
 	for _, group := range []struct {
 		label   string
 		actions []project.InstallPlanAction
@@ -1641,7 +1673,7 @@ func exitCodeForProblem(code string) int {
 		return ExitNotFound
 	case "artifact_baseline_encode_failed", "schema_encode_failed":
 		return ExitInternal
-	case "absolute_path", "empty_path", "path_escape", "repo_root_path", "symlink_escape", "symlink_resolution_failed", "path_inspection_failed", "repo_root_required", "helper_state_exists", "last_event_id_mismatch", "status_invalid_json", "status_last_event_id_invalid", "status_active_run_invalid", "event_log_invalid", "event_log_empty", "event_id_invalid", "event_id_exhausted", "run_metadata_invalid", "run_metadata_invalid_json", "active_run_conflict", "run_transition_invalid", "run_not_found", "run_id_ambiguous", "run_root_read_failed", "run_metadata_read_failed", "run_id_collision", "run_artifact_init_invalid_state", "artifact_inspection_failed", "artifact_path_invalid", "status_gate_summary_invalid", "lock_conflict", "lock_stale_recovery_required", "lock_metadata_invalid", "lock_not_found", "lock_identity_mismatch", "lock_release_failed", "schema_validation_read_failed", "schema_reference_invalid", "schema_read_failed", "schema_export_inspection_failed", "schema_export_conflict", "schema_export_read_failed", "schema_migration_path_inspection_failed", "schema_migration_source_version_mismatch", "schema_migration_read_failed", "schema_migration_invalid_json", "schema_migration_invalid_event_log", "schema_migration_version_missing", "schema_migration_backup_failed", "install_manifest_read_failed", "install_manifest_invalid_json", "install_manifest_invalid", "install_manifest_kind_mismatch", "install_source_invalid", "install_source_item_invalid", "install_source_read_failed", "install_checksum_mismatch", "install_duplicate_target", "install_target_inspection_failed", "install_target_read_failed":
+	case "absolute_path", "empty_path", "path_escape", "repo_root_path", "symlink_escape", "symlink_resolution_failed", "path_inspection_failed", "repo_root_required", "helper_state_exists", "last_event_id_mismatch", "status_invalid_json", "status_last_event_id_invalid", "status_active_run_invalid", "event_log_invalid", "event_log_empty", "event_id_invalid", "event_id_exhausted", "run_metadata_invalid", "run_metadata_invalid_json", "active_run_conflict", "run_transition_invalid", "run_not_found", "run_id_ambiguous", "run_root_read_failed", "run_metadata_read_failed", "run_id_collision", "run_artifact_init_invalid_state", "artifact_inspection_failed", "artifact_path_invalid", "status_gate_summary_invalid", "lock_conflict", "lock_stale_recovery_required", "lock_metadata_invalid", "lock_not_found", "lock_identity_mismatch", "lock_release_failed", "schema_validation_read_failed", "schema_reference_invalid", "schema_read_failed", "schema_export_inspection_failed", "schema_export_conflict", "schema_export_read_failed", "schema_migration_path_inspection_failed", "schema_migration_source_version_mismatch", "schema_migration_read_failed", "schema_migration_invalid_json", "schema_migration_invalid_event_log", "schema_migration_version_missing", "schema_migration_backup_failed", "install_manifest_read_failed", "install_manifest_invalid_json", "install_manifest_invalid", "install_manifest_kind_mismatch", "install_source_invalid", "install_source_item_invalid", "install_source_read_failed", "install_checksum_mismatch", "install_duplicate_target", "install_target_inspection_failed", "install_target_read_failed", "install_owner_marker_missing", "install_compatibility_failed", "install_preflight_blocked", "install_apply_failed":
 		return ExitSafety
 	default:
 		return ExitUsage

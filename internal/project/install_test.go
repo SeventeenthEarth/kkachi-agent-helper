@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 const installOwnerMarker = "<!-- kkachi-agent-helper:managed -->"
@@ -57,12 +59,6 @@ func TestPlanInstallRejectsInvalidContracts(t *testing.T) {
 	writeInstallSourceFile(t, source, "skills/a/SKILL.md", installOwnerMarker+"\na\n")
 	valid := manifestItem(t, source, "skills/a/SKILL.md", ".codex/skills/a/SKILL.md")
 
-	t.Run("non dry-run reserved", func(t *testing.T) {
-		writeInstallManifest(t, source, InstallKindSkills, []InstallManifestItem{valid})
-		_, err := PlanInstall(root, InstallPlanOptions{Kind: InstallKindSkills, Source: source})
-		assertProblemCode(t, err, "install_real_not_implemented")
-	})
-
 	t.Run("kind mismatch", func(t *testing.T) {
 		writeInstallManifest(t, source, InstallKindTemplates, []InstallManifestItem{valid})
 		_, err := PlanInstall(root, InstallPlanOptions{Kind: InstallKindSkills, Source: source, DryRun: true})
@@ -101,6 +97,130 @@ func TestPlanInstallRejectsInvalidContracts(t *testing.T) {
 		_, err := PlanInstall(root, InstallPlanOptions{Kind: InstallKindSkills, Source: source, DryRun: true})
 		assertProblemCode(t, err, "path_escape")
 	})
+}
+
+func TestApplyInstallWritesHelperOwnedTargetsAndRecordsEvent(t *testing.T) {
+	repo, root, _ := initSchemaTestProject(t)
+	source := t.TempDir()
+	writeInstallSourceFile(t, source, "skills/create/SKILL.md", installOwnerMarker+"\ncreate\n")
+	writeInstallSourceFile(t, source, "skills/update/SKILL.md", installOwnerMarker+"\nnew\n")
+	writeInstallSourceFile(t, source, "skills/unchanged/SKILL.md", installOwnerMarker+"\nsame\n")
+	writeInstallManifest(t, source, InstallKindSkills, []InstallManifestItem{
+		manifestItem(t, source, "skills/create/SKILL.md", ".codex/skills/create/SKILL.md"),
+		manifestItem(t, source, "skills/update/SKILL.md", ".codex/skills/update/SKILL.md"),
+		manifestItem(t, source, "skills/unchanged/SKILL.md", ".codex/skills/unchanged/SKILL.md"),
+	})
+	writeRepoFile(t, repo, ".codex/skills/update/SKILL.md", installOwnerMarker+"\nold\n")
+	writeRepoFile(t, repo, ".codex/skills/unchanged/SKILL.md", installOwnerMarker+"\nsame\n")
+
+	result, err := ApplyInstall(root, InstallPlanOptions{Kind: InstallKindSkills, Source: source, HelperVersion: "1.2.3"})
+	if err != nil {
+		t.Fatalf("ApplyInstall() error = %v", err)
+	}
+	if result.Status != InstallStatusApplied || result.EventID != "evt-000002" || result.Summary.Create != 1 || result.Summary.Update != 1 || result.Summary.Unchanged != 1 {
+		t.Fatalf("result = %#v, want applied create/update/unchanged", result)
+	}
+	if got := readText(t, filepath.Join(repo, ".codex", "skills", "create", "SKILL.md")); got != installOwnerMarker+"\ncreate\n" {
+		t.Fatalf("created target = %q", got)
+	}
+	if got := readText(t, filepath.Join(repo, ".codex", "skills", "update", "SKILL.md")); got != installOwnerMarker+"\nnew\n" {
+		t.Fatalf("updated target = %q", got)
+	}
+	if events := readText(t, filepath.Join(repo, ".kkachi", "events.jsonl")); !strings.Contains(events, `"type":"install.applied"`) {
+		t.Fatalf("events = %s, want install.applied", events)
+	}
+}
+
+func TestApplyInstallBlocksPreserveBeforeWriting(t *testing.T) {
+	repo, root, _ := initSchemaTestProject(t)
+	source := t.TempDir()
+	writeInstallSourceFile(t, source, "skills/create/SKILL.md", installOwnerMarker+"\ncreate\n")
+	writeInstallSourceFile(t, source, "skills/preserve/SKILL.md", installOwnerMarker+"\nupstream\n")
+	writeInstallManifest(t, source, InstallKindSkills, []InstallManifestItem{
+		manifestItem(t, source, "skills/create/SKILL.md", ".codex/skills/create/SKILL.md"),
+		manifestItem(t, source, "skills/preserve/SKILL.md", ".codex/skills/preserve/SKILL.md"),
+	})
+	writeRepoFile(t, repo, ".codex/skills/preserve/SKILL.md", "user custom\n")
+	beforeEvents := readText(t, filepath.Join(repo, ".kkachi", "events.jsonl"))
+
+	_, err := ApplyInstall(root, InstallPlanOptions{Kind: InstallKindSkills, Source: source, HelperVersion: "1.2.3"})
+	assertProblemCode(t, err, "install_preflight_blocked")
+	if _, statErr := os.Stat(filepath.Join(repo, ".codex", "skills", "create", "SKILL.md")); !os.IsNotExist(statErr) {
+		t.Fatalf("create target stat = %v, want absent after blocked install", statErr)
+	}
+	if got := readText(t, filepath.Join(repo, ".kkachi", "events.jsonl")); got != beforeEvents {
+		t.Fatalf("blocked install mutated events\nbefore=%s\nafter=%s", beforeEvents, got)
+	}
+}
+
+func TestApplyInstallRespectsProjectWriteLock(t *testing.T) {
+	repo, root, _ := initSchemaTestProject(t)
+	source := t.TempDir()
+	writeInstallSourceFile(t, source, "skills/create/SKILL.md", installOwnerMarker+"\ncreate\n")
+	writeInstallManifest(t, source, InstallKindSkills, []InstallManifestItem{
+		manifestItem(t, source, "skills/create/SKILL.md", ".codex/skills/create/SKILL.md"),
+	})
+	writeLockMetadata(t, repo, ProjectWriteLockName, LockMetadata{Version: LockVersion, LockName: ProjectWriteLockName, OwnerPID: os.Getpid(), Hostname: mustHostname(t), Command: "fresh install writer", CreatedAt: time.Now().UTC().Format(time.RFC3339)})
+
+	_, err := ApplyInstall(root, InstallPlanOptions{Kind: InstallKindSkills, Source: source, HelperVersion: "1.2.3"})
+	assertProblemCode(t, err, "lock_conflict")
+	if _, statErr := os.Stat(filepath.Join(repo, ".codex", "skills", "create", "SKILL.md")); !os.IsNotExist(statErr) {
+		t.Fatalf("create target stat = %v, want absent under lock conflict", statErr)
+	}
+}
+
+func TestInstallDriftCheckAndCompatibility(t *testing.T) {
+	_, root, _ := initSchemaTestProject(t)
+	source := t.TempDir()
+	writeInstallSourceFile(t, source, "templates/README.md", installOwnerMarker+"\ntemplate\n")
+	writeInstallManifest(t, source, InstallKindTemplates, []InstallManifestItem{manifestItem(t, source, "templates/README.md", "docs/kkachi/README.md")})
+
+	drifted, err := ApplyInstall(root, InstallPlanOptions{Kind: InstallKindTemplates, Source: source, DriftCheck: true, HelperVersion: "1.2.3"})
+	if err != nil {
+		t.Fatalf("drift ApplyInstall() error = %v", err)
+	}
+	if drifted.Status != InstallStatusDrifted || drifted.Summary.Create != 1 {
+		t.Fatalf("drifted = %#v, want create drift", drifted)
+	}
+	if _, err := ApplyInstall(root, InstallPlanOptions{Kind: InstallKindTemplates, Source: source, HelperVersion: "1.2.3"}); err != nil {
+		t.Fatalf("real install error = %v", err)
+	}
+	clean, err := ApplyInstall(root, InstallPlanOptions{Kind: InstallKindTemplates, Source: source, DriftCheck: true, HelperVersion: "1.2.3"})
+	if err != nil {
+		t.Fatalf("clean ApplyInstall() error = %v", err)
+	}
+	if clean.Status != InstallStatusClean || clean.Summary.Unchanged != 1 {
+		t.Fatalf("clean = %#v, want clean unchanged", clean)
+	}
+
+	manifest := InstallManifest{Version: SchemaVersion, Kind: InstallKindTemplates, Package: InstallPackage{Name: "kkachi-test-pack", Version: "0.1.0"}, Compat: InstallCompat{RequiredHelper: ">=9.0.0"}, Items: []InstallManifestItem{manifestItem(t, source, "templates/README.md", "docs/kkachi/README.md")}}
+	writeInstallManifestPayload(t, source, manifest)
+	_, err = ApplyInstall(root, InstallPlanOptions{Kind: InstallKindTemplates, Source: source, HelperVersion: "1.2.3"})
+	assertProblemCode(t, err, "install_compatibility_failed")
+}
+
+func TestInstallCompatibilityRejectsMalformedRangeAndMissingHelperVersion(t *testing.T) {
+	_, root, _ := initSchemaTestProject(t)
+	source := t.TempDir()
+	writeInstallSourceFile(t, source, "templates/README.md", installOwnerMarker+"\ntemplate\n")
+	item := manifestItem(t, source, "templates/README.md", "docs/kkachi/README.md")
+
+	for _, tt := range []struct {
+		name          string
+		required      string
+		helperVersion string
+	}{
+		{name: "malformed range", required: "^1.0.0", helperVersion: "1.2.3"},
+		{name: "missing helper version", required: ">=0.1.0", helperVersion: ""},
+		{name: "dev helper version", required: ">=0.1.0", helperVersion: "0.0.0-dev"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			manifest := InstallManifest{Version: SchemaVersion, Kind: InstallKindTemplates, Package: InstallPackage{Name: "kkachi-test-pack", Version: "0.1.0"}, Compat: InstallCompat{RequiredHelper: tt.required}, Items: []InstallManifestItem{item}}
+			writeInstallManifestPayload(t, source, manifest)
+			_, err := ApplyInstall(root, InstallPlanOptions{Kind: InstallKindTemplates, Source: source, HelperVersion: tt.helperVersion})
+			assertProblemCode(t, err, "install_compatibility_failed")
+		})
+	}
 }
 
 func TestPlanInstallRejectsManifestAndSourceRootFailures(t *testing.T) {
@@ -157,6 +277,16 @@ func TestPlanInstallRejectsManifestAndSourceRootFailures(t *testing.T) {
 		_, err := PlanInstall(root, InstallPlanOptions{Kind: InstallKindSkills, Source: source, DryRun: true})
 		assertProblemCode(t, err, "install_manifest_invalid_json")
 	})
+}
+
+func TestPlanInstallRejectsSourceWithoutDeclaredOwnerMarker(t *testing.T) {
+	_, root, _ := initSchemaTestProject(t)
+	source := t.TempDir()
+	writeInstallSourceFile(t, source, "skills/a/SKILL.md", "missing marker\n")
+	writeInstallManifest(t, source, InstallKindSkills, []InstallManifestItem{manifestItem(t, source, "skills/a/SKILL.md", ".codex/skills/a/SKILL.md")})
+
+	_, err := PlanInstall(root, InstallPlanOptions{Kind: InstallKindSkills, Source: source, DryRun: true, HelperVersion: "1.2.3"})
+	assertProblemCode(t, err, "install_owner_marker_missing")
 }
 
 func TestPlanInstallRejectsSourceAndTargetSafetyFailures(t *testing.T) {

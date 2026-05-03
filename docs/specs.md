@@ -332,8 +332,8 @@ kkachi-agent-helper event append <type> --run <run_id> --payload <json>
 kkachi-agent-helper schema validate <file> --schema <schema>
 kkachi-agent-helper schema export [--schema <schema>|--all] [--dry-run]
 kkachi-agent-helper schema migrate --from <version> --to <version>
-kkachi-agent-helper install skills --source <path-or-version> [--dry-run]
-kkachi-agent-helper install templates --source <path-or-version> [--dry-run]
+kkachi-agent-helper install skills --source <local-path> [--dry-run|--drift-check]
+kkachi-agent-helper install templates --source <local-path> [--dry-run|--drift-check]
 ```
 
 ### `gate check`
@@ -450,9 +450,9 @@ Dry-run exports are read-only and report `would_write` without an event. Real ex
 
 `packg-002` registers the first `0.1 -> 0.1` no-op migration. Dry-run migrations are read-only and report backup/migration intent without taking a lock, writing backups, or appending an event. Real migrations are serialized by `.kkachi/project_write.lock`, refuse status/event incoherence, refuse unknown source versions and unregistered paths, copy versioned helper state into `.kkachi/backups/schema-migrations/<timestamp>-<from>-to-<to>/`, and append `schema.migrated` after backup creation.
 
-### `install skills/templates --dry-run`
+### `install skills/templates`
 
-`packg-003` freezes the initial install package contract without performing real installs. Local package sources contain a JSON manifest named `kkachi-install-manifest.json` at the source root. Versioned package sources remain future work.
+`packg-003` froze the initial install package contract, and `packg-004` applies it to local install/update, read-only dry-run previews, read-only drift checks, and conservative compatibility gating. Local package sources contain a JSON manifest named `kkachi-install-manifest.json` at the source root. Versioned package sources remain future work.
 
 Manifest shape:
 
@@ -477,26 +477,40 @@ Manifest shape:
 }
 ```
 
-Dry-run JSON output has the following stable shape:
+Install JSON output has the following stable shape:
 
 ```json
 {
   "dry_run": true,
+  "drift_check": false,
+  "status": "planned",
   "kind": "skills",
   "source": "/local/package",
   "manifest_path": "/local/package/kkachi-install-manifest.json",
   "package": {"name": "kkachi-hermes-skills", "version": "0.1.0"},
   "compat": {"required_helper": ">=0.1.0"},
+  "compatibility": {
+    "helper": {"status": "pass", "required": ">=0.1.0", "actual": "0.1.0", "reason": "..."},
+    "bridge": {"status": "not_checked", "required": ">=0.1.0", "reason": "..."},
+    "skills": {"status": "not_checked", "required": ">=0.1.0", "reason": "..."}
+  },
   "summary": {"create": 1, "update": 0, "unchanged": 0, "preserve": 0, "conflict": 0},
   "create": [{"target": ".codex/skills/x/SKILL.md", "source": "skills/x/SKILL.md", "sha256": "...", "owner_marker": "...", "reason": "..."}],
   "update": [],
   "unchanged": [],
   "preserve": [],
-  "conflict": []
+  "conflict": [],
+  "event_id": "evt-000002"
 }
 ```
 
-Dry-run install is read-only: it does not take `.kkachi/project_write.lock`, does not append events, and does not create or replace target files. It validates manifest shape, command kind, source-root confinement, target repository confinement, duplicate targets, and SHA-256 checksums. Existing regular files containing the declared owner marker are classified as `unchanged` or `update`; existing regular files without the owner marker are classified as `preserve`; non-regular targets are reported as `conflict`. Real install/update, drift checks, and compatibility enforcement are reserved for `packg-004`.
+`event_id` appears only for real installs that successfully append `install.applied`. Status values are `planned` for dry-run previews, `clean` for passing drift checks, `drifted` for read-only drift findings, `blocked` for read-only preserve/conflict/compat failures, and `applied` for successful real installs.
+
+Dry-run install is read-only: it does not take `.kkachi/project_write.lock`, does not append events, and does not create or replace target files. It validates manifest shape, command kind, source-root confinement, target repository confinement, duplicate targets, SHA-256 checksums, and source owner markers. Existing regular files containing the declared owner marker are classified as `unchanged` or `update`; existing regular files without the owner marker are classified as `preserve`; non-regular targets are reported as `conflict`.
+
+Real install/update is the default when neither `--dry-run` nor `--drift-check` is passed. It first computes the full plan and refuses to write anything if helper compatibility fails, if any target is `preserve`, or if any target is `conflict`. On success, it serializes through `.kkachi/project_write.lock`, recomputes the plan under the lock, writes only `create` and `update` targets with atomic file replacement, preserves `unchanged` targets, and appends `install.applied` after successful writes. `--drift-check` is read-only and exits `0` only when all items are `unchanged` and helper compatibility passes; create/update drift, preserve/conflict, or helper compatibility failure exits `3`.
+
+Compatibility v1 enforces only `compat.required_helper` against the running helper version. Supported helper ranges are exact `x.y.z` and `>=x.y.z`; unsupported range syntax or a non-matching helper version fails closed. Development builds that keep the default `0.0.0-dev` version do not satisfy semver compatibility ranges; use a release build or set a semver version such as `VERSION=0.1.0` when validating real installs. `compat.required_bridge` and `compat.required_skills` are reported as `not_checked` until later release packaging records authoritative bridge/skills version sources.
 
 Command UX rules:
 
@@ -635,16 +649,19 @@ Initial `project init` defaults:
 - `status.project_id` uses `kkachi-project-<project-slug>-<random-hex>`.
 - `status.last_event_id` is `evt-000001`.
 - `.kkachi/events.jsonl` contains exactly one initial `project.initialized` JSONL record.
-- `.kkachi/schemas/` contains local schema copies for config, status, event, run metadata, selected CLI, and bridge session snapshot.
+- `.kkachi/schemas/` contains local schema copies for config, status, event, run metadata, selected CLI, bridge session snapshot, and install manifest.
 
-Skill and template installation should support:
+Skill and template installation supports:
 
 - local path source for development;
-- versioned package source later;
 - manifest with checksums;
 - dry-run preview;
-- managed block replacement for helper-owned files only;
-- preservation of user-owned files.
+- read-only drift checks;
+- real local install/update for helper-owned files only;
+- preservation of user-owned files through pre-write failure;
+- helper compatibility enforcement for exact `x.y.z` and `>=x.y.z` ranges;
+- `install.applied` event recording after successful real installs;
+- versioned package source later.
 
 ## 15. Testing standard
 

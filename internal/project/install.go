@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -22,12 +24,27 @@ const (
 	installActionUnchanged = "unchanged"
 	installActionPreserve  = "preserve"
 	installActionConflict  = "conflict"
+
+	installAppliedEventType = "install.applied"
+
+	InstallStatusPlanned = "planned"
+	InstallStatusClean   = "clean"
+	InstallStatusApplied = "applied"
+	InstallStatusDrifted = "drifted"
+	InstallStatusBlocked = "blocked"
+
+	InstallCompatStatusPass       = "pass"
+	InstallCompatStatusFail       = "fail"
+	InstallCompatStatusNotChecked = "not_checked"
 )
 
 type InstallPlanOptions struct {
-	Kind   string
-	Source string
-	DryRun bool
+	Kind          string
+	Source        string
+	DryRun        bool
+	DriftCheck    bool
+	HelperVersion string
+	Now           func() time.Time
 }
 
 type InstallManifest struct {
@@ -57,18 +74,22 @@ type InstallManifestItem struct {
 }
 
 type InstallPlanResult struct {
-	DryRun       bool                `json:"dry_run"`
-	Kind         string              `json:"kind"`
-	Source       string              `json:"source"`
-	ManifestPath string              `json:"manifest_path"`
-	Package      InstallPackage      `json:"package"`
-	Compat       InstallCompat       `json:"compat"`
-	Summary      InstallPlanSummary  `json:"summary"`
-	Create       []InstallPlanAction `json:"create"`
-	Update       []InstallPlanAction `json:"update"`
-	Unchanged    []InstallPlanAction `json:"unchanged"`
-	Preserve     []InstallPlanAction `json:"preserve"`
-	Conflict     []InstallPlanAction `json:"conflict"`
+	DryRun        bool                       `json:"dry_run"`
+	DriftCheck    bool                       `json:"drift_check"`
+	Status        string                     `json:"status"`
+	Kind          string                     `json:"kind"`
+	Source        string                     `json:"source"`
+	ManifestPath  string                     `json:"manifest_path"`
+	Package       InstallPackage             `json:"package"`
+	Compat        InstallCompat              `json:"compat"`
+	Compatibility InstallCompatibilityResult `json:"compatibility"`
+	Summary       InstallPlanSummary         `json:"summary"`
+	Create        []InstallPlanAction        `json:"create"`
+	Update        []InstallPlanAction        `json:"update"`
+	Unchanged     []InstallPlanAction        `json:"unchanged"`
+	Preserve      []InstallPlanAction        `json:"preserve"`
+	Conflict      []InstallPlanAction        `json:"conflict"`
+	EventID       string                     `json:"event_id,omitempty"`
 }
 
 type InstallPlanSummary struct {
@@ -92,58 +113,138 @@ type installPlannedAction struct {
 	Action InstallPlanAction
 }
 
+type InstallCompatibilityResult struct {
+	Helper InstallCompatibilityCheck `json:"helper"`
+	Bridge InstallCompatibilityCheck `json:"bridge"`
+	Skills InstallCompatibilityCheck `json:"skills"`
+}
+
+type InstallCompatibilityCheck struct {
+	Status   string `json:"status"`
+	Required string `json:"required,omitempty"`
+	Actual   string `json:"actual,omitempty"`
+	Reason   string `json:"reason"`
+}
+
 func PlanInstall(root Root, options InstallPlanOptions) (InstallPlanResult, error) {
+	result, _, err := planInstall(root, options)
+	return result, err
+}
+
+func ApplyInstall(root Root, options InstallPlanOptions) (InstallPlanResult, error) {
+	if options.DryRun {
+		return PlanInstall(root, options)
+	}
+	if options.DriftCheck {
+		return PlanInstall(root, options)
+	}
+	preflight, _, err := planInstall(root, options)
+	if err != nil {
+		return InstallPlanResult{}, err
+	}
+	if err := validateInstallApplyPlan(preflight); err != nil {
+		return InstallPlanResult{}, err
+	}
+
+	var result InstallPlanResult
+	err = withProjectWriteLock(root, "install "+preflight.Kind, "", func() error {
+		var manifest InstallManifest
+		result, manifest, err = planInstall(root, options)
+		if err != nil {
+			return err
+		}
+		if err := validateInstallApplyPlan(result); err != nil {
+			return err
+		}
+		if err := writeInstallActions(root, result.Source, manifest, installWritableActions(result)); err != nil {
+			return err
+		}
+		appendResult, err := appendEventWithStatusMutation(root, AppendEventOptions{Type: installAppliedEventType, Payload: map[string]any{"kind": result.Kind, "source": result.Source, "manifest_path": result.ManifestPath, "package": result.Package, "summary": result.Summary}, Now: options.Now}, nil)
+		if err != nil {
+			return err
+		}
+		result.EventID = appendResult.EventID
+		result.Status = InstallStatusApplied
+		return nil
+	})
+	if err != nil {
+		return InstallPlanResult{}, err
+	}
+	return result, nil
+}
+
+func validateInstallApplyPlan(result InstallPlanResult) error {
+	if result.Compatibility.Helper.Status == InstallCompatStatusFail {
+		return &Problem{Code: "install_compatibility_failed", Message: "install package is not compatible with this helper", Hint: "Use a package whose compat.required_helper includes this helper version.", Field: "compat.required_helper", Expected: result.Compat.RequiredHelper, Actual: result.Compatibility.Helper.Actual}
+	}
+	if result.Summary.Preserve > 0 || result.Summary.Conflict > 0 {
+		return &Problem{Code: "install_preflight_blocked", Message: "install would overwrite user-owned files or hit target conflicts", Hint: "Review the dry-run output, move conflicting paths, or install into a clean target before retrying.", Field: "plan", Expected: "zero preserve and zero conflict actions", Actual: fmt.Sprintf("preserve=%d conflict=%d", result.Summary.Preserve, result.Summary.Conflict)}
+	}
+	return nil
+}
+
+func installWritableActions(result InstallPlanResult) []InstallPlanAction {
+	actions := make([]InstallPlanAction, 0, len(result.Create)+len(result.Update))
+	actions = append(actions, result.Create...)
+	actions = append(actions, result.Update...)
+	return actions
+}
+
+func planInstall(root Root, options InstallPlanOptions) (InstallPlanResult, InstallManifest, error) {
 	if strings.TrimSpace(root.Path) == "" {
-		return InstallPlanResult{}, problem("repo_root_required", "repository root is required", "Discover the repository root before planning installs.")
+		return InstallPlanResult{}, InstallManifest{}, problem("repo_root_required", "repository root is required", "Discover the repository root before planning installs.")
 	}
 	kind := strings.TrimSpace(options.Kind)
 	if !allowed(kind, InstallKindSkills, InstallKindTemplates) {
-		return InstallPlanResult{}, &Problem{Code: "install_kind_invalid", Message: "install kind is not supported", Hint: "Use install skills or install templates.", Field: "kind", Expected: InstallKindSkills + " or " + InstallKindTemplates, Actual: kind}
-	}
-	if !options.DryRun {
-		return InstallPlanResult{}, &Problem{Code: "install_real_not_implemented", Message: "real install is not implemented yet", Hint: "Use --dry-run for packg-003; local install/update is reserved for packg-004.", Field: "--dry-run", Expected: "dry-run preview", Actual: "missing"}
+		return InstallPlanResult{}, InstallManifest{}, &Problem{Code: "install_kind_invalid", Message: "install kind is not supported", Hint: "Use install skills or install templates.", Field: "kind", Expected: InstallKindSkills + " or " + InstallKindTemplates, Actual: kind}
 	}
 	sourceRoot, err := resolveInstallSourceRoot(options.Source)
 	if err != nil {
-		return InstallPlanResult{}, err
+		return InstallPlanResult{}, InstallManifest{}, err
 	}
 	manifestPath := filepath.Join(sourceRoot, InstallManifestFile)
 	manifest, err := readInstallManifest(manifestPath)
 	if err != nil {
-		return InstallPlanResult{}, err
+		return InstallPlanResult{}, InstallManifest{}, err
 	}
 	if err := validateInstallManifest(manifestPath, manifest, kind); err != nil {
-		return InstallPlanResult{}, err
+		return InstallPlanResult{}, InstallManifest{}, err
 	}
 	result := InstallPlanResult{
-		DryRun:       true,
-		Kind:         kind,
-		Source:       filepath.ToSlash(sourceRoot),
-		ManifestPath: filepath.ToSlash(manifestPath),
-		Package:      manifest.Package,
-		Compat:       manifest.Compat,
-		Create:       []InstallPlanAction{},
-		Update:       []InstallPlanAction{},
-		Unchanged:    []InstallPlanAction{},
-		Preserve:     []InstallPlanAction{},
-		Conflict:     []InstallPlanAction{},
+		DryRun:        options.DryRun,
+		DriftCheck:    options.DriftCheck,
+		Status:        InstallStatusPlanned,
+		Kind:          kind,
+		Source:        filepath.ToSlash(sourceRoot),
+		ManifestPath:  filepath.ToSlash(manifestPath),
+		Package:       manifest.Package,
+		Compat:        manifest.Compat,
+		Compatibility: evaluateInstallCompatibility(manifest.Compat, options.HelperVersion),
+		Create:        []InstallPlanAction{},
+		Update:        []InstallPlanAction{},
+		Unchanged:     []InstallPlanAction{},
+		Preserve:      []InstallPlanAction{},
+		Conflict:      []InstallPlanAction{},
 	}
 	seenTargets := map[string]struct{}{}
 	for index, item := range manifest.Items {
 		planned, err := planInstallItem(root, sourceRoot, item, index, seenTargets)
 		if err != nil {
-			return InstallPlanResult{}, err
+			return InstallPlanResult{}, InstallManifest{}, err
 		}
 		appendInstallAction(&result, planned)
 	}
 	result.Summary = InstallPlanSummary{Create: len(result.Create), Update: len(result.Update), Unchanged: len(result.Unchanged), Preserve: len(result.Preserve), Conflict: len(result.Conflict)}
-	return result, nil
+	if options.DriftCheck {
+		result.Status = installResultStatus(result)
+	}
+	return result, manifest, nil
 }
 
 func resolveInstallSourceRoot(source string) (string, error) {
 	trimmed := strings.TrimSpace(source)
 	if trimmed == "" {
-		return "", &Problem{Code: "install_source_required", Message: "install source is required", Hint: "Use install skills --source <local-path> --dry-run.", Field: "--source", Expected: "local path", Actual: "missing"}
+		return "", &Problem{Code: "install_source_required", Message: "install source is required", Hint: "Use install skills --source <local-path> [--dry-run|--drift-check].", Field: "--source", Expected: "local path", Actual: "missing"}
 	}
 	path := filepath.Clean(filepath.FromSlash(trimmed))
 	if !filepath.IsAbs(path) {
@@ -251,6 +352,9 @@ func planInstallItem(root Root, sourceRoot string, item InstallManifestItem, ind
 	if actualHash != item.SHA256 {
 		return installPlannedAction{}, &Problem{Code: "install_checksum_mismatch", Message: "install source checksum does not match manifest", Hint: "Regenerate the manifest checksum after changing source content.", Path: sourceRelative, Field: fmt.Sprintf("items[%d].sha256", index), Expected: item.SHA256, Actual: actualHash}
 	}
+	if !hasInstallOwnerMarker(content, item.OwnerMarker) {
+		return installPlannedAction{}, &Problem{Code: "install_owner_marker_missing", Message: "install source item lacks the declared owner marker", Hint: "Add the owner marker as the first non-empty line of every helper-managed package item.", Path: sourceRelative, Field: fmt.Sprintf("items[%d].owner_marker", index), Expected: item.OwnerMarker, Actual: "missing"}
+	}
 	target, err := ResolveRelativePath(root, item.Target)
 	if err != nil {
 		return installPlannedAction{}, err
@@ -286,6 +390,145 @@ func planInstallItem(root Root, sourceRoot string, item InstallManifestItem, ind
 	}
 	action.Reason = "helper-owned target differs; dry-run would update"
 	return installPlannedAction{Bucket: installActionUpdate, Action: action}, nil
+}
+
+func installResultStatus(result InstallPlanResult) string {
+	if result.Compatibility.Helper.Status == InstallCompatStatusFail || result.Summary.Preserve > 0 || result.Summary.Conflict > 0 {
+		return InstallStatusBlocked
+	}
+	if result.Summary.Create > 0 || result.Summary.Update > 0 {
+		return InstallStatusDrifted
+	}
+	return InstallStatusClean
+}
+
+type installManifestItemRef struct {
+	item  InstallManifestItem
+	index int
+}
+
+func writeInstallActions(root Root, sourceRoot string, manifest InstallManifest, actions []InstallPlanAction) error {
+	sourceByTarget := map[string]installManifestItemRef{}
+	for index, item := range manifest.Items {
+		target, err := ResolveRelativePath(root, item.Target)
+		if err != nil {
+			return err
+		}
+		sourceByTarget[target.Relative] = installManifestItemRef{item: item, index: index}
+	}
+	for _, action := range actions {
+		ref, ok := sourceByTarget[action.Target]
+		if !ok {
+			return &Problem{Code: "install_apply_failed", Message: "install plan target is missing from manifest", Hint: "Rerun install with a stable manifest source.", Path: action.Target, Field: "target", Expected: "manifest item", Actual: "missing"}
+		}
+		item := ref.item
+		sourcePath, sourceRelative, err := resolveSourceFile(filepath.FromSlash(sourceRoot), item.Source, ref.index)
+		if err != nil {
+			return err
+		}
+		content, err := os.ReadFile(sourcePath)
+		if err != nil {
+			return &Problem{Code: "install_source_read_failed", Message: "cannot read install source item", Hint: "Check the package item path and permissions.", Path: sourceRelative, Field: fmt.Sprintf("items[%d].source", ref.index), Expected: "readable source file", Actual: err.Error()}
+		}
+		actualHash := sha256Hex(content)
+		if actualHash != item.SHA256 {
+			return &Problem{Code: "install_checksum_mismatch", Message: "install source checksum does not match manifest", Hint: "Regenerate the manifest checksum after changing source content.", Path: sourceRelative, Field: fmt.Sprintf("items[%d].sha256", ref.index), Expected: item.SHA256, Actual: actualHash}
+		}
+		if !hasInstallOwnerMarker(content, item.OwnerMarker) {
+			return &Problem{Code: "install_owner_marker_missing", Message: "install source item lacks the declared owner marker", Hint: "Add the owner marker as the first non-empty line of every helper-managed package item.", Path: sourceRelative, Field: fmt.Sprintf("items[%d].owner_marker", ref.index), Expected: item.OwnerMarker, Actual: "missing"}
+		}
+		target, err := ResolveRelativePath(root, item.Target)
+		if err != nil {
+			return err
+		}
+		if _, err := os.Lstat(target.Absolute); os.IsNotExist(err) {
+			if err := writeNewFileAtomically(target, content); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := writeExistingFileAtomically(target, content); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func evaluateInstallCompatibility(compat InstallCompat, helperVersion string) InstallCompatibilityResult {
+	helper := InstallCompatibilityCheck{Status: InstallCompatStatusPass, Required: compat.RequiredHelper, Actual: strings.TrimSpace(helperVersion), Reason: "helper version satisfies required range"}
+	if helper.Actual == "" {
+		helper.Status = InstallCompatStatusFail
+		helper.Reason = "helper version is unavailable"
+	} else if ok, reason := helperVersionSatisfies(helper.Actual, compat.RequiredHelper); !ok {
+		helper.Status = InstallCompatStatusFail
+		helper.Reason = reason
+	}
+	return InstallCompatibilityResult{
+		Helper: helper,
+		Bridge: InstallCompatibilityCheck{Status: InstallCompatStatusNotChecked, Required: compat.RequiredBridge, Reason: "bridge version source is not recorded in packg-004 v1"},
+		Skills: InstallCompatibilityCheck{Status: InstallCompatStatusNotChecked, Required: compat.RequiredSkills, Reason: "skills version source is not recorded in packg-004 v1"},
+	}
+}
+
+func helperVersionSatisfies(actual string, required string) (bool, string) {
+	actualVersion, ok := parseInstallSemver(actual)
+	if !ok {
+		return false, "helper version is not a supported x.y.z version"
+	}
+	required = strings.TrimSpace(required)
+	if strings.HasPrefix(required, ">=") {
+		minimum, ok := parseInstallSemver(strings.TrimSpace(strings.TrimPrefix(required, ">=")))
+		if !ok {
+			return false, "compat.required_helper range is not supported; use exact x.y.z or >=x.y.z"
+		}
+		if compareInstallVersion(actualVersion, minimum) >= 0 {
+			return true, "helper version satisfies required range"
+		}
+		return false, "helper version is lower than required minimum"
+	}
+	requiredVersion, ok := parseInstallSemver(required)
+	if !ok {
+		return false, "compat.required_helper range is not supported; use exact x.y.z or >=x.y.z"
+	}
+	if compareInstallVersion(actualVersion, requiredVersion) == 0 {
+		return true, "helper version matches required version"
+	}
+	return false, "helper version does not match required version"
+}
+
+func parseInstallSemver(value string) ([3]int, bool) {
+	var version [3]int
+	value = strings.TrimSpace(value)
+	if value == "" || strings.ContainsAny(value, "+-") {
+		return version, false
+	}
+	parts := strings.Split(value, ".")
+	if len(parts) != 3 {
+		return version, false
+	}
+	for i, part := range parts {
+		if part == "" {
+			return version, false
+		}
+		n, err := strconv.Atoi(part)
+		if err != nil || n < 0 {
+			return version, false
+		}
+		version[i] = n
+	}
+	return version, true
+}
+
+func compareInstallVersion(left [3]int, right [3]int) int {
+	for i := 0; i < 3; i++ {
+		if left[i] < right[i] {
+			return -1
+		}
+		if left[i] > right[i] {
+			return 1
+		}
+	}
+	return 0
 }
 
 func hasInstallOwnerMarker(content []byte, marker string) bool {

@@ -1813,8 +1813,88 @@ func TestInstallCLIDryRunJSONAndHuman(t *testing.T) {
 	if code := runWithOptions([]string{"install", "skills", "--source", "fixtures/skills-pack", "--dry-run"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("install dry-run human exit = %d stderr=%s", code, stderr.String())
 	}
-	if out := stdout.String(); !strings.Contains(out, "install skills dry-run: create=1 update=1 unchanged=0 preserve=1 conflict=0") || !strings.Contains(out, "[preserve] .codex/skills/preserve/SKILL.md") {
+	if out := stdout.String(); !strings.Contains(out, "install skills dry-run: status=planned create=1 update=1 unchanged=0 preserve=1 conflict=0") || !strings.Contains(out, "[preserve] .codex/skills/preserve/SKILL.md") {
 		t.Fatalf("human output = %q", out)
+	}
+}
+
+func TestInstallCLIRealInstallAndDriftCheck(t *testing.T) {
+	repo := tempGitRepo(t)
+	source := filepath.Join(repo, "fixtures", "templates-pack")
+	writeCLIInstallSource(t, source, "templates/create.md", "<!-- kkachi-agent-helper:managed -->\ncreate\n")
+	writeCLIInstallSource(t, source, "templates/update.md", "<!-- kkachi-agent-helper:managed -->\nnew\n")
+	writeCLIInstallManifest(t, source, "templates", map[string]string{
+		"templates/create.md": "docs/kkachi/create.md",
+		"templates/update.md": "docs/kkachi/update.md",
+	})
+	writeCLIRepoFile(t, repo, "docs/kkachi/update.md", "<!-- kkachi-agent-helper:managed -->\nold\n")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"install", "templates", "--source", "fixtures/templates-pack", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("install real exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	var applied installPlanOutput
+	if err := json.Unmarshal(stdout.Bytes(), &applied); err != nil {
+		t.Fatalf("install real output is not JSON: %v\n%s", err, stdout.String())
+	}
+	if applied.Status != project.InstallStatusApplied || applied.EventID != "evt-000002" || applied.Summary.Create != 1 || applied.Summary.Update != 1 {
+		t.Fatalf("applied = %#v, want real install output", applied)
+	}
+	if applied.Compatibility.Helper.Status != project.InstallCompatStatusPass || applied.Compatibility.Bridge.Status != project.InstallCompatStatusNotChecked || applied.Compatibility.Skills.Status != project.InstallCompatStatusNotChecked {
+		t.Fatalf("compatibility = %#v, want helper pass and bridge/skills not_checked", applied.Compatibility)
+	}
+	if got := readCLIText(t, filepath.Join(repo, "docs", "kkachi", "create.md")); got != "<!-- kkachi-agent-helper:managed -->\ncreate\n" {
+		t.Fatalf("created target = %q", got)
+	}
+	if got := readCLIText(t, filepath.Join(repo, "docs", "kkachi", "update.md")); got != "<!-- kkachi-agent-helper:managed -->\nnew\n" {
+		t.Fatalf("updated target = %q", got)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"install", "templates", "--source", "fixtures/templates-pack", "--drift-check", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("drift clean exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	var clean installPlanOutput
+	if err := json.Unmarshal(stdout.Bytes(), &clean); err != nil {
+		t.Fatalf("drift clean output is not JSON: %v\n%s", err, stdout.String())
+	}
+	if !clean.DriftCheck || clean.Status != project.InstallStatusClean || clean.Summary.Unchanged != 2 {
+		t.Fatalf("clean = %#v, want clean drift check", clean)
+	}
+
+	writeCLIRepoFile(t, repo, "docs/kkachi/update.md", "<!-- kkachi-agent-helper:managed -->\ndrifted\n")
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"install", "templates", "--source", "fixtures/templates-pack", "--drift-check", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitSafety {
+		t.Fatalf("drifted exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+}
+
+func TestInstallCLIProjectWriteLockConflict(t *testing.T) {
+	repo := tempGitRepo(t)
+	source := filepath.Join(repo, "fixtures", "templates-pack")
+	writeCLIInstallSource(t, source, "templates/create.md", "<!-- kkachi-agent-helper:managed -->\ncreate\n")
+	writeCLIInstallManifest(t, source, "templates", map[string]string{"templates/create.md": "docs/kkachi/create.md"})
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	fresh := project.LockMetadata{Version: project.LockVersion, LockName: project.ProjectWriteLockName, OwnerPID: os.Getpid(), Hostname: cliMustHostname(t), Command: "fresh install writer", CreatedAt: time.Now().UTC().Format(time.RFC3339)}
+	writeCLILock(t, repo, project.ProjectWriteLockName, fresh)
+
+	stdout.Reset()
+	stderr.Reset()
+	assertCLIErrorCode(t, runWithOptions([]string{"install", "templates", "--source", "fixtures/templates-pack", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitSafety, "lock_conflict")
+	if _, err := os.Stat(filepath.Join(repo, "docs", "kkachi", "create.md")); !os.IsNotExist(err) {
+		t.Fatalf("install target stat = %v, want absent under lock conflict", err)
 	}
 }
 
@@ -1831,7 +1911,8 @@ func TestInstallCLIUsageAndSafetyErrors(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	assertCLIErrorCode(t, runWithOptions([]string{"install", "templates", "--source", "fixtures/templates-pack", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitUsage, "install_real_not_implemented")
+	writeCLIRepoFile(t, repo, "docs/kkachi/README.md", "user custom\n")
+	assertCLIErrorCode(t, runWithOptions([]string{"install", "templates", "--source", "fixtures/templates-pack", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitSafety, "install_preflight_blocked")
 
 	stdout.Reset()
 	stderr.Reset()
