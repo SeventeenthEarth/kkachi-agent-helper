@@ -1302,3 +1302,61 @@ func writeIntegrationJSONFile(t *testing.T, path string, payload map[string]any)
 		t.Fatalf("write JSON file %s: %v", path, err)
 	}
 }
+
+func TestPilot002DiagnosticsExportActiveRunAndOverwriteSafety(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	binary := buildHelperBinary(t)
+	runHelper(t, binary, repo, "project", "init", "--json")
+	createdOutput := runHelper(t, binary, repo,
+		"run", "create",
+		"--title", "Pilot 002 integration diagnostics",
+		"--work-path", "A_development_execution",
+		"--work-mode", "standard",
+		"--urgency", "normal",
+		"--sot-policy", "existing_sot_basis",
+		"--execution-mode", "adapter_qa",
+		"--commander", "Gongmyeong",
+		"--task-id", "pilot-002",
+		"--json",
+	)
+	var created struct {
+		RunID string `json:"run_id"`
+	}
+	if err := json.Unmarshal(createdOutput, &created); err != nil {
+		t.Fatalf("run create output is not JSON: %v\n%s", err, string(createdOutput))
+	}
+	runHelper(t, binary, repo, "artifact", "init", created.RunID, "--json")
+	runHelper(t, binary, repo, "run", "activate", created.RunID, "--json")
+	secret := "sk-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
+	writeIntegrationTarget(t, repo, ".kkachi/runs/"+created.RunID+"/selected-cli.json", `{"version":"0.1","api_token":"`+secret+`"}`+"\n")
+	writeIntegrationTarget(t, repo, ".kkachi/runs/"+created.RunID+"/verification.md", "Status: complete\nAuthorization: Bearer "+secret+"\n")
+
+	bundleOutput := runHelper(t, binary, repo, "diagnostics", "export", "--json")
+	assertOutputContains(t, bundleOutput, `"run_id":"`+created.RunID+`"`, "active diagnostics bundle")
+	assertOutputContains(t, bundleOutput, `"schema_versions":`, "active diagnostics bundle")
+	assertOutputContains(t, bundleOutput, `"selected_artifacts":`, "active diagnostics bundle")
+	assertOutputContains(t, bundleOutput, `"api_token":"[REDACTED]"`, "active diagnostics bundle")
+	if strings.Contains(string(bundleOutput), secret) {
+		t.Fatalf("diagnostics bundle leaked secret: %s", string(bundleOutput))
+	}
+
+	runHelper(t, binary, repo, "diagnostics", "export", "--output", "diagnostics/pilot-002.json")
+	written := readFile(t, filepath.Join(repo, "diagnostics", "pilot-002.json"))
+	assertOutputContains(t, written, `"run_id": "`+created.RunID+`"`, "written diagnostics bundle")
+	assertOutputContains(t, written, `"api_token": "[REDACTED]"`, "written diagnostics bundle")
+	if strings.Contains(string(written), secret) {
+		t.Fatalf("written diagnostics bundle leaked secret: %s", string(written))
+	}
+
+	output, err := runHelperAllowError(binary, repo, "diagnostics", "export", "--output", "diagnostics/pilot-002.json", "--json")
+	if err == nil {
+		t.Fatalf("diagnostics overwrite unexpectedly succeeded\n%s", string(output))
+	}
+	assertOutputContains(t, output, `"code":"diagnostics_output_exists"`, "diagnostics overwrite refusal")
+	if got := readFile(t, filepath.Join(repo, "diagnostics", "pilot-002.json")); string(got) != string(written) {
+		t.Fatalf("diagnostics overwrite changed file\nbefore=%s\nafter=%s", string(written), string(got))
+	}
+}

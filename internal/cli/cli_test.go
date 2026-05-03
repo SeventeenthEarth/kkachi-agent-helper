@@ -2085,3 +2085,116 @@ func TestSchemaMigrateCLIUsageSafetyAndLockErrors(t *testing.T) {
 	stderr.Reset()
 	assertCLIErrorCode(t, runWithOptions([]string{"schema", "migrate", "--from", "0.1", "--to", "0.1", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitSafety, "lock_conflict")
 }
+
+func TestDiagnosticsExportRedactsBundleAndWritesOutput(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	createArgs := []string{"run", "create", "--title", "Diagnostics", "--work-path", "A_development_execution", "--work-mode", "standard", "--urgency", "normal", "--sot-policy", "existing_sot_basis", "--execution-mode", "adapter_qa", "--commander", "Gongmyeong", "--json"}
+	if code := runWithOptions(createArgs, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("run create exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	var created runCreateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
+		t.Fatalf("run create stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"artifact", "init", created.RunID, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("artifact init exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+
+	secret := "sk-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
+	selectedCLIPath := filepath.Join(repo, ".kkachi", "runs", created.RunID, "selected-cli.json")
+	if err := os.WriteFile(selectedCLIPath, []byte(`{"version":"0.1","status":"pending","api_token":"`+secret+`"}`+"\n"), 0o600); err != nil {
+		t.Fatalf("write selected-cli secret: %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"event", "append", "diagnostic.secret", "--run", created.RunID, "--payload", `{"access_token":"` + secret + `"}`, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("event append exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"gate", "check", created.RunID, "intake", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitSafety {
+		t.Fatalf("gate check exit = %d, want safety stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"diagnostics", "export", "--run", created.RunID, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("diagnostics export exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if strings.Contains(stdout.String(), secret) {
+		t.Fatalf("diagnostics bundle leaked secret: %s", stdout.String())
+	}
+	var bundle diagnosticsExportOutput
+	if err := json.Unmarshal(stdout.Bytes(), &bundle); err != nil {
+		t.Fatalf("diagnostics stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if bundle.RunID != created.RunID || len(bundle.SchemaVersions) != 7 || len(bundle.GateReports) == 0 || len(bundle.SelectedArtifacts) == 0 {
+		t.Fatalf("bundle = %#v, want run, schemas, gate reports, and selected artifacts", bundle)
+	}
+	foundSelectedCLI := false
+	for _, artifact := range bundle.SelectedArtifacts {
+		if artifact.Path == ".kkachi/runs/"+created.RunID+"/selected-cli.json" {
+			foundSelectedCLI = true
+			content, ok := artifact.Content.(map[string]any)
+			if !ok || content["api_token"] != project.RedactedPlaceholder {
+				t.Fatalf("selected-cli content = %#v, want redacted api_token", artifact.Content)
+			}
+		}
+	}
+	if !foundSelectedCLI {
+		t.Fatalf("selected-cli artifact missing from diagnostics: %#v", bundle.SelectedArtifacts)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"diagnostics", "export", "--run", created.RunID, "--output", "diagnostics/bundle.json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("diagnostics output export exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "diagnostics bundle exported: diagnostics/bundle.json") {
+		t.Fatalf("human diagnostics output = %q", stdout.String())
+	}
+	written := readCLIText(t, filepath.Join(repo, "diagnostics", "bundle.json"))
+	if strings.Contains(written, secret) || !strings.Contains(written, project.RedactedPlaceholder) {
+		t.Fatalf("written diagnostics redaction mismatch: %s", written)
+	}
+}
+
+func TestDiagnosticsExportUsageAndErrorRedaction(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+
+	secret := "sk-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
+	stdout.Reset()
+	stderr.Reset()
+	code := runWithOptions([]string{"diagnostics", "export", "--output", "../api_token=" + secret, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	if code != ExitSafety {
+		t.Fatalf("exitCode = %d, want safety", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	if strings.Contains(stderr.String(), secret) {
+		t.Fatalf("diagnostics error leaked secret: %s", stderr.String())
+	}
+	env := decodeErrorEnvelope(t, stderr.Bytes())
+	if env.Error.Code != "path_escape" || !strings.Contains(env.Error.Actual, project.RedactedPlaceholder) {
+		t.Fatalf("error = %#v, want redacted path_escape", env.Error)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	assertCLIErrorCode(t, runWithOptions([]string{"diagnostics", "export", "--bogus", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitUsage, "unknown_option")
+}

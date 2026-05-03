@@ -21,14 +21,15 @@ const (
 )
 
 var commandGroups = map[string]struct{}{
-	"project":  {},
-	"run":      {},
-	"artifact": {},
-	"gate":     {},
-	"event":    {},
-	"schema":   {},
-	"install":  {},
-	"lock":     {},
+	"project":     {},
+	"run":         {},
+	"artifact":    {},
+	"gate":        {},
+	"event":       {},
+	"schema":      {},
+	"install":     {},
+	"lock":        {},
+	"diagnostics": {},
 }
 
 // BuildInfo is the public version payload returned by the CLI.
@@ -196,6 +197,19 @@ type schemaMigrationOutput struct {
 	EventID      string   `json:"event_id,omitempty"`
 }
 
+type diagnosticsExportOutput struct {
+	Version           string                       `json:"version"`
+	GeneratedAt       string                       `json:"generated_at"`
+	RootPath          string                       `json:"root_path"`
+	Redaction         project.DiagnosticsRedaction `json:"redaction"`
+	Project           project.DiagnosticsProject   `json:"project"`
+	SchemaVersions    []project.DiagnosticsSchema  `json:"schema_versions"`
+	RunID             string                       `json:"run_id,omitempty"`
+	GateReports       []project.DiagnosticsFile    `json:"gate_reports"`
+	SelectedArtifacts []project.DiagnosticsFile    `json:"selected_artifacts"`
+	OutputPath        string                       `json:"output_path,omitempty"`
+}
+
 type installPlanOutput struct {
 	DryRun        bool                               `json:"dry_run"`
 	DriftCheck    bool                               `json:"drift_check"`
@@ -302,6 +316,9 @@ func runWithOptions(args []string, stdout io.Writer, stderr io.Writer, info Buil
 			if command == "install" {
 				return runInstallCommand(opts.args[1:], root, options.workingDir, info, stdout, stderr, opts.json)
 			}
+			if command == "diagnostics" {
+				return runDiagnosticsCommand(opts.args[1:], root, stdout, stderr, opts.json)
+			}
 			writeError(stderr, opts.json, cliError{
 				Code:     "not_implemented",
 				Message:  fmt.Sprintf("command group %q is not implemented yet", command),
@@ -319,6 +336,58 @@ func runWithOptions(args []string, stdout io.Writer, stderr io.Writer, info Buil
 		})
 		return ExitUsage
 	}
+}
+
+func runDiagnosticsCommand(args []string, root project.Root, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
+	options, cliErr := parseDiagnosticsArgs(args)
+	if cliErr != nil {
+		writeError(stderr, jsonMode, *cliErr)
+		return cliErr.ExitCode
+	}
+	result, err := project.ExportDiagnostics(root, options)
+	if err != nil {
+		cliErr := errorFromProjectProblem(err)
+		writeError(stderr, jsonMode, cliErr)
+		return cliErr.ExitCode
+	}
+	writeDiagnosticsExportResult(stdout, result, jsonMode)
+	return ExitOK
+}
+
+func parseDiagnosticsArgs(args []string) (project.DiagnosticsExportOptions, *cliError) {
+	options := project.DiagnosticsExportOptions{}
+	if len(args) == 0 || args[0] != "export" {
+		return options, &cliError{Code: "diagnostics_subcommand_required", Message: "diagnostics export subcommand is required", Hint: diagnosticsUsageHint(), ExitCode: ExitUsage}
+	}
+	seenRun := false
+	seenOutput := false
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--run":
+			if i+1 >= len(args) {
+				return options, &cliError{Code: "missing_option_value", Message: "--run requires a value", Hint: diagnosticsUsageHint(), ExitCode: ExitUsage, Field: "--run", Expected: "run id or unique prefix", Actual: "missing"}
+			}
+			if seenRun {
+				return options, &cliError{Code: "duplicate_option", Message: "duplicate diagnostics export option \"--run\"", Hint: diagnosticsUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: "--run"}
+			}
+			seenRun = true
+			options.RunID = args[i+1]
+			i++
+		case "--output":
+			if i+1 >= len(args) {
+				return options, &cliError{Code: "missing_option_value", Message: "--output requires a value", Hint: diagnosticsUsageHint(), ExitCode: ExitUsage, Field: "--output", Expected: "repository-relative output path", Actual: "missing"}
+			}
+			if seenOutput {
+				return options, &cliError{Code: "duplicate_option", Message: "duplicate diagnostics export option \"--output\"", Hint: diagnosticsUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: "--output"}
+			}
+			seenOutput = true
+			options.Output = args[i+1]
+			i++
+		default:
+			return options, &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown diagnostics export option %q", args[i]), Hint: diagnosticsUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "--run or --output", Actual: args[i]}
+		}
+	}
+	return options, nil
 }
 
 func runInstallCommand(args []string, root project.Root, workingDir string, info BuildInfo, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
@@ -1108,6 +1177,10 @@ func installUsageHint() string {
 	return "Use install <skills|templates> --source <local-path> [--dry-run|--drift-check] with optional global --json."
 }
 
+func diagnosticsUsageHint() string {
+	return "Use diagnostics export [--run <run_id>] [--output <repo-relative-path>] with optional global --json."
+}
+
 func lockRecoverUsageHint() string {
 	return "Use lock recover <active-run|project-write|all> --reason <text> [--run <run_id>] with optional global --json."
 }
@@ -1335,6 +1408,19 @@ func writeSchemaMigrationResult(w io.Writer, result project.SchemaMigrationResul
 	fmt.Fprintf(w, "would_migrate: %d\n", len(payload.WouldMigrate))
 	fmt.Fprintf(w, "migrated: %d\n", len(payload.Migrated))
 	fmt.Fprintf(w, "unchanged: %d\n", len(payload.Unchanged))
+}
+
+func writeDiagnosticsExportResult(w io.Writer, result project.DiagnosticsBundle, jsonMode bool) {
+	payload := diagnosticsExportOutput{Version: result.Version, GeneratedAt: result.GeneratedAt, RootPath: result.RootPath, Redaction: result.Redaction, Project: result.Project, SchemaVersions: result.SchemaVersions, RunID: result.RunID, GateReports: result.GateReports, SelectedArtifacts: result.SelectedArtifacts, OutputPath: result.OutputPath}
+	if jsonMode || payload.OutputPath == "" {
+		_ = json.NewEncoder(w).Encode(payload)
+		return
+	}
+	fmt.Fprintf(w, "diagnostics bundle exported: %s\n", payload.OutputPath)
+	fmt.Fprintf(w, "run_id: %s\n", payload.RunID)
+	fmt.Fprintf(w, "schema_versions: %d\n", len(payload.SchemaVersions))
+	fmt.Fprintf(w, "gate_reports: %d\n", len(payload.GateReports))
+	fmt.Fprintf(w, "selected_artifacts: %d\n", len(payload.SelectedArtifacts))
 }
 
 func writeInstallPlanResult(w io.Writer, result project.InstallPlanResult, jsonMode bool) {
@@ -1601,6 +1687,7 @@ func hasValue(value string) bool {
 }
 
 func writeError(w io.Writer, jsonMode bool, err cliError) {
+	err = redactCLIError(err)
 	if jsonMode {
 		writeJSONError(w, err)
 		return
@@ -1633,7 +1720,17 @@ func writeHumanError(w io.Writer, err cliError) {
 }
 
 func usageHint() string {
-	return "Usage: kkachi-agent-helper [--json] <version|project|run|artifact|gate|event|schema|install>"
+	return "Usage: kkachi-agent-helper [--json] <version|project|run|artifact|gate|event|schema|install|diagnostics>"
+}
+
+func redactCLIError(err cliError) cliError {
+	err.Message = project.RedactString(err.Message)
+	err.Hint = project.RedactString(err.Hint)
+	err.Path = project.RedactString(err.Path)
+	err.Field = project.RedactString(err.Field)
+	err.Expected = project.RedactString(err.Expected)
+	err.Actual = project.RedactString(err.Actual)
+	return err
 }
 
 func errorFromProjectProblem(err error) cliError {
@@ -1673,7 +1770,7 @@ func exitCodeForProblem(code string) int {
 		return ExitNotFound
 	case "artifact_baseline_encode_failed", "schema_encode_failed":
 		return ExitInternal
-	case "absolute_path", "empty_path", "path_escape", "repo_root_path", "symlink_escape", "symlink_resolution_failed", "path_inspection_failed", "repo_root_required", "helper_state_exists", "last_event_id_mismatch", "status_invalid_json", "status_last_event_id_invalid", "status_active_run_invalid", "event_log_invalid", "event_log_empty", "event_id_invalid", "event_id_exhausted", "run_metadata_invalid", "run_metadata_invalid_json", "active_run_conflict", "run_transition_invalid", "run_not_found", "run_id_ambiguous", "run_root_read_failed", "run_metadata_read_failed", "run_id_collision", "run_artifact_init_invalid_state", "artifact_inspection_failed", "artifact_path_invalid", "status_gate_summary_invalid", "lock_conflict", "lock_stale_recovery_required", "lock_metadata_invalid", "lock_not_found", "lock_identity_mismatch", "lock_release_failed", "schema_validation_read_failed", "schema_reference_invalid", "schema_read_failed", "schema_export_inspection_failed", "schema_export_conflict", "schema_export_read_failed", "schema_migration_path_inspection_failed", "schema_migration_source_version_mismatch", "schema_migration_read_failed", "schema_migration_invalid_json", "schema_migration_invalid_event_log", "schema_migration_version_missing", "schema_migration_backup_failed", "install_manifest_read_failed", "install_manifest_invalid_json", "install_manifest_invalid", "install_manifest_kind_mismatch", "install_source_invalid", "install_source_item_invalid", "install_source_read_failed", "install_checksum_mismatch", "install_duplicate_target", "install_target_inspection_failed", "install_target_read_failed", "install_owner_marker_missing", "install_compatibility_failed", "install_preflight_blocked", "install_apply_failed":
+	case "absolute_path", "empty_path", "path_escape", "repo_root_path", "symlink_escape", "symlink_resolution_failed", "path_inspection_failed", "repo_root_required", "helper_state_exists", "last_event_id_mismatch", "status_invalid_json", "status_last_event_id_invalid", "status_active_run_invalid", "event_log_invalid", "event_log_empty", "event_id_invalid", "event_id_exhausted", "run_metadata_invalid", "run_metadata_invalid_json", "active_run_conflict", "run_transition_invalid", "run_not_found", "run_id_ambiguous", "run_root_read_failed", "run_metadata_read_failed", "run_id_collision", "run_artifact_init_invalid_state", "artifact_inspection_failed", "artifact_path_invalid", "status_gate_summary_invalid", "lock_conflict", "lock_stale_recovery_required", "lock_metadata_invalid", "lock_not_found", "lock_identity_mismatch", "lock_release_failed", "schema_validation_read_failed", "schema_reference_invalid", "schema_read_failed", "schema_export_inspection_failed", "schema_export_conflict", "schema_export_read_failed", "schema_migration_path_inspection_failed", "schema_migration_source_version_mismatch", "schema_migration_read_failed", "schema_migration_invalid_json", "schema_migration_invalid_event_log", "schema_migration_version_missing", "schema_migration_backup_failed", "install_manifest_read_failed", "install_manifest_invalid_json", "install_manifest_invalid", "install_manifest_kind_mismatch", "install_source_invalid", "install_source_item_invalid", "install_source_read_failed", "install_checksum_mismatch", "install_duplicate_target", "install_target_inspection_failed", "install_target_read_failed", "install_owner_marker_missing", "install_compatibility_failed", "install_preflight_blocked", "install_apply_failed", "diagnostics_encode_failed", "diagnostics_output_exists":
 		return ExitSafety
 	default:
 		return ExitUsage

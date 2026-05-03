@@ -334,6 +334,7 @@ kkachi-agent-helper schema export [--schema <schema>|--all] [--dry-run]
 kkachi-agent-helper schema migrate --from <version> --to <version>
 kkachi-agent-helper install skills --source <local-path> [--dry-run|--drift-check]
 kkachi-agent-helper install templates --source <local-path> [--dry-run|--drift-check]
+kkachi-agent-helper diagnostics export [--run <run_id-or-prefix>] [--output <repo-relative-path>]
 ```
 
 ### `gate check`
@@ -525,6 +526,14 @@ Command UX rules:
 - Event run ids may be omitted/null; when present, they must be printable, newline-free strings. Full run id syntax is defined by later run workflow tasks.
 - State-file creation and replacement use atomic temp-file writes with durable sync before publish where the host filesystem supports it.
 - Commands must reject absolute paths, paths escaping the repository root, and ambiguous run ids.
+
+### `diagnostics export`
+
+`pilot-002` introduces `diagnostics export [--run <run_id-or-prefix>] [--output <repo-relative-path>]` as a support-safe diagnostic bundle. The command is deterministic and does not append events, take locks, recover state, or repair `.kkachi/`. Without `--output`, it writes the JSON bundle to stdout. With `--output`, it writes one new repository-confined JSON file and prints a compact summary unless `--json` is used.
+
+The bundle includes redacted project config, status, event entries, project-local schema versions, run-local gate reports, and a selected support artifact set for the requested run. If `--run` is omitted, the active run is used when one is recorded in `status.json`; otherwise the bundle contains project-level diagnostics only. Selected artifacts are intentionally narrower than the full artifact tree: `run-metadata.json`, intake classification, backend evidence files, test/verification/docs-update evidence, and `final-report.md`.
+
+Token-like values are redacted in both diagnostics bundles and CLI errors. Redaction preserves field names and replaces sensitive values with `[REDACTED]`; key names such as `token`, `secret`, `password`, `api_key`, `authorization`, and credential-like variants are redacted recursively in JSON payloads, and bearer/assignment/long-token patterns are redacted from text.
 
 ### `project status`
 
