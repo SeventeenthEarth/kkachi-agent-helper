@@ -1,0 +1,2 @@
+{"version":"0.1","event_id":"evt-000001","occurred_at":"2026-05-03T00:00:00Z","run_id":null,"type":"project.initialized","actor":"helper","payload":{}}
+{"version":"0.1","event_id":"evt-000002","occurred_at":"2026-05-03T00:01:00Z","run_id":null,"type":"run.created","actor":"helper","payload":{}}

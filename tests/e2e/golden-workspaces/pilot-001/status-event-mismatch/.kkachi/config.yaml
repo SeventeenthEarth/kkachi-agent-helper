@@ -1,0 +1,15 @@
+version: "0.1"
+project:
+  name: "golden-mismatch"
+  root_policy: "repository_confined_no_symlink_escape"
+paths:
+  run_root: ".kkachi/runs"
+  status_file: ".kkachi/status.json"
+  events_file: ".kkachi/events.jsonl"
+locks:
+  one_active_write_run: true
+schemas:
+  mode: "both"
+compat:
+  required_skills: ">=0.1.0"
+  required_bridge: ">=0.1.0"

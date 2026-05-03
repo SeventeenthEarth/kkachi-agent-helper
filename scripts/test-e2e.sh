@@ -19,3 +19,4 @@ run_scenario() {
 
 run_scenario "runwf-001/003 lifecycle artifacts" "$project_root/tests/e2e/project-init.sh"
 run_scenario "runwf-002 lock recovery" "$project_root/tests/e2e/runwf-002-locks.sh"
+run_scenario "pilot-001 CLI golden workspaces" "$project_root/tests/e2e/pilot-001-golden-workspaces.sh"

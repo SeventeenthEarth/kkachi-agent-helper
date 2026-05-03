@@ -76,10 +76,11 @@ Status values: `Planned`, `In Progress`, `Blocked`, `Completed`, `Deferred`.
 
 | Task ID | Title | Status | Work guide | Notes |
 |---|---|---|---|---|
-| pilot-001 | CLI e2e harness and golden workspaces | Planned | Build black-box CLI tests against temporary repositories and golden workspaces for successful and failing flows. Cover unsafe paths, bad JSON, lock conflicts, missing artifacts, schema mismatches, and ambiguous run ids. | End-to-end confidence. |
+| pilot-001 | CLI e2e harness and golden workspaces | Completed | Build black-box CLI tests against temporary repositories and golden workspaces for successful and failing flows. Cover unsafe paths, bad JSON, lock conflicts, missing artifacts, schema mismatches, and ambiguous run ids. | Implemented `tests/e2e/pilot-001-golden-workspaces.sh` plus schema-mismatch, status/event-mismatch, and invalid-events JSONL golden workspace fixtures; wired into `make test-e2e`. |
 | pilot-002 | Diagnostics bundle and redaction | Planned | Add redacted diagnostic export containing config, status, events, schema versions, gate reports, and selected artifacts. Redact token-like values in errors and bundles. | Support and safety. |
 | pilot-003 | User docs, compatibility, and release packaging | Planned | Write README quickstart, command reference, specs links, helper/bridge/skills version matrix, release notes format, build artifacts, checksums, and local install command. Keep examples local and secret-free. | One adoption/release PR. |
 | pilot-004 | MVP pilot acceptance run | Planned | Execute one real Kkachi pilot run and preserve evidence: status, events, artifacts, bridge evidence, verification, docs-update decision, gate report, diagnostics bundle, and final report. | Proves Kkachi readiness discipline. |
+| pilot-005 | Go-native E2E harness cleanup | Planned | Replace Python-assisted shell E2E helpers with Go-native test helpers or Go E2E tests. Remove `python3` as an E2E harness dependency while preserving black-box CLI coverage and golden workspace scenarios. | Follow-up cleanup; keep pilot-001 focused on coverage. |
 
 ## Backlog and review points
 
