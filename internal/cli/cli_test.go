@@ -1763,3 +1763,91 @@ func TestGateFinalCLI(t *testing.T) {
 		t.Fatalf("finalPassed = %#v, want final pass", finalPassed)
 	}
 }
+
+func TestSchemaMigrateCLIDryRunAndRealRun(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+
+	beforeEvents := readCLIText(t, filepath.Join(repo, ".kkachi", "events.jsonl"))
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"schema", "migrate", "--from", "0.1", "--to", "0.1", "--dry-run", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("schema migrate dry-run exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	var dryRun schemaMigrationOutput
+	if err := json.Unmarshal(stdout.Bytes(), &dryRun); err != nil {
+		t.Fatalf("dry-run stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if !dryRun.DryRun || dryRun.Status != "pass" || dryRun.EventID != "" || dryRun.BackupPath != "" || len(dryRun.WouldBackup) == 0 || len(dryRun.BackedUp) != 0 {
+		t.Fatalf("dryRun = %#v, want read-only migration summary", dryRun)
+	}
+	if got := readCLIText(t, filepath.Join(repo, ".kkachi", "events.jsonl")); got != beforeEvents {
+		t.Fatalf("events changed on dry-run\nbefore=%s\nafter=%s", beforeEvents, got)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"schema", "migrate", "--from", "0.1", "--to", "0.1", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("schema migrate exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	var migrated schemaMigrationOutput
+	if err := json.Unmarshal(stdout.Bytes(), &migrated); err != nil {
+		t.Fatalf("migrate stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if migrated.DryRun || migrated.EventID != "evt-000002" || migrated.BackupPath == "" || len(migrated.BackedUp) == 0 || len(migrated.Migrated) != 0 {
+		t.Fatalf("migrated = %#v, want no-op backup and event", migrated)
+	}
+	if !strings.Contains(readCLIText(t, filepath.Join(repo, ".kkachi", "events.jsonl")), `"type":"schema.migrated"`) {
+		t.Fatalf("events missing schema.migrated")
+	}
+	if _, err := os.Stat(filepath.Join(repo, filepath.FromSlash(migrated.BackupPath), ".kkachi", "status.json")); err != nil {
+		t.Fatalf("backup status missing: %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"schema", "migrate", "--from", "0.1", "--to", "0.1"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("schema migrate human exit = %d stderr=%s", code, stderr.String())
+	}
+	if out := stdout.String(); !strings.Contains(out, "schema migrated: 0.1 -> 0.1") || !strings.Contains(out, "event_id: evt-000003") {
+		t.Fatalf("human schema migrate output = %q", out)
+	}
+}
+
+func TestSchemaMigrateCLIUsageSafetyAndLockErrors(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+
+	cases := []struct {
+		name     string
+		args     []string
+		exitCode int
+		code     string
+	}{
+		{name: "missing from", args: []string{"schema", "migrate", "--to", "0.1", "--json"}, exitCode: ExitUsage, code: "missing_required_option"},
+		{name: "missing to", args: []string{"schema", "migrate", "--from", "0.1", "--json"}, exitCode: ExitUsage, code: "missing_required_option"},
+		{name: "unknown source", args: []string{"schema", "migrate", "--from", "9.9", "--to", "0.1", "--json"}, exitCode: ExitUsage, code: "schema_migration_unknown_source_version"},
+		{name: "unknown target", args: []string{"schema", "migrate", "--from", "0.1", "--to", "0.2", "--json"}, exitCode: ExitUsage, code: "schema_migration_not_registered"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			stdout.Reset()
+			stderr.Reset()
+			assertCLIErrorCode(t, runWithOptions(tt.args, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, tt.exitCode, tt.code)
+		})
+	}
+
+	fresh := project.LockMetadata{Version: project.LockVersion, LockName: project.ProjectWriteLockName, OwnerPID: os.Getpid(), Hostname: cliMustHostname(t), Command: "fresh schema migrate", CreatedAt: time.Now().UTC().Format(time.RFC3339)}
+	writeCLILock(t, repo, project.ProjectWriteLockName, fresh)
+	stdout.Reset()
+	stderr.Reset()
+	assertCLIErrorCode(t, runWithOptions([]string{"schema", "migrate", "--from", "0.1", "--to", "0.1", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitSafety, "lock_conflict")
+}

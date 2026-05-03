@@ -248,6 +248,76 @@ func TestProjectInitCreatesStateAndRefusesOverwrite(t *testing.T) {
 	}
 }
 
+func TestPackg002SchemaMigrateBacksUpRunMetadata(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	binary := buildHelperBinary(t)
+
+	runHelper(t, binary, repo, "project", "init", "--json")
+	createdOutput := runHelper(t, binary, repo,
+		"run", "create",
+		"--title", "Packg migration integration",
+		"--work-path", "A_development_execution",
+		"--work-mode", "standard",
+		"--urgency", "normal",
+		"--sot-policy", "existing_sot_basis",
+		"--execution-mode", "production_write",
+		"--commander", "Gongmyeong",
+		"--task-id", "packg-002",
+		"--json",
+	)
+	var created struct {
+		RunID   string `json:"run_id"`
+		EventID string `json:"event_id"`
+	}
+	if err := json.Unmarshal(createdOutput, &created); err != nil {
+		t.Fatalf("run create output is not JSON: %v\n%s", err, string(createdOutput))
+	}
+	if created.EventID != "evt-000002" {
+		t.Fatalf("created event id = %q, want evt-000002", created.EventID)
+	}
+
+	beforeEvents := readFile(t, filepath.Join(repo, ".kkachi", "events.jsonl"))
+	dryRunOutput := runHelper(t, binary, repo, "schema", "migrate", "--from", "0.1", "--to", "0.1", "--dry-run", "--json")
+	var dryRun struct {
+		DryRun      bool     `json:"dry_run"`
+		WouldBackup []string `json:"would_backup"`
+		BackedUp    []string `json:"backed_up"`
+		EventID     string   `json:"event_id"`
+	}
+	if err := json.Unmarshal(dryRunOutput, &dryRun); err != nil {
+		t.Fatalf("schema migrate dry-run output is not JSON: %v\n%s", err, string(dryRunOutput))
+	}
+	if !dryRun.DryRun || dryRun.EventID != "" || len(dryRun.WouldBackup) == 0 || len(dryRun.BackedUp) != 0 {
+		t.Fatalf("dryRun = %#v, want read-only summary", dryRun)
+	}
+	if got := readFile(t, filepath.Join(repo, ".kkachi", "events.jsonl")); string(got) != string(beforeEvents) {
+		t.Fatalf("schema migrate dry-run mutated events\nbefore=%s\nafter=%s", string(beforeEvents), string(got))
+	}
+
+	migrateOutput := runHelper(t, binary, repo, "schema", "migrate", "--from", "0.1", "--to", "0.1", "--json")
+	var migrated struct {
+		DryRun     bool     `json:"dry_run"`
+		EventID    string   `json:"event_id"`
+		BackupPath string   `json:"backup_path"`
+		BackedUp   []string `json:"backed_up"`
+		Unchanged  []string `json:"unchanged"`
+	}
+	if err := json.Unmarshal(migrateOutput, &migrated); err != nil {
+		t.Fatalf("schema migrate output is not JSON: %v\n%s", err, string(migrateOutput))
+	}
+	metadataRelative := ".kkachi/runs/" + created.RunID + "/run-metadata.json"
+	if migrated.DryRun || migrated.EventID != "evt-000003" || migrated.BackupPath == "" || !stringListed(migrated.BackedUp, metadataRelative) || !stringListed(migrated.Unchanged, metadataRelative) {
+		t.Fatalf("migrated = %#v, want run metadata backup and evt-000003", migrated)
+	}
+	backupMetadata := filepath.Join(repo, filepath.FromSlash(migrated.BackupPath), filepath.FromSlash(metadataRelative))
+	assertOutputContains(t, readFile(t, backupMetadata), `"task_id": "packg-002"`, "migration backup run metadata")
+	assertOutputContains(t, readFile(t, filepath.Join(repo, ".kkachi", "events.jsonl")), `"type":"schema.migrated"`, "schema migrate events")
+	assertOutputContains(t, readFile(t, filepath.Join(repo, ".kkachi", "status.json")), `"last_event_id": "evt-000003"`, "schema migrate status")
+}
+
 func TestGates001And002GateCheckWorkflow(t *testing.T) {
 	repo := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
@@ -756,6 +826,15 @@ type gateCheck struct {
 func gateCheckListed(checks []gateCheck, name string, status string) bool {
 	for _, check := range checks {
 		if check.Name == name && check.Status == status {
+			return true
+		}
+	}
+	return false
+}
+
+func stringListed(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
 			return true
 		}
 	}

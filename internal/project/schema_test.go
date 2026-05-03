@@ -296,3 +296,112 @@ func schemaRequiresField(object map[string]any, field string) bool {
 	}
 	return false
 }
+
+func TestSchemaMigrationDryRunIsReadOnlyAndUnknownSourceFails(t *testing.T) {
+	repo, root, _ := initSchemaTestProject(t)
+	beforeEvents := readSchemaTestText(t, filepath.Join(repo, ".kkachi", "events.jsonl"))
+	beforeStatus := readSchemaTestText(t, filepath.Join(repo, ".kkachi", "status.json"))
+
+	result, err := MigrateSchemaState(root, SchemaMigrationOptions{From: SchemaVersion, To: SchemaVersion, DryRun: true, Now: deterministicInitOptions().Now})
+	if err != nil {
+		t.Fatalf("MigrateSchemaState(dry-run) error = %v", err)
+	}
+	if !result.DryRun || result.Status != "pass" || result.EventID != "" || result.BackupPath != "" || len(result.BackedUp) != 0 || len(result.WouldBackup) == 0 || len(result.Unchanged) == 0 {
+		t.Fatalf("dry-run result = %#v, want read-only summary", result)
+	}
+	if got := readSchemaTestText(t, filepath.Join(repo, ".kkachi", "events.jsonl")); got != beforeEvents {
+		t.Fatalf("events changed on dry-run\nbefore=%s\nafter=%s", beforeEvents, got)
+	}
+	if got := readSchemaTestText(t, filepath.Join(repo, ".kkachi", "status.json")); got != beforeStatus {
+		t.Fatalf("status changed on dry-run\nbefore=%s\nafter=%s", beforeStatus, got)
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".kkachi", "backups")); !os.IsNotExist(err) {
+		t.Fatalf("backup dir exists after dry-run: %v", err)
+	}
+
+	_, err = MigrateSchemaState(root, SchemaMigrationOptions{From: "9.9", To: SchemaVersion})
+	assertProblemCode(t, err, "schema_migration_unknown_source_version")
+}
+
+func TestSchemaMigrationNoopCreatesBackupAndEvent(t *testing.T) {
+	repo, root, _ := initSchemaTestProject(t)
+	result, err := MigrateSchemaState(root, SchemaMigrationOptions{From: SchemaVersion, To: SchemaVersion, Now: deterministicInitOptions().Now})
+	if err != nil {
+		t.Fatalf("MigrateSchemaState() error = %v", err)
+	}
+	if result.DryRun || result.Status != "pass" || result.EventID != "evt-000002" || result.Migration == "" || result.BackupPath == "" || len(result.BackedUp) == 0 || len(result.Migrated) != 0 {
+		t.Fatalf("result = %#v, want no-op backup and event", result)
+	}
+	for _, relative := range []string{ConfigPath, StatusPath, EventsPath, ".kkachi/schemas/status.schema.json"} {
+		backup := filepath.Join(repo, filepath.FromSlash(result.BackupPath), filepath.FromSlash(relative))
+		if _, err := os.Stat(backup); err != nil {
+			t.Fatalf("backup %s missing: %v", backup, err)
+		}
+	}
+	events := readSchemaTestText(t, filepath.Join(repo, ".kkachi", "events.jsonl"))
+	if !strings.Contains(events, `"type":"schema.migrated"`) || !strings.Contains(events, `"backup_path":"`+result.BackupPath+`"`) {
+		t.Fatalf("events missing schema.migrated backup evidence: %s", events)
+	}
+	var status map[string]any
+	readJSONFile(t, filepath.Join(repo, ".kkachi", "status.json"), &status)
+	if status["last_event_id"] != result.EventID {
+		t.Fatalf("status last_event_id = %v, want %s", status["last_event_id"], result.EventID)
+	}
+}
+
+func TestSchemaMigrationRejectsStateVersionMismatchAndLockConflict(t *testing.T) {
+	repo, root, _ := initSchemaTestProject(t)
+	statusPath := filepath.Join(repo, ".kkachi", "status.json")
+	var status map[string]any
+	readJSONFile(t, statusPath, &status)
+	status["version"] = "0.2"
+	data, err := json.MarshalIndent(status, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal status: %v", err)
+	}
+	if err := os.WriteFile(statusPath, append(data, '\n'), 0o600); err != nil {
+		t.Fatalf("write status: %v", err)
+	}
+	_, err = MigrateSchemaState(root, SchemaMigrationOptions{From: SchemaVersion, To: SchemaVersion, DryRun: true})
+	assertProblemCode(t, err, "schema_migration_source_version_mismatch")
+
+	status["version"] = SchemaVersion
+	data, _ = json.MarshalIndent(status, "", "  ")
+	if err := os.WriteFile(statusPath, append(data, '\n'), 0o600); err != nil {
+		t.Fatalf("restore status: %v", err)
+	}
+	freshLock := LockMetadata{Version: LockVersion, LockName: ProjectWriteLockName, OwnerPID: os.Getpid(), Hostname: mustHostname(t), Command: "fresh schema migrate", CreatedAt: time.Now().UTC().Format(time.RFC3339)}
+	writeLockMetadata(t, repo, ProjectWriteLockName, freshLock)
+	_, err = MigrateSchemaState(root, SchemaMigrationOptions{From: SchemaVersion, To: SchemaVersion})
+	assertProblemCode(t, err, "lock_conflict")
+}
+
+func TestSchemaMigrationRejectsStatusEventTailMismatch(t *testing.T) {
+	repo, root, _ := initSchemaTestProject(t)
+	eventsPath := filepath.Join(repo, ".kkachi", "events.jsonl")
+	file, err := os.OpenFile(eventsPath, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatalf("open events: %v", err)
+	}
+	if _, err := file.WriteString(`{"version":"0.1","event_id":"evt-000002","occurred_at":"2026-04-30T02:00:00Z","run_id":null,"type":"schema.migrated","actor":"helper","payload":{}}` + "\n"); err != nil {
+		t.Fatalf("append incoherent event: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close events: %v", err)
+	}
+
+	_, err = MigrateSchemaState(root, SchemaMigrationOptions{From: SchemaVersion, To: SchemaVersion, DryRun: true})
+	assertProblemCode(t, err, "last_event_id_mismatch")
+	if _, err := os.Stat(filepath.Join(repo, ".kkachi", "backups")); !os.IsNotExist(err) {
+		t.Fatalf("backup dir exists after incoherent migration refusal: %v", err)
+	}
+}
+
+func readSchemaTestText(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(data)
+}

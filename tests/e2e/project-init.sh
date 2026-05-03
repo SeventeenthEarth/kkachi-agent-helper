@@ -89,6 +89,45 @@ if grep -Fq '"event_id"' "$tmpdir/schema-export-idempotent.json"; then
   exit 1
 fi
 
+(cd "$export_repo" && "$helper" schema migrate --from 0.1 --to 0.1 --dry-run --json > "$tmpdir/schema-migrate-dry-run.json" 2> "$tmpdir/schema-migrate-dry-run.err")
+assert_contains "$tmpdir/schema-migrate-dry-run.json" '"dry_run":true' "schema migrate dry-run JSON"
+assert_contains "$tmpdir/schema-migrate-dry-run.json" '"from_version":"0.1"' "schema migrate dry-run JSON"
+assert_contains "$tmpdir/schema-migrate-dry-run.json" '"to_version":"0.1"' "schema migrate dry-run JSON"
+assert_contains "$tmpdir/schema-migrate-dry-run.json" '"would_backup":[' "schema migrate dry-run JSON"
+if grep -Fq '"event_id"' "$tmpdir/schema-migrate-dry-run.json"; then
+  echo "dry-run schema migrate unexpectedly recorded an event" >&2
+  cat "$tmpdir/schema-migrate-dry-run.json" >&2
+  exit 1
+fi
+
+(cd "$export_repo" && "$helper" schema migrate --from 0.1 --to 0.1 --json > "$tmpdir/schema-migrate.json" 2> "$tmpdir/schema-migrate.err")
+assert_contains "$tmpdir/schema-migrate.json" '"dry_run":false' "schema migrate JSON"
+assert_contains "$tmpdir/schema-migrate.json" '"migration":"noop-0.1-to-0.1"' "schema migrate JSON"
+assert_contains "$tmpdir/schema-migrate.json" '"event_id":"evt-000003"' "schema migrate JSON"
+assert_contains "$tmpdir/schema-migrate.json" '"backup_path":".kkachi/backups/schema-migrations/' "schema migrate JSON"
+assert_contains "$export_repo/.kkachi/events.jsonl" '"type":"schema.migrated"' "schema migrate events"
+backup_path="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["backup_path"])' "$tmpdir/schema-migrate.json")"
+if [ ! -f "$export_repo/$backup_path/.kkachi/status.json" ]; then
+  echo "schema migration backup missing status.json at $backup_path" >&2
+  exit 1
+fi
+
+if (cd "$export_repo" && "$helper" schema migrate --from 9.9 --to 0.1 --json > "$tmpdir/schema-migrate-unknown.json" 2> "$tmpdir/schema-migrate-unknown.err"); then
+  echo "schema migrate accepted unknown source version" >&2
+  exit 1
+fi
+assert_contains "$tmpdir/schema-migrate-unknown.err" '"code":"schema_migration_unknown_source_version"' "schema migrate unknown source error"
+
+(cd "$export_repo" && "$helper" run create --title "Packg e2e metadata" --work-path A_development_execution --work-mode standard --urgency normal --sot-policy existing_sot_basis --execution-mode production_write --commander Gongmyeong --task-id packg-002 --json > "$tmpdir/schema-migrate-run-create.json" 2> "$tmpdir/schema-migrate-run-create.err")
+migrate_run_id="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run_id"])' "$tmpdir/schema-migrate-run-create.json")"
+(cd "$export_repo" && "$helper" schema migrate --from 0.1 --to 0.1 --json > "$tmpdir/schema-migrate-with-run.json" 2> "$tmpdir/schema-migrate-with-run.err")
+run_backup_path="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["backup_path"])' "$tmpdir/schema-migrate-with-run.json")"
+if [ ! -f "$export_repo/$run_backup_path/.kkachi/runs/$migrate_run_id/run-metadata.json" ]; then
+  echo "schema migration backup missing run-metadata.json at $run_backup_path" >&2
+  exit 1
+fi
+assert_contains "$export_repo/$run_backup_path/.kkachi/runs/$migrate_run_id/run-metadata.json" '"task_id": "packg-002"' "schema migration run metadata backup"
+
 assert_contains "$repo/.kkachi/config.yaml" 'version: "0.1"' "config.yaml"
 assert_contains "$repo/.kkachi/config.yaml" 'name: "repo"' "config.yaml"
 assert_contains "$repo/.kkachi/config.yaml" 'root_policy: "repository_confined_no_symlink_escape"' "config.yaml"

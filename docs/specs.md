@@ -429,6 +429,27 @@ The schema selector accepts canonical embedded names (`config`, `status`, `event
 
 Dry-run exports are read-only and report `would_write` without an event. Real exports are serialized by `.kkachi/project_write.lock`, refuse status/event incoherence, replace only canonical schema files, and append `schema.exported` only when at least one schema file changes.
 
+`schema migrate --from <version> --to <version> [--dry-run]` JSON output has the following stable shape:
+
+```json
+{
+  "dry_run": false,
+  "from_version": "0.1",
+  "to_version": "0.1",
+  "status": "pass",
+  "migration": "noop-0.1-to-0.1",
+  "would_backup": [".kkachi/status.json"],
+  "backed_up": [".kkachi/status.json"],
+  "backup_path": ".kkachi/backups/schema-migrations/20260503T000000Z-0.1-to-0.1",
+  "would_migrate": [],
+  "migrated": [],
+  "unchanged": [".kkachi/status.json"],
+  "event_id": "evt-000002"
+}
+```
+
+`packg-002` registers the first `0.1 -> 0.1` no-op migration. Dry-run migrations are read-only and report backup/migration intent without taking a lock, writing backups, or appending an event. Real migrations are serialized by `.kkachi/project_write.lock`, refuse status/event incoherence, refuse unknown source versions and unregistered paths, copy versioned helper state into `.kkachi/backups/schema-migrations/<timestamp>-<from>-to-<to>/`, and append `schema.migrated` after backup creation.
+
 Command UX rules:
 
 - `--json` emits machine-readable output and no decorative text.
@@ -532,6 +553,7 @@ Lock requirements:
 - `project init` writes project-local JSON Schema draft 2020-12 copies from the embedded canonical registry for config, status, event, run metadata, selected CLI, and bridge session snapshot. These copies are transparency artifacts; validation uses the embedded registry so a relaxed local schema cannot make invalid helper state pass.
 - `schema validate <file> --schema <schema>` accepts embedded schema names, canonical schema filenames, or repository-confined `.kkachi/schemas/*.schema.json` references. It validates config YAML through the deterministic helper config parser, validates event JSONL line-by-line for `events.jsonl`, and validates JSON state/evidence objects for the other schemas. Passing validation exits `0`; schema failures exit `3`; usage errors exit `2`.
 - `schema export [--schema <schema>|--all] [--dry-run]` copies embedded schemas into `.kkachi/schemas/`. Dry runs are read-only previews. Real exports are serialized by `project_write.lock`, refuse status/event incoherence before mutation, write only canonical schema paths, append one `schema.exported` event when files change, and leave unchanged files untouched.
+- `schema migrate --from <version> --to <version> [--dry-run]` runs registered state migrations. The initial registered path is `0.1 -> 0.1` no-op. Dry runs are read-only summaries. Real migrations are serialized by `project_write.lock`, refuse unknown source versions and incoherent status/event state, write a backup under `.kkachi/backups/schema-migrations/`, and append `schema.migrated`.
 - Every schema has a version.
 - Backward-compatible additions are allowed within a minor version when fields are optional.
 - Required field changes need a migration command and tests.
