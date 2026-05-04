@@ -2,7 +2,7 @@
 
 `kkachi-agent-helper` is the deterministic local CLI helper for Kkachi project state, run artifacts, locks, schemas, events, diagnostics, and install scaffolding. It stays local-first and scriptable: it does not choose a backend, plan work, review code, call network services, or store secrets.
 
-The current implementation covers `corex-001` through `corex-005`, `runwf-001` through `runwf-004`, `gates-001` through `gates-005`, `packg-001` through `packg-004`, and `pilot-003`.
+The current implementation covers `corex-001` through `corex-005`, `runwf-001` through `runwf-004`, `gates-001` through `gates-005`, `packg-001` through `packg-004`, and `pilot-004`.
 
 ## Source of truth
 
@@ -71,7 +71,7 @@ Test lanes are intentionally split:
 - `make test-prepare` runs formatting and static preparation checks.
 - `make test-unit` runs package/unit-level Go tests.
 - `make test-int` runs tagged integration tests.
-- `make test-e2e` runs local black-box scenarios for project init, lock recovery, golden workspaces, diagnostics export, and release packaging.
+- `make test-e2e` runs local black-box scenarios for project init, lock recovery, golden workspaces, diagnostics export, release packaging, and the pilot acceptance run.
 - `make test` runs all lanes sequentially.
 
 ## Command reference

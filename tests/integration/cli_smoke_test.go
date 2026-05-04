@@ -1303,6 +1303,126 @@ func writeIntegrationJSONFile(t *testing.T, path string, payload map[string]any)
 	}
 }
 
+func TestPilot004AdapterQAFinalDiagnosticsSmoke(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	binary := buildHelperBinary(t)
+
+	runHelper(t, binary, repo, "project", "init", "--json")
+	createdOutput := runHelper(t, binary, repo,
+		"run", "create",
+		"--title", "Pilot 004 integration acceptance",
+		"--work-path", "A_development_execution",
+		"--work-mode", "standard",
+		"--urgency", "normal",
+		"--sot-policy", "existing_sot_basis",
+		"--execution-mode", "adapter_qa",
+		"--commander", "Gongmyeong",
+		"--redteam", "Haneul",
+		"--task-id", "pilot-004",
+		"--json",
+	)
+	var created struct {
+		RunID string `json:"run_id"`
+	}
+	if err := json.Unmarshal(createdOutput, &created); err != nil {
+		t.Fatalf("run create output is not JSON: %v\n%s", err, string(createdOutput))
+	}
+	activateOutput := runHelper(t, binary, repo, "run", "activate", created.RunID, "--json")
+	var activated struct {
+		RunID string `json:"run_id"`
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal(activateOutput, &activated); err != nil {
+		t.Fatalf("run activate output is not JSON: %v\n%s", err, string(activateOutput))
+	}
+	if activated.RunID != created.RunID || activated.State != "active" {
+		t.Fatalf("activated = %#v, want active run %s", activated, created.RunID)
+	}
+	statusActive := runHelper(t, binary, repo, "project", "status", "--json")
+	assertOutputContains(t, statusActive, `"active_run_id":"`+created.RunID+`"`, "pilot-004 active status")
+	assertOutputContains(t, statusActive, `"active_run_state":"active"`, "pilot-004 active status")
+
+	runHelper(t, binary, repo, "artifact", "init", created.RunID, "--json")
+	writePilot004AcceptanceEvidence(t, repo, created.RunID)
+
+	for _, gate := range []string{"intake", "sot", "roadmap", "plan", "backend", "implementation", "review", "verification", "docs"} {
+		output := runHelper(t, binary, repo, "gate", "check", created.RunID, gate, "--json")
+		var checked gateCheckOutput
+		if err := json.Unmarshal(output, &checked); err != nil {
+			t.Fatalf("%s gate output is not JSON: %v\n%s", gate, err, string(output))
+		}
+		if checked.Status != "pass" || checked.ReportPath == "" {
+			t.Fatalf("%s gate = %#v, want pass with report path", gate, checked)
+		}
+	}
+
+	finalOutput := runHelper(t, binary, repo, "gate", "final", created.RunID, "--json")
+	var final gateCheckOutput
+	if err := json.Unmarshal(finalOutput, &final); err != nil {
+		t.Fatalf("final gate output is not JSON: %v\n%s", err, string(finalOutput))
+	}
+	if final.Gate != "final" || final.Status != "pass" || final.ReportPath == "" || !gateCheckListed(final.Checks, "backend_gate", "pass") {
+		t.Fatalf("final gate = %#v, want pass with backend_gate evidence", final)
+	}
+	assertOutputContains(t, readFile(t, filepath.Join(repo, final.ReportPath)), `"status": "pass"`, "final gate report")
+
+	diagnosticsOutput := runHelper(t, binary, repo, "diagnostics", "export", "--run", created.RunID, "--json")
+	assertOutputContains(t, diagnosticsOutput, `"run_id":"`+created.RunID+`"`, "pilot-004 diagnostics bundle")
+	assertOutputContains(t, diagnosticsOutput, `gate-reports/final.json`, "pilot-004 diagnostics bundle")
+	assertOutputContains(t, diagnosticsOutput, `selected-cli.json`, "pilot-004 diagnostics bundle")
+	assertOutputContains(t, diagnosticsOutput, `bridge-session-snapshot.json`, "pilot-004 diagnostics bundle")
+	assertOutputContains(t, diagnosticsOutput, `verification.md`, "pilot-004 diagnostics bundle")
+	assertOutputContains(t, diagnosticsOutput, `docs-update.md`, "pilot-004 diagnostics bundle")
+	assertOutputContains(t, diagnosticsOutput, `final-report.md`, "pilot-004 diagnostics bundle")
+
+	eventsBeforeClose := readFile(t, filepath.Join(repo, ".kkachi", "events.jsonl"))
+	assertOutputContains(t, eventsBeforeClose, `"type":"run.activated"`, "pilot-004 event log")
+	assertOutputContains(t, eventsBeforeClose, `"type":"gate.passed"`, "pilot-004 event log")
+	assertOutputContains(t, eventsBeforeClose, `"gate":"backend"`, "pilot-004 event log")
+	assertOutputContains(t, eventsBeforeClose, `"gate":"final"`, "pilot-004 event log")
+
+	closeOutput := runHelper(t, binary, repo, "run", "close", created.RunID, "--json")
+	var closed struct {
+		RunID string `json:"run_id"`
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal(closeOutput, &closed); err != nil {
+		t.Fatalf("run close output is not JSON: %v\n%s", err, string(closeOutput))
+	}
+	if closed.RunID != created.RunID || closed.State != "closed" {
+		t.Fatalf("closed = %#v, want closed run %s", closed, created.RunID)
+	}
+	statusClosed := runHelper(t, binary, repo, "project", "status", "--json")
+	assertOutputContains(t, statusClosed, `"active_run_id":null`, "pilot-004 closed status")
+	assertOutputContains(t, readFile(t, filepath.Join(repo, ".kkachi", "events.jsonl")), `"type":"run.closed"`, "pilot-004 event log")
+}
+
+func writePilot004AcceptanceEvidence(t *testing.T, repo string, runID string) {
+	t.Helper()
+	writeIntegrationIntake(t, repo, runID, "A_development_execution", "standard", "existing_sot_basis", "normal", "Acceptance Evidence: pilot-004 integration smoke\n")
+	writeIntegrationMarkdownArtifact(t, repo, runID, "sot-basis.md", "Status: complete\nSource: docs/specs.md\n")
+	writeIntegrationMarkdownArtifact(t, repo, runID, "roadmap-update.md", "Status: complete\nTrace: docs/roadmap.md pilot-004\n")
+	writeIntegrationMarkdownArtifact(t, repo, runID, "acceptance-criteria.md", "Status: complete\nCriteria: adapter QA final gate and diagnostics smoke pass\n")
+	writeIntegrationMarkdownArtifact(t, repo, runID, "plan.md", "Status: complete\nPlan: pass required gates before final\n")
+	writeIntegrationMarkdownArtifact(t, repo, runID, "checklist.md", "Status: complete\n- [x] backend gate\n- [x] final gate\n- [x] diagnostics evidence\n")
+	writeIntegrationBackendEvidence(t, repo, runID)
+	writeIntegrationMarkdownArtifact(t, repo, runID, "cli-output.md", "Status: complete\nOutput: adapter QA command output captured\n")
+	writeIntegrationTarget(t, repo, ".kkachi/runs/"+runID+"/diff.patch", "diff --git a/.kkachi/evidence b/.kkachi/evidence\n+pilot-004 integration acceptance evidence\n")
+	writeIntegrationMarkdownArtifact(t, repo, runID, "impl-log.md", "Status: complete\nImplementation: integration smoke evidence recorded\n")
+	writeIntegrationMarkdownArtifact(t, repo, runID, "review.md", "Status: complete\nReview: no blockers\n")
+	writeIntegrationMarkdownArtifact(t, repo, runID, "redteam/plan-review.md", "Status: complete\nReview: plan accepted\n")
+	writeIntegrationMarkdownArtifact(t, repo, runID, "redteam/shaping-review.md", "Status: complete\nReview: shaping accepted\n")
+	writeIntegrationMarkdownArtifact(t, repo, runID, "redteam/qa-review.md", "Status: complete\nReview: adapter QA evidence accepted\n")
+	writeIntegrationMarkdownArtifact(t, repo, runID, "redteam/final-gate-review.md", "Status: complete\nReview: final gate ready\n")
+	writeIntegrationMarkdownArtifact(t, repo, runID, "test-log.md", "Status: complete\nTests: pilot-004 integration smoke\n")
+	writeIntegrationMarkdownArtifact(t, repo, runID, "verification.md", "Status: complete\nVerdict: pass\n")
+	writeIntegrationMarkdownArtifact(t, repo, runID, "docs-update.md", "Status: complete\nNo Change Reason: integration smoke only\n")
+	writeIntegrationMarkdownArtifact(t, repo, runID, "final-report.md", "Status: complete\nReport: adapter QA final gate and diagnostics evidence preserved\n")
+}
+
 func TestPilot002DiagnosticsExportActiveRunAndOverwriteSafety(t *testing.T) {
 	repo := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {

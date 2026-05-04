@@ -467,6 +467,23 @@ Dry-run exports are read-only and report `would_write` without an event. Real ex
 
 Release packaging remains local and deterministic. It must not fetch dependencies beyond normal Go module resolution, call Kkachi services, include repository `.kkachi/` runtime state, or embed secrets. Examples must use placeholder local paths and synthetic run data only.
 
+### `pilot-004` MVP pilot acceptance run
+
+`pilot-004` proves the MVP helper can execute one complete Kkachi-style local pilot run and preserve the evidence expected by the roadmap. It does not add a new CLI command or make the helper choose a backend. The proof is a black-box acceptance run over the existing public commands.
+
+The acceptance run must create a temporary git repository, initialize helper state, create and activate an `adapter_qa` Path A standard run for `task_id=pilot-004`, initialize artifacts, record all required evidence, pass the required gates including `backend` and `final`, export a diagnostics bundle for the run, and close the run.
+
+Required preserved evidence for the pilot acceptance run:
+
+- project status showing active-run state during the run and no active run after close;
+- append-only events for run lifecycle and passing gates;
+- completed run artifacts for intake, SOT, roadmap, plan, implementation, review, verification, docs-update decision, and final report;
+- bridge-shaped adapter evidence: `selected-cli.json`, `capability-check.md`, `bridge-session-snapshot.json`, and `bridge-events.md`;
+- run-local gate reports, especially `gate-reports/final.json` with `status: pass`;
+- diagnostics bundle containing project status/events, selected artifacts, bridge evidence, verification/docs/final artifacts, and final gate report.
+
+The pilot evidence remains local, deterministic, and secret-free. Bridge evidence is validated only at the helper-owned artifact-shape and identity-consistency boundary; live external bridge execution and backend choice remain outside `kkachi-agent-helper` scope.
+
 ### `install skills/templates`
 
 `packg-003` froze the initial install package contract, and `packg-004` applies it to local install/update, read-only dry-run previews, read-only drift checks, and conservative compatibility gating. Local package sources contain a JSON manifest named `kkachi-install-manifest.json` at the source root. Versioned package sources remain future work.

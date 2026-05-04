@@ -22,3 +22,4 @@ run_scenario "runwf-002 lock recovery" "$project_root/tests/e2e/runwf-002-locks.
 run_scenario "pilot-001 CLI golden workspaces" "$project_root/tests/e2e/pilot-001-golden-workspaces.sh"
 run_scenario "pilot-002 diagnostics export" "$project_root/tests/e2e/pilot-002-diagnostics.sh"
 run_scenario "pilot-003 release packaging" "$project_root/tests/e2e/pilot-003-release-packaging.sh"
+run_scenario "pilot-004 MVP acceptance run" "$project_root/tests/e2e/pilot-004-mvp-acceptance-run.sh"
