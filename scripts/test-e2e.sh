@@ -2,24 +2,5 @@
 set -eu
 
 project_root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-tmpdir="$(mktemp -d)"
-trap 'rm -rf "$tmpdir"' EXIT
-
-binary="$tmpdir/kkachi-agent-helper"
-(cd "$project_root" && go build -ldflags "-X main.version=0.1.0" -o "$binary" ./cmd/kkachi-agent-helper)
-
-run_scenario() {
-  name="$1"
-  script="$2"
-
-  printf 'e2e %-32s ... ' "$name"
-  "$script" "$binary"
-  printf 'PASS\n'
-}
-
-run_scenario "runwf-001/003 lifecycle artifacts" "$project_root/tests/e2e/project-init.sh"
-run_scenario "runwf-002 lock recovery" "$project_root/tests/e2e/runwf-002-locks.sh"
-run_scenario "pilot-001 CLI golden workspaces" "$project_root/tests/e2e/pilot-001-golden-workspaces.sh"
-run_scenario "pilot-002 diagnostics export" "$project_root/tests/e2e/pilot-002-diagnostics.sh"
-run_scenario "pilot-003 release packaging" "$project_root/tests/e2e/pilot-003-release-packaging.sh"
-run_scenario "pilot-004 MVP acceptance run" "$project_root/tests/e2e/pilot-004-mvp-acceptance-run.sh"
+cd "$project_root"
+go test ./tests/e2e

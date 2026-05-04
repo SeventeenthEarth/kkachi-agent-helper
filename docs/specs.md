@@ -484,6 +484,12 @@ Required preserved evidence for the pilot acceptance run:
 
 The pilot evidence remains local, deterministic, and secret-free. Bridge evidence is validated only at the helper-owned artifact-shape and identity-consistency boundary; live external bridge execution and backend choice remain outside `kkachi-agent-helper` scope.
 
+### `pilot-005` Go-native E2E harness cleanup
+
+`pilot-005` keeps the existing black-box CLI and golden workspace coverage but moves the E2E harness to Go-native tests. `make test-e2e` runs the Go E2E package through `scripts/test-e2e.sh`; the harness must not require `python3` or legacy shell scenario files.
+
+The Go E2E package preserves coverage for project lifecycle, lock recovery, golden workspace failures, diagnostics redaction, release packaging, and the MVP pilot acceptance run. It also includes harness-contract checks that prevent reintroducing Python-assisted E2E helpers or references to removed shell scenarios.
+
 ### `install skills/templates`
 
 `packg-003` froze the initial install package contract, and `packg-004` applies it to local install/update, read-only dry-run previews, read-only drift checks, and conservative compatibility gating. Local package sources contain a JSON manifest named `kkachi-install-manifest.json` at the source root. Versioned package sources remain future work.

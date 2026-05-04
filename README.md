@@ -71,7 +71,7 @@ Test lanes are intentionally split:
 - `make test-prepare` runs formatting and static preparation checks.
 - `make test-unit` runs package/unit-level Go tests.
 - `make test-int` runs tagged integration tests.
-- `make test-e2e` runs local black-box scenarios for project init, lock recovery, golden workspaces, diagnostics export, release packaging, and the pilot acceptance run.
+- `make test-e2e` runs Go-native local black-box scenarios for project init, lock recovery, golden workspaces, diagnostics export, release packaging, and the pilot acceptance run.
 - `make test` runs all lanes sequentially.
 
 ## Command reference
