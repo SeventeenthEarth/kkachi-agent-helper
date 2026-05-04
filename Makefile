@@ -13,7 +13,7 @@ LDFLAGS := -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.buildDate
 
 build:
 	mkdir -p $(BIN_DIR)
-	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(BINARY) ./cmd/kkachi-agent-helper
+	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(BINARY) .
 
 install-local: build
 	mkdir -p $(PREFIX)/bin
@@ -23,7 +23,7 @@ release:
 	VERSION=$(VERSION) COMMIT=$(COMMIT) BUILD_DATE=$(BUILD_DATE) DIST_DIR=$(DIST_DIR) GOOS=$(GOOS) GOARCH=$(GOARCH) ./scripts/build-release.sh
 
 format:
-	gofmt -w ./cmd ./internal ./tests
+	gofmt -w main.go ./cmd ./internal ./tests
 
 vet:
 	go vet ./...
@@ -34,7 +34,7 @@ lint: vet
 test-prepare: format vet lint
 
 test-unit:
-	go test ./cmd/... ./internal/...
+	go test . ./cmd/... ./internal/...
 
 test-int:
 	go test -tags=integration ./tests/integration

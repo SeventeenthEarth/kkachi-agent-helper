@@ -15,7 +15,7 @@ import (
 )
 
 func TestBinaryEntrypointSmoke(t *testing.T) {
-	cmd := exec.Command("go", "run", "../../cmd/kkachi-agent-helper", "--version")
+	cmd := exec.Command("go", "run", "../..", "--version")
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -1010,7 +1010,7 @@ func buildHelperBinary(t *testing.T) string {
 	t.Helper()
 
 	binary := filepath.Join(t.TempDir(), "kkachi-agent-helper")
-	cmd := exec.Command("go", "build", "-ldflags", "-X main.version=0.1.0", "-o", binary, "../../cmd/kkachi-agent-helper")
+	cmd := exec.Command("go", "build", "-ldflags", "-X main.version=0.1.0", "-o", binary, "../..")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("go build failed: %v\n%s", err, string(output))

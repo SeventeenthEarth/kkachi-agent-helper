@@ -460,12 +460,13 @@ Dry-run exports are read-only and report `would_write` without an event. Real ex
 - command reference linked back to this specs document and the roadmap;
 - helper/bridge/skills compatibility matrix in `docs/compatibility.md`;
 - release notes format in `docs/release-notes-template.md`;
+- `go install github.com/SeventeenthEarth/kkachi-agent-helper@<version>` for global installation from a tagged release;
 - `make PREFIX=<path> install-local` for local binary installation;
 - `make VERSION=<semver> release` for release artifacts under `dist/`;
 - a raw binary, `.tar.gz` package, versioned `RELEASE-MANIFEST.json`, bundled docs, and `SHA256SUMS`;
-- e2e packaging coverage that verifies `make release`, artifact presence, archive contents, multi-platform checksum preservation, versioned release manifest content, embedded version metadata, and `make install-local`.
+- e2e packaging coverage that verifies `make release`, artifact presence, archive contents, multi-platform checksum preservation, versioned release manifest content, embedded version metadata, root-package buildability, and `make install-local`.
 
-Release packaging remains local and deterministic. It must not fetch dependencies beyond normal Go module resolution, call Kkachi services, include repository `.kkachi/` runtime state, or embed secrets. Examples must use placeholder local paths and synthetic run data only.
+Release packaging remains local and deterministic. It must not fetch dependencies beyond normal Go module resolution, call Kkachi services, include repository `.kkachi/` runtime state, or embed secrets. The canonical module path is case-sensitive and matches the GitHub URL: `github.com/SeventeenthEarth/kkachi-agent-helper`. Examples must use placeholder local paths and synthetic run data only.
 
 ### `pilot-004` MVP pilot acceptance run
 

@@ -14,11 +14,14 @@ The current implementation covers `corex-001` through `corex-005`, `runwf-001` t
 ## Quickstart
 
 ```sh
-# Build a semver helper for install compatibility checks.
-make VERSION=0.1.0 build
+# Install the latest tagged release globally.
+go install github.com/SeventeenthEarth/kkachi-agent-helper@latest
 
-# Put the helper on PATH for this shell session.
-export PATH="$PWD/bin:$PATH"
+# Or install a specific release.
+go install github.com/SeventeenthEarth/kkachi-agent-helper@v0.1.0
+
+# Ensure Go's binary directory is on PATH if needed.
+export PATH="$(go env GOPATH)/bin:$PATH"
 
 # Initialize helper state in a git repository.
 kkachi-agent-helper project init
@@ -47,6 +50,7 @@ All examples are local and secret-free. Do not place tokens, bearer headers, API
 ## Build, install, release, and verify
 
 ```sh
+go install github.com/SeventeenthEarth/kkachi-agent-helper@latest
 make build
 make PREFIX="$HOME/.local" install-local
 make VERSION=0.1.0 release
@@ -58,13 +62,15 @@ make test
 make check
 ```
 
-- `make build` writes `bin/kkachi-agent-helper`.
+- `go install github.com/SeventeenthEarth/kkachi-agent-helper@latest` installs the tagged helper to Go's binary directory (`GOBIN`, or `$(go env GOPATH)/bin`).
+- `make build` writes `bin/kkachi-agent-helper` from the root installable package.
 - `make PREFIX="$HOME/.local" install-local` installs the built helper to `$PREFIX/bin/kkachi-agent-helper`.
 - `make VERSION=0.1.0 release` writes release artifacts to `dist/`:
   - `dist/kkachi-agent-helper_0.1.0_<goos>_<goarch>`
   - `dist/kkachi-agent-helper_0.1.0_<goos>_<goarch>.tar.gz`
   - `dist/SHA256SUMS`
-- For real `install skills/templates` compatibility checks, build with a semver helper version. The default `0.0.0-dev` intentionally does not satisfy ranges such as `>=0.1.0`.
+- Tagged `go install ...@v0.1.0` builds derive the helper version from Go module build info; local `make build` still defaults to `0.0.0-dev`.
+- For real `install skills/templates` compatibility checks, use a tagged install or build with a semver helper version. The default `0.0.0-dev` intentionally does not satisfy ranges such as `>=0.1.0`.
 
 Test lanes are intentionally split:
 

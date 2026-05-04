@@ -35,7 +35,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	helperBinary = filepath.Join(buildDir, "kkachi-agent-helper")
-	cmd := exec.Command("go", "build", "-ldflags", "-X main.version=0.1.0", "-o", helperBinary, "./cmd/kkachi-agent-helper")
+	cmd := exec.Command("go", "build", "-ldflags", "-X main.version=0.1.0", "-o", helperBinary, ".")
 	cmd.Dir = projectRoot
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -647,13 +647,13 @@ func TestReleasePackaging(t *testing.T) {
 
 	extract := filepath.Join(tmp, "extract")
 	extractTarGz(t, archive, extract)
-	for _, rel := range []string{"bin/kkachi-agent-helper", "README.md", "docs/specs.md", "docs/roadmap.md", "docs/compatibility.md", "docs/release-notes-template.md", "RELEASE-MANIFEST.json"} {
+	for _, rel := range []string{"bin/kkachi-agent-helper", "README.md", "LICENSE", "docs/specs.md", "docs/roadmap.md", "docs/compatibility.md", "docs/release-notes-template.md", "RELEASE-MANIFEST.json"} {
 		if info, err := os.Stat(filepath.Join(extract, filepath.FromSlash(rel))); err != nil || info.Size() == 0 {
 			t.Fatalf("missing archive member %s: %v", rel, err)
 		}
 	}
 	manifest := mustRead(t, filepath.Join(extract, "RELEASE-MANIFEST.json"))
-	for _, want := range []string{`"manifest_version": "1"`, `"name": "kkachi-agent-helper"`, `"version": "0.1.0"`, `"commit": "e2e"`, `"build_date": "2026-01-01T00:00:00Z"`, `"goos": "` + goos + `"`, `"goarch": "` + goarch + `"`, `"binary": "bin/kkachi-agent-helper"`} {
+	for _, want := range []string{`"manifest_version": "1"`, `"name": "kkachi-agent-helper"`, `"version": "0.1.0"`, `"commit": "e2e"`, `"build_date": "2026-01-01T00:00:00Z"`, `"goos": "` + goos + `"`, `"goarch": "` + goarch + `"`, `"binary": "bin/kkachi-agent-helper"`, `"license": "LICENSE"`} {
 		requireContains(t, manifest, want, "release manifest")
 	}
 	version := exec.Command(artifact, "version", "--json")

@@ -40,11 +40,12 @@ mkdir -p "$dist_dir" "$stage/bin" "$stage/docs"
   GOOS="$goos" GOARCH="$goarch" go build \
     -ldflags "-X main.version=$version -X main.commit=$commit -X main.buildDate=$build_date" \
     -o "$stage/bin/kkachi-agent-helper" \
-    ./cmd/kkachi-agent-helper
+    .
 )
 
 cp "$stage/bin/kkachi-agent-helper" "$dist_dir/$name"
 cp "$project_root/README.md" "$stage/README.md"
+cp "$project_root/LICENSE" "$stage/LICENSE"
 cp "$project_root/docs/roadmap.md" "$stage/docs/roadmap.md"
 cp "$project_root/docs/specs.md" "$stage/docs/specs.md"
 cp "$project_root/docs/compatibility.md" "$stage/docs/compatibility.md"
@@ -59,6 +60,7 @@ cat > "$stage/RELEASE-MANIFEST.json" <<MANIFEST
   "goos": "$goos",
   "goarch": "$goarch",
   "binary": "bin/kkachi-agent-helper",
+  "license": "LICENSE",
   "docs": [
     "README.md",
     "docs/roadmap.md",
