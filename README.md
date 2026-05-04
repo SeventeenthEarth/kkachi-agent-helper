@@ -1,18 +1,55 @@
 # kkachi-agent-helper
 
-`kkachi-agent-helper` is the deterministic local CLI helper for Kkachi project state, run artifacts, locks, schemas, events, and install scaffolding.
+`kkachi-agent-helper` is the deterministic local CLI helper for Kkachi project state, run artifacts, locks, schemas, events, diagnostics, and install scaffolding. It stays local-first and scriptable: it does not choose a backend, plan work, review code, call network services, or store secrets.
 
-The current implementation covers the `corex-001` through `corex-005` foundations, `runwf-001` through `runwf-004`, `gates-001` through `gates-005`, `packg-001` through `packg-004`, and `pilot-002`: repository layout, Go toolchain, command shell, version output, repo-root discovery, safe repository-relative path handling, symlink escape rejection, canonical exit codes, structured human/JSON errors, verification commands, safe `.kkachi/` project initialization, atomic state writes, append-only event handling, `last_event_id` coherence checks, read-only `project status` / `project doctor` diagnostics, run metadata lifecycle commands, one-active-write lock enforcement, stale-lock diagnostics, explicit recorded lock recovery, artifact manifest initialization, artifact listing, read-only intake validation, the mutating `gate check` readiness surface, deterministic SOT/roadmap/plan pre-implementation gates, the manifest-driven backend evidence gate, implementation/review/verification/docs/final gates, run-local gate reports, fixture-backed gate regression coverage, embedded schema registry validation, schema export/copy support, and the initial schema migration framework with dry-run, backup, event recording, unknown-source refusal, local install/update for skills/templates with dry-run, drift-check, helper-owned replacement, user-owned preservation, preflight conflict blocking, conservative helper compatibility checks, and redacted diagnostics bundle export for support evidence.
+The current implementation covers `corex-001` through `corex-005`, `runwf-001` through `runwf-004`, `gates-001` through `gates-005`, `packg-001` through `packg-004`, and `pilot-003`.
 
 ## Source of truth
 
-- [Specs](docs/specs.md)
-- [Roadmap](docs/roadmap.md)
+- [Specs](docs/specs.md) — canonical behavior and schema contracts.
+- [Roadmap](docs/roadmap.md) — delivery order and task scope.
+- [Compatibility matrix](docs/compatibility.md) — helper/bridge/skills version contract.
+- [Release notes template](docs/release-notes-template.md) — release note format and verification checklist.
 
-## Build and verify
+## Quickstart
+
+```sh
+# Build a semver helper for install compatibility checks.
+make VERSION=0.1.0 build
+
+# Put the helper on PATH for this shell session.
+export PATH="$PWD/bin:$PATH"
+
+# Initialize helper state in a git repository.
+kkachi-agent-helper project init
+kkachi-agent-helper project doctor
+
+# Create and prepare a local run. Copy the run_id from the JSON output.
+kkachi-agent-helper run create \
+  --title 'Pilot readiness dry run' \
+  --work-path A_development_execution \
+  --work-mode standard \
+  --urgency normal \
+  --sot-policy existing_sot_basis \
+  --execution-mode production_write \
+  --commander Gongmyeong \
+  --task-id pilot-003 \
+  --json
+
+run_id=<run_id-from-json-output>
+kkachi-agent-helper artifact init "$run_id"
+kkachi-agent-helper artifact list "$run_id" --json
+kkachi-agent-helper diagnostics export --run "$run_id" --output diagnostics/helper-bundle.json
+```
+
+All examples are local and secret-free. Do not place tokens, bearer headers, API keys, passwords, production paths, or private bridge payloads in `.kkachi/` files, diagnostics bundles, release notes, or docs examples.
+
+## Build, install, release, and verify
 
 ```sh
 make build
+make PREFIX="$HOME/.local" install-local
+make VERSION=0.1.0 release
 make test-prepare
 make test-unit
 make test-int
@@ -21,78 +58,99 @@ make test
 make check
 ```
 
-The built binary is written to `bin/kkachi-agent-helper`. For real `install skills/templates` compatibility checks, build with a semver helper version, for example `make VERSION=0.1.0 build`; the default `0.0.0-dev` development version intentionally does not satisfy `compat.required_helper` ranges.
+- `make build` writes `bin/kkachi-agent-helper`.
+- `make PREFIX="$HOME/.local" install-local` installs the built helper to `$PREFIX/bin/kkachi-agent-helper`.
+- `make VERSION=0.1.0 release` writes release artifacts to `dist/`:
+  - `dist/kkachi-agent-helper_0.1.0_<goos>_<goarch>`
+  - `dist/kkachi-agent-helper_0.1.0_<goos>_<goarch>.tar.gz`
+  - `dist/SHA256SUMS`
+- For real `install skills/templates` compatibility checks, build with a semver helper version. The default `0.0.0-dev` intentionally does not satisfy ranges such as `>=0.1.0`.
 
 Test lanes are intentionally split:
 
 - `make test-prepare` runs formatting and static preparation checks.
-- `make test-unit` runs single-file/unit-level tests without external systems.
-- `make test-int` runs multi-component integration tests without external systems.
-- `make test-e2e` runs local end-to-end scenarios. For `runwf-001`, `runwf-003`, `runwf-004`, `gates-001` through `gates-005`, `packg-001` through `packg-004`, and `pilot-002`, it builds the helper, initializes a temporary project, verifies generated `.kkachi/` state, runs `project status` and `project doctor`, validates config/status/events through `schema validate`, creates a run, initializes/lists/validates canonical artifacts, verifies required artifact metadata, checks validation is read-only, runs `gate check intake`, `sot`, `roadmap`, `plan`, and adapter QA `backend`, verifies `gate.passed` plus status/metadata gate summaries and run-local gate reports, activates/closes the run, appends an event, checks `last_event_id` coherence, verifies doctor reports incoherent state, and checks overwrite refusal. For `runwf-002`, it verifies fresh lock conflicts, stale-lock diagnostics, explicit recovery, `lock.recovered` event recording, lock removal, and post-recovery mutation success.
-- `make test` runs `test-prepare`, `test-unit`, `test-int`, and `test-e2e` sequentially.
+- `make test-unit` runs package/unit-level Go tests.
+- `make test-int` runs tagged integration tests.
+- `make test-e2e` runs local black-box scenarios for project init, lock recovery, golden workspaces, diagnostics export, and release packaging.
+- `make test` runs all lanes sequentially.
 
-## CLI examples
+## Command reference
+
+Global options:
 
 ```sh
 kkachi-agent-helper --version
 kkachi-agent-helper version --json
-kkachi-agent-helper project init
-kkachi-agent-helper project init --json
-kkachi-agent-helper project status
-kkachi-agent-helper project status --json
-kkachi-agent-helper project doctor
-kkachi-agent-helper project doctor --json
-kkachi-agent-helper event append artifact.written --run run-abc --payload '{"path":"impl-log.md"}' --json
-kkachi-agent-helper run create --title 'Run workflow metadata' --work-path A_development_execution --work-mode standard --urgency normal --sot-policy existing_sot_basis --execution-mode production_write --commander Gongmyeong --task-id runwf-001 --json
-kkachi-agent-helper run list
-kkachi-agent-helper run show <run_id> --json
-kkachi-agent-helper run activate <run_id> --json
-kkachi-agent-helper run close <run_id> --json
-kkachi-agent-helper run abort <run_id> --json
-kkachi-agent-helper artifact init <run_id> --json
-kkachi-agent-helper artifact list <run_id> --json
-kkachi-agent-helper artifact validate <run_id> --gate intake --json
-kkachi-agent-helper gate check <run_id> intake --json
-kkachi-agent-helper gate check <run_id> plan --json
-kkachi-agent-helper gate check <run_id> backend --json
-kkachi-agent-helper lock recover project-write --reason 'confirmed stale helper process' --json
-kkachi-agent-helper schema validate .kkachi/status.json --schema status --json
-kkachi-agent-helper schema export --all --dry-run --json
-kkachi-agent-helper schema export --schema selected-cli --json
-kkachi-agent-helper schema migrate --from 0.1 --to 0.1 --dry-run --json
-kkachi-agent-helper install skills --source ./kkachi-hermes-skills --dry-run --json
-kkachi-agent-helper install skills --source ./kkachi-hermes-skills --drift-check --json
-kkachi-agent-helper install skills --source ./kkachi-hermes-skills --json
-kkachi-agent-helper diagnostics export --run <run_id> --json
-kkachi-agent-helper diagnostics export --run <run_id> --output diagnostics/bundle.json
+kkachi-agent-helper [--json] <command>
 ```
 
-For `corex-004` and `packg-001`, `project init` creates `.kkachi/config.yaml`, `.kkachi/status.json`, `.kkachi/events.jsonl`, and canonical `.kkachi/schemas/*.schema.json` files from the embedded schema registry using atomic new-file writes. It allows existing empty helper directories but refuses to overwrite any helper-managed file.
+Project state:
 
-`event append` appends one JSONL event, allocates the next `evt-000001`-style id, and atomically advances `status.last_event_id`. It fails closed if the status file and event log tail are incoherent. CLI payloads are capped at 256 KiB; larger evidence should be written to artifacts and referenced from the event payload.
+```sh
+kkachi-agent-helper project init
+kkachi-agent-helper project status [--json]
+kkachi-agent-helper project doctor [--json]
+```
 
-For `corex-005`, `project status` and `project doctor` are read-only. They do not repair `.kkachi/`, append events, create locks, or rewrite status. `project status` summarizes root path, health, project identity, active run fields, `last_event_id`, event-log tail/count, `updated_at`, gate summary, and issues. `project doctor` reports pass/warn/fail checks for config, status, events, canonical paths, schema availability, lock files, and status/event coherence. Present lock files are warnings; malformed files, unsafe paths, schema problems, and coherence mismatches fail closed.
+Events:
 
-`runwf-001` implements `run create`, `run list`, `run show`, `run activate`, `run close`, and `run abort`. Run ids use `run-YYYYMMDDTHHMMSSZ-<12hex>`. Full ids resolve exactly; prefixes resolve only when unique, and missing or ambiguous prefixes fail closed. `run create` records `.kkachi/runs/<run_id>/run-metadata.json` with `state: "created"`, empty `required_artifacts`, empty `gate_state`, and a `run.created` event. `run activate` only accepts `created` runs and sets `status.active_run_id` / `status.active_run_state` with `run.activated`. `run close` and `run abort` only accept `created` or `active` runs, clear active status fields when they target the active run, and append `run.closed` / `run.aborted`. `artifact init <run_id>` remains the boundary that populates run artifacts after run creation.
+```sh
+kkachi-agent-helper event append <event_type> --run <run_id> --payload '<json-object>' [--json]
+```
 
-`runwf-003` implements `artifact init <run_id>` and `artifact list <run_id>`. The artifact manifest is derived from run work path, work mode, execution mode, and red-team assignment using canonical artifact names from `docs/specs.md`. `artifact init` creates baseline non-empty run files under `.kkachi/runs/<run_id>/`, updates `run-metadata.json.required_artifacts`, and appends an `artifact.written` event. Existing non-empty artifacts are preserved; existing empty artifacts are reinitialized with baseline content. `artifact list` is read-only and reports every canonical artifact path with required/present/empty/byte status.
+Runs:
 
-`runwf-004` implements read-only `artifact validate <run_id> [--gate intake]`. It validates manifest coherence, completed `intake-classification.md` fields, Path A/B SOT-policy eligibility, urgency metadata, Light-mode reason recording, and the required `Status: not_applicable` / `Reason: ...` not-applicable format for later gates. Validation reports exit `0` for pass and exit `3` with structured failed checks for validation failures without mutating `.kkachi/`.
+```sh
+kkachi-agent-helper run create --title <title> --work-path <A_development_execution|B_discovery_shaping> --work-mode <standard|light> --urgency <normal|urgent|critical> --sot-policy <existing_sot_basis|minimal_sot_before_code|full_sot_before_code> --execution-mode <production_write|adapter_qa|readiness_hardening|research|verification|docs_only> --commander <profile> [--task-id <id>] [--redteam <profile>] [--json]
+kkachi-agent-helper run list [--json]
+kkachi-agent-helper run show <run_id> [--json]
+kkachi-agent-helper run activate <run_id> [--json]
+kkachi-agent-helper run close <run_id> [--json]
+kkachi-agent-helper run abort <run_id> [--json]
+```
 
-`gates-001` implements `gate check <run_id> <gate>`. It is a mutating readiness check: it records the result in `run-metadata.json.gate_state`, updates `status.json.gate_summary`, appends `gate.passed`, `gate.failed`, or `gate.checked`, and writes `.kkachi/runs/<run_id>/gate-reports/<gate>.json`. The `intake` gate reuses the deterministic intake validation rules from `artifact validate`. `gates-002` implements the pre-implementation `sot`, `roadmap`, and `plan` gates: Path A requires completed `sot-basis.md`, Path B requires completed `sot-update.md`, roadmap passes through `task_id` trace or completed/not-applicable `roadmap-update.md`, and plan requires completed `acceptance-criteria.md`, `plan.md`, and `checklist.md`. `gates-003` implements `backend` as a manifest-driven evidence gate: when `run-metadata.json.required_artifacts` includes backend artifacts, it validates `selected-cli.json`, `capability-check.md`, `bridge-session-snapshot.json`, and `bridge-events.md`; otherwise it records a not-applicable pass tied to the run manifest. `gates-004` implements `implementation`, `review`, `verification`, `docs`, and `final`/`gate final`. `gates-005` preserves the latest report path in metadata/status and locks behavior with valid/invalid Path A/B Standard/Light fixtures, including malformed evidence and missing artifacts. Passing gates exit `0`; failed or blocked gate checks exit `3`; unknown gate names are usage errors.
+Artifacts and gates:
 
-`runwf-002` serializes helper-state writes with `.kkachi/project_write.lock` and run lifecycle transitions with `.kkachi/active_run.lock`. Locks are created atomically, contain owner pid, hostname, command, optional run id, and timestamp metadata, and are released only when the recorded identity still matches. Fresh locks make mutating commands fail closed with `lock_conflict`; stale locks fail with `lock_stale_recovery_required` until an operator runs `lock recover <active-run|project-write|all> --reason <text> [--run <run_id>]`. Recovery refuses malformed or fresh locks, appends a `lock.recovered` event before removing stale locks, and advances `status.last_event_id`. `project doctor` remains read-only and reports absent locks as pass, fresh/stale readable locks as warnings, and malformed, unreadable, non-regular, or path-unsafe lock files as failures.
+```sh
+kkachi-agent-helper artifact init <run_id> [--json]
+kkachi-agent-helper artifact list <run_id> [--json]
+kkachi-agent-helper artifact validate <run_id> [--gate intake] [--json]
+kkachi-agent-helper gate check <run_id> <intake|sot|roadmap|plan|backend|implementation|review|verification|docs|final> [--json]
+kkachi-agent-helper gate final <run_id> [--json]
+```
 
-`packg-001` implements `schema validate <file> --schema <schema>` and `schema export [--schema <name>|--all] [--dry-run]`. Validation is embedded-registry-backed, so local schema files are used only as canonical identity references; a relaxed local schema cannot make invalid helper state pass. `events.jsonl` is validated line-by-line with the `event` schema, while config validation uses the deterministic helper config parser. Real exports are mutating helper-state commands: they hold `.kkachi/project_write.lock`, refuse status/event incoherence, write only canonical `.kkachi/schemas/*.schema.json` paths, and append `schema.exported` when files change. Dry-run export is read-only.
+Schemas and migrations:
 
-`packg-002` implements `schema migrate --from <version> --to <version> [--dry-run]`. The initial registered migration is `0.1 -> 0.1` no-op so future schema churn has a tested framework before contracts move. Dry-run migration is read-only and reports the files that would be backed up. Real migration holds `.kkachi/project_write.lock`, refuses status/event incoherence and unsupported source versions, copies versioned helper state into `.kkachi/backups/schema-migrations/<timestamp>-<from>-to-<to>/`, and appends `schema.migrated`.
+```sh
+kkachi-agent-helper schema validate <file> --schema <config|status|event|run-metadata|selected-cli|bridge-session-snapshot|install-manifest> [--json]
+kkachi-agent-helper schema export [--schema <name>|--all] [--dry-run] [--json]
+kkachi-agent-helper schema migrate --from <version> --to <version> [--dry-run] [--json]
+```
 
-`packg-003` introduced the `kkachi-install-manifest.json` contract for local skill/template packages. `packg-004` implements `install skills --source <local-path>` and `install templates --source <local-path>` for real local install/update, plus `--dry-run` previews and `--drift-check` diagnostics. Dry runs remain read-only. Drift checks are read-only and exit `0` only when every manifest item is unchanged and helper compatibility passes. Real installs hold `.kkachi/project_write.lock`, re-check status/event coherence, fail before writing if any target is user-owned (`preserve`) or non-regular (`conflict`), create/update only helper-owned files with declared owner markers, and append `install.applied` after successful writes. `compat.required_helper` supports exact `x.y.z` or `>=x.y.z`; bridge/skills requirements are reported as `not_checked` until those version sources are recorded by later packaging work. `pilot-002` implements `diagnostics export [--run <run_id>] [--output <repo-relative-path>]`. The bundle is redacted JSON containing project config, status, events, schema versions, run-local gate reports, and selected run artifacts (`run-metadata.json`, intake classification, backend evidence, test/verification/docs-update evidence, and `final-report.md`). Omitting `--output` writes the bundle to stdout; `--output` writes a new repository-confined JSON file. If `--run` is omitted, the active run is used when one is recorded; otherwise the bundle is project-level only. Token-like values are redacted in diagnostic bundles and CLI errors with `[REDACTED]`.
+Locks:
 
-Later `project` subcommands remain reserved placeholders until their roadmap tasks add real behavior.
+```sh
+kkachi-agent-helper lock recover <active-run|project-write|all> --reason <text> [--run <run_id>] [--json]
+```
 
-Error output is stable for both humans and scripts:
+Local skill/template install:
 
-- Human errors include `error`, optional structured fields, `exit_code`, and `hint`.
-- JSON errors are emitted as `{"error": ...}` without decorative text when `--json` is present.
-- Canonical exit codes are `0` for success, including doctor/status reports with only warnings; `1` for internal failures; `2` for usage, unsupported arguments, or unsupported command state; `3` for fail-closed state problems such as malformed files, unsafe paths, schema failures, or status/event coherence mismatches; and `4` for missing repository roots.
+```sh
+kkachi-agent-helper install skills --source <local-path> [--dry-run|--drift-check] [--json]
+kkachi-agent-helper install templates --source <local-path> [--dry-run|--drift-check] [--json]
+```
+
+Diagnostics:
+
+```sh
+kkachi-agent-helper diagnostics export [--run <run_id>] [--output <repo-relative-path>] [--json]
+```
+
+## Operational notes
+
+- `.kkachi/config.yaml`, `.kkachi/status.json`, `.kkachi/events.jsonl`, `.kkachi/schemas/*.schema.json`, and `.kkachi/runs/<run_id>/...` are the local helper state and evidence surfaces.
+- Mutating commands fail closed when `status.last_event_id` and the event log tail diverge.
+- `project status`, `project doctor`, `artifact list`, install dry-runs, install drift checks, and diagnostics stdout export are read-only.
+- `gate check` records deterministic pass/fail/blocked results in run metadata, project status, events, and run-local gate reports.
+- `diagnostics export` redacts token-like values and exports only a selected support-safe artifact set.
+- Canonical exit codes are `0` success, `1` internal failure, `2` usage/unsupported command state, `3` fail-closed state or validation problems, and `4` missing repository root.

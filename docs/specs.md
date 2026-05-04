@@ -451,6 +451,22 @@ Dry-run exports are read-only and report `would_write` without an event. Real ex
 
 `packg-002` registers the first `0.1 -> 0.1` no-op migration. Dry-run migrations are read-only and report backup/migration intent without taking a lock, writing backups, or appending an event. Real migrations are serialized by `.kkachi/project_write.lock`, refuse status/event incoherence, refuse unknown source versions and unregistered paths, copy versioned helper state into `.kkachi/backups/schema-migrations/<timestamp>-<from>-to-<to>/`, and append `schema.migrated` after backup creation.
 
+
+### `pilot-003` user docs and release packaging
+
+`pilot-003` makes the MVP helper adoptable without network services or secret-bearing examples. The release surface consists of:
+
+- README quickstart with local build, PATH setup, project init, run creation, artifact initialization, and diagnostics export examples;
+- command reference linked back to this specs document and the roadmap;
+- helper/bridge/skills compatibility matrix in `docs/compatibility.md`;
+- release notes format in `docs/release-notes-template.md`;
+- `make PREFIX=<path> install-local` for local binary installation;
+- `make VERSION=<semver> release` for release artifacts under `dist/`;
+- a raw binary, `.tar.gz` package, versioned `RELEASE-MANIFEST.json`, bundled docs, and `SHA256SUMS`;
+- e2e packaging coverage that verifies `make release`, artifact presence, archive contents, multi-platform checksum preservation, versioned release manifest content, embedded version metadata, and `make install-local`.
+
+Release packaging remains local and deterministic. It must not fetch dependencies beyond normal Go module resolution, call Kkachi services, include repository `.kkachi/` runtime state, or embed secrets. Examples must use placeholder local paths and synthetic run data only.
+
 ### `install skills/templates`
 
 `packg-003` froze the initial install package contract, and `packg-004` applies it to local install/update, read-only dry-run previews, read-only drift checks, and conservative compatibility gating. Local package sources contain a JSON manifest named `kkachi-install-manifest.json` at the source root. Versioned package sources remain future work.
@@ -511,7 +527,7 @@ Dry-run install is read-only: it does not take `.kkachi/project_write.lock`, doe
 
 Real install/update is the default when neither `--dry-run` nor `--drift-check` is passed. It first computes the full plan and refuses to write anything if helper compatibility fails, if any target is `preserve`, or if any target is `conflict`. On success, it serializes through `.kkachi/project_write.lock`, recomputes the plan under the lock, writes only `create` and `update` targets with atomic file replacement, preserves `unchanged` targets, and appends `install.applied` after successful writes. `--drift-check` is read-only and exits `0` only when all items are `unchanged` and helper compatibility passes; create/update drift, preserve/conflict, or helper compatibility failure exits `3`.
 
-Compatibility v1 enforces only `compat.required_helper` against the running helper version. Supported helper ranges are exact `x.y.z` and `>=x.y.z`; unsupported range syntax or a non-matching helper version fails closed. Development builds that keep the default `0.0.0-dev` version do not satisfy semver compatibility ranges; use a release build or set a semver version such as `VERSION=0.1.0` when validating real installs. `compat.required_bridge` and `compat.required_skills` are reported as `not_checked` until later release packaging records authoritative bridge/skills version sources.
+Compatibility v1 enforces only `compat.required_helper` against the running helper version. Supported helper ranges are exact `x.y.z` and `>=x.y.z`; unsupported range syntax or a non-matching helper version fails closed. Development builds that keep the default `0.0.0-dev` version do not satisfy semver compatibility ranges; use a release build or set a semver version such as `VERSION=0.1.0` when validating real installs. `compat.required_bridge` and `compat.required_skills` are reported as `not_checked` until a future compatibility task records authoritative bridge/skills version sources.
 
 Command UX rules:
 
@@ -699,9 +715,8 @@ Minimum implementation test layers:
 
 The following items remain open until roadmap tasks close them:
 
-- release packaging strategy;
 - run id format;
 - exact lock stale detection policy;
 - whether helper exports a library API in addition to the CLI;
 - whether bridge capability registry validation is direct or delegated to `kkachi-hermes-skills` assets;
-- release versioning and compatibility guarantees.
+- authoritative bridge and skills version sources for enforced compatibility beyond `compat.required_helper`.
