@@ -3,8 +3,6 @@
 package integration
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -26,166 +24,49 @@ func TestBinaryEntrypointSmoke(t *testing.T) {
 	}
 }
 
-func TestInstallDryRunPlansLocalManifestWithoutMutatingTargets(t *testing.T) {
+func TestInstallCommandRemovedAtBinaryBoundary(t *testing.T) {
+	binary := buildHelperBinary(t)
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	output, err := runHelperAllowError(binary, repo, "install", "templates", "--json")
+	if err == nil {
+		t.Fatalf("install unexpectedly succeeded: %s", string(output))
+	}
+	assertOutputContains(t, output, "unknown_command", "removed install command")
+}
+
+func TestProjectInitForceReconfiguresBootstrapWithoutDeletingRuns(t *testing.T) {
 	repo := t.TempDir()
 	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
 		t.Fatalf("mkdir .git: %v", err)
 	}
 	binary := buildHelperBinary(t)
 	runHelper(t, binary, repo, "project", "init", "--json")
-	source := filepath.Join(repo, "fixtures", "templates-pack")
-	writeIntegrationInstallSource(t, source, "templates/create.md", "<!-- kkachi-agent-helper:managed -->\ncreate\n")
-	writeIntegrationInstallSource(t, source, "templates/update.md", "<!-- kkachi-agent-helper:managed -->\nnew\n")
-	writeIntegrationInstallSource(t, source, "templates/unchanged.md", "<!-- kkachi-agent-helper:managed -->\nsame\n")
-	writeIntegrationInstallSource(t, source, "templates/preserve.md", "<!-- kkachi-agent-helper:managed -->\nupstream\n")
-	writeIntegrationInstallManifest(t, source, "templates", map[string]string{
-		"templates/create.md":    "docs/kkachi/create.md",
-		"templates/update.md":    "docs/kkachi/update.md",
-		"templates/unchanged.md": "docs/kkachi/unchanged.md",
-		"templates/preserve.md":  "docs/kkachi/preserve.md",
-	})
-	writeIntegrationTarget(t, repo, "docs/kkachi/update.md", "<!-- kkachi-agent-helper:managed -->\nold\n")
-	writeIntegrationTarget(t, repo, "docs/kkachi/unchanged.md", "<!-- kkachi-agent-helper:managed -->\nsame\n")
-	writeIntegrationTarget(t, repo, "docs/kkachi/preserve.md", "user custom\n")
-	beforeEvents, err := os.ReadFile(filepath.Join(repo, ".kkachi", "events.jsonl"))
-	if err != nil {
-		t.Fatalf("read events: %v", err)
-	}
 
-	output := runHelper(t, binary, repo, "install", "templates", "--source", "fixtures/templates-pack", "--dry-run", "--json")
+	writeIntegrationTarget(t, repo, ".kkachi/runs/manual-run/evidence.md", "keep me\n")
+	forceArgs := []string{"project", "init", "--project-name", "kkachi-reset", "--stack", "rust", "--repo-path", "/tmp/kkachi-reset", "--commander", "Sunji", "--redteam", "Macho", "--docs-map-roadmap", "docs/ROADMAP.md", "--docs-map-spec", "docs/SPEC.md", "--docs-map-architecture", "docs/ARCHITECTURE.md", "--docs-map-adr-dir", "docs/decisions", "--docs-map-todo-dir", "docs/tasks", "--docs-map-spec-dir", "docs/specifications", "--test-commands", "cargo test,make verify", "--backend-policy", "codex", "--execution-mode", "readiness_hardening", "--sot-policy", "existing_sot_basis", "--force", "--json"}
+	output := runHelper(t, binary, repo, forceArgs...)
 	var payload struct {
-		DryRun  bool `json:"dry_run"`
-		Summary struct {
-			Create    int `json:"create"`
-			Update    int `json:"update"`
-			Unchanged int `json:"unchanged"`
-			Preserve  int `json:"preserve"`
-			Conflict  int `json:"conflict"`
-		} `json:"summary"`
-		Create   []installTargetOnly `json:"create"`
-		Update   []installTargetOnly `json:"update"`
-		Preserve []installTargetOnly `json:"preserve"`
+		ProjectID           string `json:"project_id"`
+		ProjectName         string `json:"project_name"`
+		Forced              bool   `json:"forced"`
+		ReconfiguredEventID string `json:"reconfigured_event_id"`
 	}
 	if err := json.Unmarshal(output, &payload); err != nil {
-		t.Fatalf("install output is not JSON: %v\n%s", err, string(output))
+		t.Fatalf("force output is not JSON: %v\n%s", err, string(output))
 	}
-	if !payload.DryRun || payload.Summary.Create != 1 || payload.Summary.Update != 1 || payload.Summary.Unchanged != 1 || payload.Summary.Preserve != 1 || payload.Summary.Conflict != 0 {
-		t.Fatalf("payload = %#v, want path-action dry-run", payload)
+	if !payload.Forced || payload.ProjectName != "kkachi-reset" || payload.ProjectID == "" || payload.ReconfiguredEventID != "evt-000002" {
+		t.Fatalf("payload = %#v, want forced reconfigure evt-000002", payload)
 	}
-	if payload.Create[0].Target != "docs/kkachi/create.md" || payload.Update[0].Target != "docs/kkachi/update.md" || payload.Preserve[0].Target != "docs/kkachi/preserve.md" {
-		t.Fatalf("actions = %#v/%#v/%#v", payload.Create, payload.Update, payload.Preserve)
-	}
-	gotEvents, err := os.ReadFile(filepath.Join(repo, ".kkachi", "events.jsonl"))
-	if err != nil {
-		t.Fatalf("read events after install: %v", err)
-	}
-	if string(gotEvents) != string(beforeEvents) {
-		t.Fatalf("install dry-run mutated events\nbefore=%s\nafter=%s", string(beforeEvents), string(gotEvents))
-	}
-	updated, err := os.ReadFile(filepath.Join(repo, "docs", "kkachi", "update.md"))
-	if err != nil {
-		t.Fatalf("read update target: %v", err)
-	}
-	if string(updated) != "<!-- kkachi-agent-helper:managed -->\nold\n" {
-		t.Fatalf("install dry-run mutated target = %q", string(updated))
-	}
-	if _, err := os.Stat(filepath.Join(repo, "docs", "kkachi", "create.md")); !os.IsNotExist(err) {
-		t.Fatalf("dry-run create target stat = %v, want absent", err)
-	}
-	preserved, err := os.ReadFile(filepath.Join(repo, "docs", "kkachi", "preserve.md"))
-	if err != nil {
-		t.Fatalf("read preserve target: %v", err)
-	}
-	if string(preserved) != "user custom\n" {
-		t.Fatalf("install dry-run mutated preserved target = %q", string(preserved))
-	}
-
-	missingOutput, err := runHelperAllowError(binary, repo, "install", "templates", "--source", "fixtures/missing-pack", "--dry-run", "--json")
-	if err == nil {
-		t.Fatalf("missing source install succeeded: %s", string(missingOutput))
-	}
-	if !strings.Contains(string(missingOutput), `"code":"install_source_invalid"`) {
-		t.Fatalf("missing source output = %s, want install_source_invalid", string(missingOutput))
-	}
-}
-
-func TestInstallRealApplyAndDriftCheck(t *testing.T) {
-	repo := t.TempDir()
-	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
-		t.Fatalf("mkdir .git: %v", err)
-	}
-	binary := buildHelperBinary(t)
-	runHelper(t, binary, repo, "project", "init", "--json")
-	source := filepath.Join(repo, "fixtures", "templates-pack")
-	writeIntegrationInstallSource(t, source, "templates/create.md", "<!-- kkachi-agent-helper:managed -->\ncreate\n")
-	writeIntegrationInstallSource(t, source, "templates/update.md", "<!-- kkachi-agent-helper:managed -->\nnew\n")
-	writeIntegrationInstallManifest(t, source, "templates", map[string]string{
-		"templates/create.md": "docs/kkachi/create.md",
-		"templates/update.md": "docs/kkachi/update.md",
-	})
-	writeIntegrationTarget(t, repo, "docs/kkachi/update.md", "<!-- kkachi-agent-helper:managed -->\nold\n")
-
-	output := runHelper(t, binary, repo, "install", "templates", "--source", "fixtures/templates-pack", "--json")
-	var applied struct {
-		Status  string `json:"status"`
-		EventID string `json:"event_id"`
-		Summary struct {
-			Create int `json:"create"`
-			Update int `json:"update"`
-		} `json:"summary"`
-	}
-	if err := json.Unmarshal(output, &applied); err != nil {
-		t.Fatalf("install real output is not JSON: %v\n%s", err, string(output))
-	}
-	if applied.Status != "applied" || applied.EventID != "evt-000002" || applied.Summary.Create != 1 || applied.Summary.Update != 1 {
-		t.Fatalf("applied = %#v, want applied install", applied)
-	}
-	if got, err := os.ReadFile(filepath.Join(repo, "docs", "kkachi", "update.md")); err != nil || string(got) != "<!-- kkachi-agent-helper:managed -->\nnew\n" {
-		t.Fatalf("updated target = %q err=%v", string(got), err)
-	}
-	if events, err := os.ReadFile(filepath.Join(repo, ".kkachi", "events.jsonl")); err != nil || !strings.Contains(string(events), `"type":"install.applied"`) {
-		t.Fatalf("events = %s err=%v, want install.applied", string(events), err)
-	}
-
-	cleanOutput := runHelper(t, binary, repo, "install", "templates", "--source", "fixtures/templates-pack", "--drift-check", "--json")
-	var clean struct {
-		Status  string `json:"status"`
-		Summary struct {
-			Unchanged int `json:"unchanged"`
-		} `json:"summary"`
-	}
-	if err := json.Unmarshal(cleanOutput, &clean); err != nil {
-		t.Fatalf("drift clean output is not JSON: %v\n%s", err, string(cleanOutput))
-	}
-	if clean.Status != "clean" || clean.Summary.Unchanged != 2 {
-		t.Fatalf("clean = %#v, want clean drift check", clean)
-	}
-}
-
-func TestInstallRealFailsUnderProjectWriteLock(t *testing.T) {
-	repo := t.TempDir()
-	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
-		t.Fatalf("mkdir .git: %v", err)
-	}
-	binary := buildHelperBinary(t)
-	runHelper(t, binary, repo, "project", "init", "--json")
-	source := filepath.Join(repo, "fixtures", "templates-pack")
-	writeIntegrationInstallSource(t, source, "templates/create.md", "<!-- kkachi-agent-helper:managed -->\ncreate\n")
-	writeIntegrationInstallManifest(t, source, "templates", map[string]string{"templates/create.md": "docs/kkachi/create.md"})
-	hostname, err := os.Hostname()
-	if err != nil {
-		t.Fatalf("hostname: %v", err)
-	}
-	writeLockMetadata(t, repo, "project_write", lockMetadata{Version: "0.1", LockName: "project_write", OwnerPID: os.Getpid(), Hostname: hostname, Command: "fresh install writer", CreatedAt: time.Now().UTC().Format(time.RFC3339)})
-
-	output, err := runHelperAllowError(binary, repo, "install", "templates", "--source", "fixtures/templates-pack", "--json")
-	if err == nil {
-		t.Fatalf("install succeeded under fresh project_write lock\n%s", string(output))
-	}
-	assertOutputContains(t, output, `"code":"lock_conflict"`, "install fresh project lock conflict")
-	if _, err := os.Stat(filepath.Join(repo, "docs", "kkachi", "create.md")); !os.IsNotExist(err) {
-		t.Fatalf("install target stat = %v, want absent under lock conflict", err)
-	}
+	assertFileContains(t, filepath.Join(repo, ".kkachi", "project-overlay.yaml"), `project: "kkachi-reset"`, "force overlay project")
+	assertFileContains(t, filepath.Join(repo, ".kkachi", "project-overlay.yaml"), `stack: "rust"`, "force overlay stack")
+	assertFileContains(t, filepath.Join(repo, "docs", "kkachi-docs-map.yaml"), `roadmap: "docs/ROADMAP.md"`, "force docs map roadmap")
+	assertFileContains(t, filepath.Join(repo, ".kkachi", "events.jsonl"), `"type":"project.reconfigured"`, "force event")
+	assertFileContains(t, filepath.Join(repo, ".kkachi", "runs", "manual-run", "evidence.md"), "keep me", "force preserved run evidence")
+	status := runHelper(t, binary, repo, "project", "status", "--json")
+	assertOutputContains(t, status, `"event_tail_id":"evt-000002"`, "force status tail")
 }
 
 func TestProjectInitCreatesStateAndRefusesOverwrite(t *testing.T) {
@@ -195,7 +76,7 @@ func TestProjectInitCreatesStateAndRefusesOverwrite(t *testing.T) {
 	}
 	binary := buildHelperBinary(t)
 
-	cmd := exec.Command(binary, "project", "init", "--json")
+	cmd := exec.Command(binary, expandProjectInitArgs([]string{"project", "init", "--json"})...)
 	cmd.Dir = repo
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -223,7 +104,7 @@ func TestProjectInitCreatesStateAndRefusesOverwrite(t *testing.T) {
 	if payload.ProjectID == "" || payload.ProjectName == "" || payload.InitialEventID != "evt-000001" {
 		t.Fatalf("payload = %#v, want project identity and initial event", payload)
 	}
-	if len(payload.CreatedPaths) != 3 || len(payload.SchemaPaths) != 7 {
+	if len(payload.CreatedPaths) != 5 || len(payload.SchemaPaths) != 6 {
 		t.Fatalf("paths = %#v/%#v, want state and schema paths", payload.CreatedPaths, payload.SchemaPaths)
 	}
 
@@ -297,7 +178,6 @@ func TestProjectInitCreatesStateAndRefusesOverwrite(t *testing.T) {
 		".kkachi/schemas/run-metadata.schema.json",
 		".kkachi/schemas/selected-cli.schema.json",
 		".kkachi/schemas/bridge-session-snapshot.schema.json",
-		".kkachi/schemas/install-manifest.schema.json",
 	}
 	for _, relative := range required {
 		if _, err := os.Stat(filepath.Join(repo, filepath.FromSlash(relative))); err != nil {
@@ -402,7 +282,7 @@ func TestProjectInitCreatesStateAndRefusesOverwrite(t *testing.T) {
 		t.Fatalf("status after event append = %s, want evt-000006", string(statusBytes))
 	}
 
-	retry := exec.Command(binary, "project", "init", "--json")
+	retry := exec.Command(binary, expandProjectInitArgs([]string{"project", "init", "--json"})...)
 	retry.Dir = repo
 	retryOutput, err := retry.CombinedOutput()
 	if err == nil {
@@ -1053,7 +933,22 @@ func runHelper(t *testing.T, binary string, repo string, args ...string) []byte 
 	return output
 }
 
+func expandProjectInitArgs(args []string) []string {
+	if len(args) >= 2 && args[0] == "project" && args[1] == "init" {
+		for _, arg := range args[2:] {
+			if arg == "--project-name" {
+				return args
+			}
+		}
+		extra := append([]string{}, args[2:]...)
+		base := []string{"project", "init", "--project-name", "kkachi-test", "--stack", "go", "--repo-path", "/tmp/kkachi-test", "--commander", "Gongmyeong", "--redteam", "Macho", "--docs-map-roadmap", "docs/roadmap.md", "--docs-map-spec", "docs/specs.md", "--docs-map-architecture", "docs/architecture.md", "--docs-map-adr-dir", "docs/adr", "--docs-map-todo-dir", "docs/todo", "--docs-map-spec-dir", "docs/specs", "--test-commands", "go test ./...,make test", "--backend-policy", "codex", "--execution-mode", "production_write", "--sot-policy", "existing_sot_basis"}
+		return append(base, extra...)
+	}
+	return args
+}
+
 func runHelperAllowError(binary string, repo string, args ...string) ([]byte, error) {
+	args = expandProjectInitArgs(args)
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = repo
 	return cmd.CombinedOutput()
@@ -1221,21 +1116,21 @@ func readFile(t *testing.T, path string) []byte {
 	return data
 }
 
+func assertFileContains(t *testing.T, path string, want string, label string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if !strings.Contains(string(data), want) {
+		t.Fatalf("%s = %s, want %q", label, string(data), want)
+	}
+}
+
 func assertOutputContains(t *testing.T, output []byte, pattern string, label string) {
 	t.Helper()
 	if !strings.Contains(string(output), pattern) {
 		t.Fatalf("%s output = %s, want %q", label, string(output), pattern)
-	}
-}
-
-func writeIntegrationInstallSource(t *testing.T, sourceRoot string, relative string, content string) {
-	t.Helper()
-	path := filepath.Join(sourceRoot, filepath.FromSlash(relative))
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("mkdir source: %v", err)
-	}
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatalf("write source %s: %v", relative, err)
 	}
 }
 
@@ -1247,39 +1142,6 @@ func writeIntegrationTarget(t *testing.T, repo string, relative string, content 
 	}
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write target %s: %v", relative, err)
-	}
-}
-
-func writeIntegrationInstallManifest(t *testing.T, sourceRoot string, kind string, items map[string]string) {
-	t.Helper()
-	type manifestItem struct {
-		Source      string `json:"source"`
-		Target      string `json:"target"`
-		SHA256      string `json:"sha256"`
-		OwnerMarker string `json:"owner_marker"`
-	}
-	manifestItems := []manifestItem{}
-	for source, target := range items {
-		content, err := os.ReadFile(filepath.Join(sourceRoot, filepath.FromSlash(source)))
-		if err != nil {
-			t.Fatalf("read source %s: %v", source, err)
-		}
-		sum := sha256.Sum256(content)
-		manifestItems = append(manifestItems, manifestItem{Source: source, Target: target, SHA256: hex.EncodeToString(sum[:]), OwnerMarker: "<!-- kkachi-agent-helper:managed -->"})
-	}
-	payload := map[string]any{
-		"version": "0.1",
-		"kind":    kind,
-		"package": map[string]any{"name": "kkachi-test-pack", "version": "0.1.0"},
-		"compat":  map[string]any{"required_helper": ">=0.1.0", "required_bridge": ">=0.1.0", "required_skills": ">=0.1.0"},
-		"items":   manifestItems,
-	}
-	data, err := json.MarshalIndent(payload, "", "  ")
-	if err != nil {
-		t.Fatalf("marshal install manifest: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(sourceRoot, "kkachi-install-manifest.json"), append(data, '\n'), 0o600); err != nil {
-		t.Fatalf("write install manifest: %v", err)
 	}
 }
 

@@ -2,8 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -13,6 +11,28 @@ import (
 
 	"github.com/SeventeenthEarth/kkachi-agent-helper/internal/project"
 )
+
+func projectInitArgs(extra ...string) []string {
+	args := []string{
+		"project", "init",
+		"--project-name", "kkachi-test",
+		"--stack", "go",
+		"--repo-path", "/tmp/kkachi-test",
+		"--commander", "Gongmyeong",
+		"--redteam", "Macho",
+		"--docs-map-roadmap", "docs/roadmap.md",
+		"--docs-map-spec", "docs/specs.md",
+		"--docs-map-architecture", "docs/architecture.md",
+		"--docs-map-adr-dir", "docs/adr",
+		"--docs-map-todo-dir", "docs/todo",
+		"--docs-map-spec-dir", "docs/specs",
+		"--test-commands", "go test ./...,make test",
+		"--backend-policy", "codex",
+		"--execution-mode", "production_write",
+		"--sot-policy", "existing_sot_basis",
+	}
+	return append(args, extra...)
+}
 
 func TestVersionHumanOutput(t *testing.T) {
 	var stdout bytes.Buffer
@@ -120,7 +140,7 @@ func TestImplementedRunCommandValidatesCreateOptions(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
 	}
 	stdout.Reset()
@@ -140,13 +160,57 @@ func TestImplementedRunCommandValidatesCreateOptions(t *testing.T) {
 	}
 }
 
+func TestProjectInitRequiresBootstrapOptions(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runWithOptions([]string{"project", "init", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+
+	if exitCode != ExitUsage {
+		t.Fatalf("exitCode = %d, want %d", exitCode, ExitUsage)
+	}
+	env := decodeErrorEnvelope(t, stderr.Bytes())
+	if env.Error.Code != "missing_required_option" || env.Error.Field != "--project-name" {
+		t.Fatalf("error = %#v, want missing project-name", env.Error)
+	}
+}
+
+func TestProjectInitForceReconfiguresCLI(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions(projectInitArgs("--json"), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	forceArgs := projectInitArgs("--json", "--force")
+	for i := range forceArgs {
+		if forceArgs[i] == "kkachi-test" {
+			forceArgs[i] = "kkachi-reset"
+			break
+		}
+	}
+	if code := runWithOptions(forceArgs, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init --force exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	var payload projectInitOutput
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("decode force init: %v\n%s", err, stdout.String())
+	}
+	if !payload.Forced || payload.ReconfiguredEventID != "evt-000002" || payload.ProjectName != "kkachi-reset" {
+		t.Fatalf("payload = %#v, want forced reconfigure", payload)
+	}
+}
+
 func TestProjectInitHumanOutput(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
 	exitCode := runWithOptions(
-		[]string{"project", "init"},
+		projectInitArgs(),
 		&stdout,
 		&stderr,
 		testBuildInfo(),
@@ -174,7 +238,7 @@ func TestProjectInitJSONOutput(t *testing.T) {
 	var stderr bytes.Buffer
 
 	exitCode := runWithOptions(
-		[]string{"project", "init", "--json"},
+		projectInitArgs("--json"),
 		&stdout,
 		&stderr,
 		testBuildInfo(),
@@ -199,7 +263,7 @@ func TestProjectInitJSONOutput(t *testing.T) {
 	if payload.InitialEventID != "evt-000001" {
 		t.Fatalf("initial event id = %q, want evt-000001", payload.InitialEventID)
 	}
-	if len(payload.CreatedPaths) != 3 || len(payload.SchemaPaths) != 7 {
+	if len(payload.CreatedPaths) != 5 || len(payload.SchemaPaths) != 6 {
 		t.Fatalf("payload paths = %#v/%#v, want created and schema paths", payload.CreatedPaths, payload.SchemaPaths)
 	}
 }
@@ -216,7 +280,7 @@ func TestProjectInitRefusesExistingState(t *testing.T) {
 	var stderr bytes.Buffer
 
 	exitCode := runWithOptions(
-		[]string{"project", "init", "--json"},
+		projectInitArgs("--json"),
 		&stdout,
 		&stderr,
 		testBuildInfo(),
@@ -261,7 +325,7 @@ func TestProjectStatusAndDoctorJSONOutput(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
 	}
 
@@ -306,7 +370,7 @@ func TestProjectStatusAndDoctorHumanOutput(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
 	}
 
@@ -347,7 +411,7 @@ func TestProjectStatusAndDoctorRejectUnsupportedOptions(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
 	}
 
@@ -376,7 +440,7 @@ func TestProjectDoctorReportsCoherenceMismatch(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
 	}
 	if err := os.WriteFile(filepath.Join(repo, ".kkachi", "events.jsonl"), []byte(`{"version":"0.1","event_id":"evt-000001","occurred_at":"2026-04-30T01:00:00Z","run_id":null,"type":"project.initialized","actor":"helper","payload":{}}`+"\n"+`{"version":"0.1","event_id":"evt-000002","occurred_at":"2026-04-30T02:00:00Z","run_id":null,"type":"run.created","actor":"helper","payload":{}}`+"\n"), 0o600); err != nil {
@@ -414,7 +478,7 @@ func TestProjectStatusReportsCoherenceMismatch(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
 	}
 	if err := os.WriteFile(filepath.Join(repo, ".kkachi", "events.jsonl"), []byte(`{"version":"0.1","event_id":"evt-000001","occurred_at":"2026-04-30T01:00:00Z","run_id":null,"type":"project.initialized","actor":"helper","payload":{}}`+"\n"+`{"version":"0.1","event_id":"evt-000002","occurred_at":"2026-04-30T02:00:00Z","run_id":null,"type":"run.created","actor":"helper","payload":{}}`+"\n"), 0o600); err != nil {
@@ -468,7 +532,7 @@ func TestSchemaValidateAndExportCLI(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(projectInitArgs("--json"), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
 	}
 
@@ -526,7 +590,7 @@ func TestSchemaCLIUsageAndSafetyErrors(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
 	}
 
@@ -556,7 +620,7 @@ func TestSchemaExportCLIWritesAllIdempotentAndRespectsLocks(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
 	}
 
@@ -573,8 +637,8 @@ func TestSchemaExportCLIWritesAllIdempotentAndRespectsLocks(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &exported); err != nil {
 		t.Fatalf("schema export stdout is not JSON: %v\n%s", err, stdout.String())
 	}
-	if exported.EventID != "evt-000002" || len(exported.Schemas) != 7 || len(exported.Written) != 1 || exported.Written[0] != ".kkachi/schemas/config.schema.json" || len(exported.Unchanged) != 6 {
-		t.Fatalf("exported = %#v, want one refreshed config schema, six unchanged, and evt-000002", exported)
+	if exported.EventID != "evt-000002" || len(exported.Schemas) != 6 || len(exported.Written) != 1 || exported.Written[0] != ".kkachi/schemas/config.schema.json" || len(exported.Unchanged) != 5 {
+		t.Fatalf("exported = %#v, want one refreshed config schema, five unchanged, and evt-000002", exported)
 	}
 	if !strings.Contains(readCLIText(t, filepath.Join(repo, ".kkachi", "events.jsonl")), `"type":"schema.exported"`) {
 		t.Fatalf("events missing schema.exported")
@@ -589,7 +653,7 @@ func TestSchemaExportCLIWritesAllIdempotentAndRespectsLocks(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &exported); err != nil {
 		t.Fatalf("idempotent export stdout is not JSON: %v\n%s", err, stdout.String())
 	}
-	if exported.EventID != "" || len(exported.Written) != 0 || len(exported.Unchanged) != 7 {
+	if exported.EventID != "" || len(exported.Written) != 0 || len(exported.Unchanged) != 6 {
 		t.Fatalf("idempotent exported = %#v, want no writes and no event", exported)
 	}
 
@@ -636,7 +700,7 @@ func TestRunCreateListShowActivateCloseCLI(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
 	}
 
@@ -736,7 +800,7 @@ func TestRunAbortCLI(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
 	}
 	stdout.Reset()
@@ -767,7 +831,7 @@ func TestRunCLIValidationAndSafetyErrors(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
 	}
 	stdout.Reset()
@@ -800,7 +864,7 @@ func TestRunCLIHumanOutput(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
 	}
 
@@ -857,7 +921,7 @@ func TestRunCLIRejectsUnknownOptionsAndExtraArgs(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
 	}
 	stdout.Reset()
@@ -896,7 +960,7 @@ func TestRunCommandsRefuseEventCoherenceMismatch(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
 	}
 
@@ -996,7 +1060,7 @@ func TestEventAppendJSONOutput(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
 	}
 	stdout.Reset()
@@ -1037,7 +1101,7 @@ func TestEventAppendValidatesOptionsAndPayload(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
 	}
 
@@ -1101,7 +1165,7 @@ func TestEventAppendRefusesCoherenceMismatch(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
 	}
 	if err := os.WriteFile(filepath.Join(repo, ".kkachi", "events.jsonl"), []byte(`{"version":"0.1","event_id":"evt-000002","occurred_at":"2026-04-30T02:00:00Z","run_id":null,"type":"run.created","actor":"helper","payload":{}}`+"\n"), 0o600); err != nil {
@@ -1207,7 +1271,7 @@ func TestLockRecoverCLIJSONAndConflictShape(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
 	}
 
@@ -1246,7 +1310,7 @@ func TestEventAppendCLIFailsUnderFreshProjectWriteLock(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
 	}
 
@@ -1298,7 +1362,7 @@ func TestArtifactInitListCLI(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
 	}
 	stdout.Reset()
@@ -1349,7 +1413,7 @@ func TestArtifactCLIValidationAndHumanOutput(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
 	}
 	stdout.Reset()
@@ -1390,7 +1454,7 @@ func TestArtifactValidateCLIJSONHumanAndFailures(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
 	}
 	stdout.Reset()
@@ -1489,7 +1553,7 @@ func TestGateCheckCLIJSONHumanAndPlanFailure(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
 	}
 	stdout.Reset()
@@ -1594,7 +1658,7 @@ func TestGateCheckBackendCLIJSONHumanAndStateUpdates(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
 	}
 	stdout.Reset()
@@ -1694,7 +1758,7 @@ func TestGateFinalCLI(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
 	}
 	stdout.Reset()
@@ -1766,235 +1830,19 @@ func TestGateFinalCLI(t *testing.T) {
 	}
 }
 
-func TestInstallCLIDryRunJSONAndHuman(t *testing.T) {
+func TestInstallCommandRemoved(t *testing.T) {
 	repo := tempGitRepo(t)
-	source := filepath.Join(repo, "fixtures", "skills-pack")
-	writeCLIInstallSource(t, source, "skills/create/SKILL.md", "<!-- kkachi-agent-helper:managed -->\ncreate\n")
-	writeCLIInstallSource(t, source, "skills/update/SKILL.md", "<!-- kkachi-agent-helper:managed -->\nnew\n")
-	writeCLIInstallSource(t, source, "skills/preserve/SKILL.md", "<!-- kkachi-agent-helper:managed -->\nupstream\n")
-	writeCLIInstallManifest(t, source, "skills", map[string]string{
-		"skills/create/SKILL.md":   ".codex/skills/create/SKILL.md",
-		"skills/update/SKILL.md":   ".codex/skills/update/SKILL.md",
-		"skills/preserve/SKILL.md": ".codex/skills/preserve/SKILL.md",
-	})
-	writeCLIRepoFile(t, repo, ".codex/skills/update/SKILL.md", "<!-- kkachi-agent-helper:managed -->\nold\n")
-	writeCLIRepoFile(t, repo, ".codex/skills/preserve/SKILL.md", "user custom\n")
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
-		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
-	}
-	beforeEvents := readCLIText(t, filepath.Join(repo, ".kkachi", "events.jsonl"))
 
-	stdout.Reset()
-	stderr.Reset()
-	if code := runWithOptions([]string{"install", "skills", "--source", "fixtures/skills-pack", "--dry-run", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
-		t.Fatalf("install dry-run exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
-	}
-	var payload installPlanOutput
-	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
-		t.Fatalf("install dry-run output is not JSON: %v\n%s", err, stdout.String())
-	}
-	if !payload.DryRun || payload.Kind != "skills" || payload.Summary.Create != 1 || payload.Summary.Update != 1 || payload.Summary.Preserve != 1 || payload.Summary.Unchanged != 0 || payload.Summary.Conflict != 0 {
-		t.Fatalf("payload = %#v, want dry-run path actions", payload)
-	}
-	if payload.Create[0].Target != ".codex/skills/create/SKILL.md" || payload.Update[0].Target != ".codex/skills/update/SKILL.md" || payload.Preserve[0].Target != ".codex/skills/preserve/SKILL.md" {
-		t.Fatalf("actions = %#v/%#v/%#v", payload.Create, payload.Update, payload.Preserve)
-	}
-	if got := readCLIText(t, filepath.Join(repo, ".kkachi", "events.jsonl")); got != beforeEvents {
-		t.Fatalf("install dry-run mutated events\nbefore=%s\nafter=%s", beforeEvents, got)
-	}
-	if got := readCLIText(t, filepath.Join(repo, ".codex", "skills", "update", "SKILL.md")); got != "<!-- kkachi-agent-helper:managed -->\nold\n" {
-		t.Fatalf("install dry-run mutated target = %q", got)
-	}
+	exitCode := runWithOptions([]string{"install", "templates", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
 
-	stdout.Reset()
-	stderr.Reset()
-	if code := runWithOptions([]string{"install", "skills", "--source", "fixtures/skills-pack", "--dry-run"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
-		t.Fatalf("install dry-run human exit = %d stderr=%s", code, stderr.String())
+	if exitCode != ExitUsage {
+		t.Fatalf("exitCode = %d, want %d", exitCode, ExitUsage)
 	}
-	if out := stdout.String(); !strings.Contains(out, "install skills dry-run: status=planned create=1 update=1 unchanged=0 preserve=1 conflict=0") || !strings.Contains(out, "[preserve] .codex/skills/preserve/SKILL.md") {
-		t.Fatalf("human output = %q", out)
-	}
-}
-
-func TestInstallCLIRealInstallAndDriftCheck(t *testing.T) {
-	repo := tempGitRepo(t)
-	source := filepath.Join(repo, "fixtures", "templates-pack")
-	writeCLIInstallSource(t, source, "templates/create.md", "<!-- kkachi-agent-helper:managed -->\ncreate\n")
-	writeCLIInstallSource(t, source, "templates/update.md", "<!-- kkachi-agent-helper:managed -->\nnew\n")
-	writeCLIInstallManifest(t, source, "templates", map[string]string{
-		"templates/create.md": "docs/kkachi/create.md",
-		"templates/update.md": "docs/kkachi/update.md",
-	})
-	writeCLIRepoFile(t, repo, "docs/kkachi/update.md", "<!-- kkachi-agent-helper:managed -->\nold\n")
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
-		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
-	}
-
-	stdout.Reset()
-	stderr.Reset()
-	if code := runWithOptions([]string{"install", "templates", "--source", "fixtures/templates-pack", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
-		t.Fatalf("install real exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
-	}
-	var applied installPlanOutput
-	if err := json.Unmarshal(stdout.Bytes(), &applied); err != nil {
-		t.Fatalf("install real output is not JSON: %v\n%s", err, stdout.String())
-	}
-	if applied.Status != project.InstallStatusApplied || applied.EventID != "evt-000002" || applied.Summary.Create != 1 || applied.Summary.Update != 1 {
-		t.Fatalf("applied = %#v, want real install output", applied)
-	}
-	if applied.Compatibility.Helper.Status != project.InstallCompatStatusPass || applied.Compatibility.Bridge.Status != project.InstallCompatStatusNotChecked || applied.Compatibility.Skills.Status != project.InstallCompatStatusNotChecked {
-		t.Fatalf("compatibility = %#v, want helper pass and bridge/skills not_checked", applied.Compatibility)
-	}
-	if got := readCLIText(t, filepath.Join(repo, "docs", "kkachi", "create.md")); got != "<!-- kkachi-agent-helper:managed -->\ncreate\n" {
-		t.Fatalf("created target = %q", got)
-	}
-	if got := readCLIText(t, filepath.Join(repo, "docs", "kkachi", "update.md")); got != "<!-- kkachi-agent-helper:managed -->\nnew\n" {
-		t.Fatalf("updated target = %q", got)
-	}
-
-	stdout.Reset()
-	stderr.Reset()
-	if code := runWithOptions([]string{"install", "templates", "--source", "fixtures/templates-pack", "--drift-check", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
-		t.Fatalf("drift clean exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
-	}
-	var clean installPlanOutput
-	if err := json.Unmarshal(stdout.Bytes(), &clean); err != nil {
-		t.Fatalf("drift clean output is not JSON: %v\n%s", err, stdout.String())
-	}
-	if !clean.DriftCheck || clean.Status != project.InstallStatusClean || clean.Summary.Unchanged != 2 {
-		t.Fatalf("clean = %#v, want clean drift check", clean)
-	}
-
-	writeCLIRepoFile(t, repo, "docs/kkachi/update.md", "<!-- kkachi-agent-helper:managed -->\ndrifted\n")
-	stdout.Reset()
-	stderr.Reset()
-	if code := runWithOptions([]string{"install", "templates", "--source", "fixtures/templates-pack", "--drift-check", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitSafety {
-		t.Fatalf("drifted exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
-	}
-}
-
-func TestInstallCLIProjectWriteLockConflict(t *testing.T) {
-	repo := tempGitRepo(t)
-	source := filepath.Join(repo, "fixtures", "templates-pack")
-	writeCLIInstallSource(t, source, "templates/create.md", "<!-- kkachi-agent-helper:managed -->\ncreate\n")
-	writeCLIInstallManifest(t, source, "templates", map[string]string{"templates/create.md": "docs/kkachi/create.md"})
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
-		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
-	}
-	fresh := project.LockMetadata{Version: project.LockVersion, LockName: project.ProjectWriteLockName, OwnerPID: os.Getpid(), Hostname: cliMustHostname(t), Command: "fresh install writer", CreatedAt: time.Now().UTC().Format(time.RFC3339)}
-	writeCLILock(t, repo, project.ProjectWriteLockName, fresh)
-
-	stdout.Reset()
-	stderr.Reset()
-	assertCLIErrorCode(t, runWithOptions([]string{"install", "templates", "--source", "fixtures/templates-pack", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitSafety, "lock_conflict")
-	if _, err := os.Stat(filepath.Join(repo, "docs", "kkachi", "create.md")); !os.IsNotExist(err) {
-		t.Fatalf("install target stat = %v, want absent under lock conflict", err)
-	}
-}
-
-func TestInstallCLIUsageAndSafetyErrors(t *testing.T) {
-	repo := tempGitRepo(t)
-	source := filepath.Join(repo, "fixtures", "templates-pack")
-	writeCLIInstallSource(t, source, "templates/README.md", "<!-- kkachi-agent-helper:managed -->\ntemplate\n")
-	writeCLIInstallManifest(t, source, "templates", map[string]string{"templates/README.md": "docs/kkachi/README.md"})
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
-		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
-	}
-
-	stdout.Reset()
-	stderr.Reset()
-	writeCLIRepoFile(t, repo, "docs/kkachi/README.md", "user custom\n")
-	assertCLIErrorCode(t, runWithOptions([]string{"install", "templates", "--source", "fixtures/templates-pack", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitSafety, "install_preflight_blocked")
-
-	stdout.Reset()
-	stderr.Reset()
-	assertCLIErrorCode(t, runWithOptions([]string{"install", "skills", "--source", "fixtures/templates-pack", "--dry-run", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitSafety, "install_manifest_kind_mismatch")
-
-	stdout.Reset()
-	stderr.Reset()
-	assertCLIErrorCode(t, runWithOptions([]string{"install", "templates", "--dry-run", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitUsage, "missing_required_option")
-
-	stdout.Reset()
-	stderr.Reset()
-	assertCLIErrorCode(t, runWithOptions([]string{"install", "bogus", "--source", "fixtures/templates-pack", "--dry-run", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitUsage, "install_kind_invalid")
-
-	stdout.Reset()
-	stderr.Reset()
-	assertCLIErrorCode(t, runWithOptions([]string{"install", "templates", "--source", "fixtures/missing-pack", "--dry-run", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitSafety, "install_source_invalid")
-
-	stdout.Reset()
-	stderr.Reset()
-	assertCLIErrorCode(t, runWithOptions([]string{"install", "templates", "--source", "   ", "--dry-run", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitUsage, "install_source_required")
-
-	checksumSource := filepath.Join(repo, "fixtures", "checksum-pack")
-	writeCLIInstallSource(t, checksumSource, "templates/README.md", "<!-- kkachi-agent-helper:managed -->\noriginal\n")
-	writeCLIInstallManifest(t, checksumSource, "templates", map[string]string{"templates/README.md": "docs/kkachi/checksum.md"})
-	writeCLIInstallSource(t, checksumSource, "templates/README.md", "<!-- kkachi-agent-helper:managed -->\nchanged-after-manifest\n")
-	stdout.Reset()
-	stderr.Reset()
-	assertCLIErrorCode(t, runWithOptions([]string{"install", "templates", "--source", "fixtures/checksum-pack", "--dry-run", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitSafety, "install_checksum_mismatch")
-}
-
-func writeCLIInstallSource(t *testing.T, sourceRoot string, relative string, content string) {
-	t.Helper()
-	path := filepath.Join(sourceRoot, filepath.FromSlash(relative))
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("mkdir source: %v", err)
-	}
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatalf("write source %s: %v", relative, err)
-	}
-}
-
-func writeCLIRepoFile(t *testing.T, repo string, relative string, content string) {
-	t.Helper()
-	path := filepath.Join(repo, filepath.FromSlash(relative))
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("mkdir repo file: %v", err)
-	}
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatalf("write repo %s: %v", relative, err)
-	}
-}
-
-func writeCLIInstallManifest(t *testing.T, sourceRoot string, kind string, items map[string]string) {
-	t.Helper()
-	type manifestItem struct {
-		Source      string `json:"source"`
-		Target      string `json:"target"`
-		SHA256      string `json:"sha256"`
-		OwnerMarker string `json:"owner_marker"`
-	}
-	manifestItems := []manifestItem{}
-	for source, target := range items {
-		content, err := os.ReadFile(filepath.Join(sourceRoot, filepath.FromSlash(source)))
-		if err != nil {
-			t.Fatalf("read source %s: %v", source, err)
-		}
-		sum := sha256.Sum256(content)
-		manifestItems = append(manifestItems, manifestItem{Source: source, Target: target, SHA256: hex.EncodeToString(sum[:]), OwnerMarker: "<!-- kkachi-agent-helper:managed -->"})
-	}
-	payload := map[string]any{
-		"version": "0.1",
-		"kind":    kind,
-		"package": map[string]any{"name": "kkachi-test-pack", "version": "0.1.0"},
-		"compat":  map[string]any{"required_helper": ">=0.1.0", "required_bridge": ">=0.1.0", "required_skills": ">=0.1.0"},
-		"items":   manifestItems,
-	}
-	data, err := json.MarshalIndent(payload, "", "  ")
-	if err != nil {
-		t.Fatalf("marshal install manifest: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(sourceRoot, "kkachi-install-manifest.json"), append(data, '\n'), 0o600); err != nil {
-		t.Fatalf("write install manifest: %v", err)
+	env := decodeErrorEnvelope(t, stderr.Bytes())
+	if env.Error.Code != "unknown_command" {
+		t.Fatalf("error code = %q, want unknown_command", env.Error.Code)
 	}
 }
 
@@ -2002,7 +1850,7 @@ func TestSchemaMigrateCLIDryRunAndRealRun(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
 	}
 
@@ -2056,7 +1904,7 @@ func TestSchemaMigrateCLIUsageSafetyAndLockErrors(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
 	}
 
@@ -2090,7 +1938,7 @@ func TestDiagnosticsExportRedactsBundleAndWritesOutput(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
 	}
 	stdout.Reset()
@@ -2137,7 +1985,7 @@ func TestDiagnosticsExportRedactsBundleAndWritesOutput(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &bundle); err != nil {
 		t.Fatalf("diagnostics stdout is not JSON: %v\n%s", err, stdout.String())
 	}
-	if bundle.RunID != created.RunID || len(bundle.SchemaVersions) != 7 || len(bundle.GateReports) == 0 || len(bundle.SelectedArtifacts) == 0 {
+	if bundle.RunID != created.RunID || len(bundle.SchemaVersions) != 6 || len(bundle.GateReports) == 0 || len(bundle.SelectedArtifacts) == 0 {
 		t.Fatalf("bundle = %#v, want run, schemas, gate reports, and selected artifacts", bundle)
 	}
 	foundSelectedCLI := false
@@ -2172,7 +2020,7 @@ func TestDiagnosticsExportUsageAndErrorRedaction(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	if code := runWithOptions([]string{"project", "init"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
 	}
 

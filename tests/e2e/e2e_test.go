@@ -55,8 +55,23 @@ type cliResult struct {
 	err    error
 }
 
+func expandProjectInitArgs(args []string) []string {
+	if len(args) >= 2 && args[0] == "project" && args[1] == "init" {
+		for _, arg := range args[2:] {
+			if arg == "--project-name" {
+				return args
+			}
+		}
+		extra := append([]string{}, args[2:]...)
+		base := []string{"project", "init", "--project-name", "kkachi-test", "--stack", "go", "--repo-path", "/tmp/kkachi-test", "--commander", "Gongmyeong", "--redteam", "Macho", "--docs-map-roadmap", "docs/roadmap.md", "--docs-map-spec", "docs/specs.md", "--docs-map-architecture", "docs/architecture.md", "--docs-map-adr-dir", "docs/adr", "--docs-map-todo-dir", "docs/todo", "--docs-map-spec-dir", "docs/specs", "--test-commands", "go test ./...,make test", "--backend-policy", "codex", "--execution-mode", "production_write", "--sot-policy", "existing_sot_basis"}
+		return append(base, extra...)
+	}
+	return args
+}
+
 func runCLI(t *testing.T, dir string, args ...string) cliResult {
 	t.Helper()
+	args = expandProjectInitArgs(args)
 	cmd := exec.Command(helperBinary, args...)
 	cmd.Dir = dir
 	out, err := cmd.Output()
@@ -231,37 +246,6 @@ func createRun(t *testing.T, repo, taskID, executionMode string) string {
 	return jsonFieldString(t, []byte(res.stdout), "run_id")
 }
 
-func writeInstallManifest(t *testing.T, root string, sources, targets []string, requiredHelper string) {
-	t.Helper()
-	type item struct {
-		Source      string `json:"source"`
-		Target      string `json:"target"`
-		SHA256      string `json:"sha256"`
-		OwnerMarker string `json:"owner_marker"`
-	}
-	items := make([]item, 0, len(sources))
-	for i, source := range sources {
-		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(source)))
-		if err != nil {
-			t.Fatalf("read manifest source %s: %v", source, err)
-		}
-		sum := sha256.Sum256(data)
-		items = append(items, item{Source: source, Target: targets[i], SHA256: hex.EncodeToString(sum[:]), OwnerMarker: "<!-- kkachi-agent-helper:managed -->"})
-	}
-	manifest := map[string]any{
-		"version": "0.1",
-		"kind":    "skills",
-		"package": map[string]any{"name": "kkachi-e2e-pack", "version": "0.1.0"},
-		"compat":  map[string]any{"required_helper": requiredHelper, "required_bridge": ">=0.1.0", "required_skills": ">=0.1.0"},
-		"items":   items,
-	}
-	data, err := json.MarshalIndent(manifest, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeFile(t, filepath.Join(root, "kkachi-install-manifest.json"), string(data)+"\n")
-}
-
 func copyDir(t *testing.T, src, dst string) {
 	t.Helper()
 	entries, err := os.ReadDir(src)
@@ -321,12 +305,35 @@ func writeLock(t *testing.T, repo, lockName string, ownerPID int, host, command,
 	writeFile(t, filepath.Join(repo, ".kkachi", file), string(data)+"\n")
 }
 
-func TestProjectInitSchemaAndInstallFlow(t *testing.T) {
+func TestProjectInitForceReconfiguresBootstrapE2E(t *testing.T) {
+	r := repo(t, "force-reconfigure")
+	init := requireCLI(t, r, "project", "init", "--json")
+	projectID := jsonFieldString(t, []byte(init.stdout), "project_id")
+	runID := createRun(t, r, "force-001", "production_write")
+	writeArtifact(t, r, runID, "plan.md", "Status: complete\nPlan survives force reconfiguration.")
+
+	force := requireCLI(t, r, "project", "init", "--project-name", "kkachi-reset", "--stack", "rust", "--repo-path", "/tmp/kkachi-reset", "--commander", "Sunji", "--redteam", "Macho", "--docs-map-roadmap", "docs/ROADMAP.md", "--docs-map-spec", "docs/SPEC.md", "--docs-map-architecture", "docs/ARCHITECTURE.md", "--docs-map-adr-dir", "docs/decisions", "--docs-map-todo-dir", "docs/tasks", "--docs-map-spec-dir", "docs/specifications", "--test-commands", "cargo test,make verify", "--backend-policy", "codex", "--execution-mode", "readiness_hardening", "--sot-policy", "existing_sot_basis", "--force", "--json")
+	reconfiguredID := jsonFieldString(t, []byte(force.stdout), "project_id")
+	if reconfiguredID != projectID {
+		t.Fatalf("project_id after force = %q, want preserved %q", reconfiguredID, projectID)
+	}
+	requireContains(t, force.stdout, `"forced":true`, "force init JSON")
+	requireContains(t, force.stdout, `"reconfigured_event_id":"evt-000003"`, "force init JSON")
+	requireFileContains(t, filepath.Join(r, ".kkachi", "project-overlay.yaml"), `project: "kkachi-reset"`, "force overlay")
+	requireFileContains(t, filepath.Join(r, ".kkachi", "project-overlay.yaml"), `stack: "rust"`, "force overlay")
+	requireFileContains(t, filepath.Join(r, "docs", "kkachi-docs-map.yaml"), `roadmap: "docs/ROADMAP.md"`, "force docs map")
+	requireFileContains(t, filepath.Join(r, ".kkachi", "runs", runID, "plan.md"), "Plan survives force reconfiguration", "force preserved run artifact")
+	requireFileContains(t, filepath.Join(r, ".kkachi", "events.jsonl"), `"type":"project.reconfigured"`, "force event log")
+	status := requireCLI(t, r, "project", "status", "--json")
+	requireContains(t, status.stdout, `"event_tail_id":"evt-000003"`, "force status")
+}
+
+func TestProjectInitSchemaAndBootstrapFlow(t *testing.T) {
 	r := repo(t, "repo")
 	init := requireCLI(t, r, "project", "init", "--json")
-	requireContains(t, init.stdout, `"project_name":"repo"`, "init JSON")
+	requireContains(t, init.stdout, `"project_name":"kkachi-test"`, "init JSON")
 	for _, rel := range []string{
-		".kkachi/config.yaml", ".kkachi/status.json", ".kkachi/events.jsonl", ".kkachi/schemas/config.schema.json", ".kkachi/schemas/status.schema.json", ".kkachi/schemas/event.schema.json", ".kkachi/schemas/run-metadata.schema.json", ".kkachi/schemas/selected-cli.schema.json", ".kkachi/schemas/bridge-session-snapshot.schema.json", ".kkachi/schemas/install-manifest.schema.json",
+		".kkachi/config.yaml", ".kkachi/status.json", ".kkachi/events.jsonl", ".kkachi/project-overlay.yaml", "docs/kkachi-docs-map.yaml", ".kkachi/schemas/config.schema.json", ".kkachi/schemas/status.schema.json", ".kkachi/schemas/event.schema.json", ".kkachi/schemas/run-metadata.schema.json", ".kkachi/schemas/selected-cli.schema.json", ".kkachi/schemas/bridge-session-snapshot.schema.json",
 	} {
 		if _, err := os.Stat(filepath.Join(r, filepath.FromSlash(rel))); err != nil {
 			t.Fatalf("missing expected file %s: %v", rel, err)
@@ -341,52 +348,14 @@ func TestProjectInitSchemaAndInstallFlow(t *testing.T) {
 	requireCLI(t, r, "schema", "validate", ".kkachi/status.json", "--schema", ".kkachi/schemas/status.schema.json", "--json")
 	requireCLI(t, r, "schema", "validate", ".kkachi/events.jsonl", "--schema", "event", "--json")
 
-	installSource := filepath.Join(r, "fixtures", "install-source")
-	writeFile(t, filepath.Join(installSource, "skills/create/SKILL.md"), "<!-- kkachi-agent-helper:managed -->\ncreate\n")
-	writeFile(t, filepath.Join(installSource, "skills/update/SKILL.md"), "<!-- kkachi-agent-helper:managed -->\nnew\n")
-	writeFile(t, filepath.Join(installSource, "skills/preserve/SKILL.md"), "<!-- kkachi-agent-helper:managed -->\nupstream\n")
-	writeFile(t, filepath.Join(r, ".codex/skills/update/SKILL.md"), "<!-- kkachi-agent-helper:managed -->\nold\n")
-	writeFile(t, filepath.Join(r, ".codex/skills/preserve/SKILL.md"), "user custom\n")
-	writeInstallManifest(t, installSource, []string{"skills/create/SKILL.md", "skills/update/SKILL.md", "skills/preserve/SKILL.md"}, []string{".codex/skills/create/SKILL.md", ".codex/skills/update/SKILL.md", ".codex/skills/preserve/SKILL.md"}, ">=0.1.0")
-	eventsBefore, _ := os.ReadFile(filepath.Join(r, ".kkachi/events.jsonl"))
-	dryRun := requireCLI(t, r, "install", "skills", "--source", installSource, "--dry-run", "--json")
-	requireContains(t, dryRun.stdout, `"dry_run":true`, "install dry-run JSON")
-	requireContains(t, dryRun.stdout, `"preserve":1`, "install dry-run JSON")
-	if _, err := os.Stat(filepath.Join(r, ".codex/skills/create/SKILL.md")); !os.IsNotExist(err) {
-		t.Fatalf("dry-run created target unexpectedly: %v", err)
-	}
-	eventsAfter, _ := os.ReadFile(filepath.Join(r, ".kkachi/events.jsonl"))
-	if string(eventsAfter) != string(eventsBefore) {
-		t.Fatalf("install dry-run mutated events")
-	}
-	conflict := requireFailCLI(t, r, "install", "skills", "--source", installSource, "--json")
-	requireContains(t, conflict.stderr, `"code":"install_preflight_blocked"`, "install preflight error")
+	removed := requireFailCLI(t, r, "install", "templates", "--json")
+	requireContains(t, removed.stderr, `unknown command`, "removed install command")
 
-	installRepo := repo(t, "install-real")
-	requireCLI(t, installRepo, "project", "init", "--json")
-	realSource := filepath.Join(installRepo, "fixtures/install-source")
-	writeFile(t, filepath.Join(realSource, "skills/create/SKILL.md"), "<!-- kkachi-agent-helper:managed -->\ncreate\n")
-	writeFile(t, filepath.Join(realSource, "skills/update/SKILL.md"), "<!-- kkachi-agent-helper:managed -->\nnew\n")
-	writeFile(t, filepath.Join(installRepo, ".codex/skills/update/SKILL.md"), "<!-- kkachi-agent-helper:managed -->\nold\n")
-	writeInstallManifest(t, realSource, []string{"skills/create/SKILL.md", "skills/update/SKILL.md"}, []string{".codex/skills/create/SKILL.md", ".codex/skills/update/SKILL.md"}, ">=0.1.0")
-	applied := requireCLI(t, installRepo, "install", "skills", "--source", "fixtures/install-source", "--json")
-	requireContains(t, applied.stdout, `"status":"applied"`, "install applied")
-	requireFileContains(t, filepath.Join(installRepo, ".codex/skills/update/SKILL.md"), "new", "install update target")
-	drift := requireCLI(t, installRepo, "install", "skills", "--source", "fixtures/install-source", "--drift-check", "--json")
-	requireContains(t, drift.stdout, `"status":"clean"`, "install drift")
-	writeInstallManifest(t, realSource, []string{"skills/create/SKILL.md", "skills/update/SKILL.md"}, []string{".codex/skills/create/SKILL.md", ".codex/skills/update/SKILL.md"}, ">=9.0.0")
-	compat := requireFailCLI(t, installRepo, "install", "skills", "--source", "fixtures/install-source", "--json")
-	requireContains(t, compat.stderr, `"code":"install_compatibility_failed"`, "install compat failure")
-}
-
-func TestSchemaExportMigrateFlow(t *testing.T) {
-	r := repo(t, "export")
-	requireCLI(t, r, "project", "init", "--json")
-	writeFile(t, filepath.Join(r, ".kkachi/schemas/status.schema.json"), `{"$id":"https://kkachi.local/schemas/status.schema.json","version":"0.1"}`+"\n")
 	exportDryRun := requireCLI(t, r, "schema", "export", "--all", "--dry-run", "--json")
 	requireContains(t, exportDryRun.stdout, `"dry_run":true`, "schema export dry-run")
 	exported := requireCLI(t, r, "schema", "export", "--all", "--json")
-	requireContains(t, exported.stdout, `"event_id":"evt-000002"`, "schema export")
+	requireContains(t, exported.stdout, `"unchanged":[`, "schema export unchanged")
+	requireNotContains(t, exported.stdout, `"event_id"`, "schema export unchanged")
 	idempotent := requireCLI(t, r, "schema", "export", "--all", "--json")
 	requireContains(t, idempotent.stdout, `"written":null`, "schema export idempotent")
 	requireNotContains(t, idempotent.stdout, `"event_id"`, "schema export idempotent")

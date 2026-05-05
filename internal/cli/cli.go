@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/SeventeenthEarth/kkachi-agent-helper/internal/project"
@@ -27,7 +26,6 @@ var commandGroups = map[string]struct{}{
 	"gate":        {},
 	"event":       {},
 	"schema":      {},
-	"install":     {},
 	"lock":        {},
 	"diagnostics": {},
 }
@@ -56,12 +54,14 @@ type errorEnvelope struct {
 }
 
 type projectInitOutput struct {
-	RootPath       string   `json:"root_path"`
-	ProjectID      string   `json:"project_id"`
-	ProjectName    string   `json:"project_name"`
-	CreatedPaths   []string `json:"created_paths"`
-	SchemaPaths    []string `json:"schema_paths"`
-	InitialEventID string   `json:"initial_event_id"`
+	RootPath            string   `json:"root_path"`
+	ProjectID           string   `json:"project_id"`
+	ProjectName         string   `json:"project_name"`
+	CreatedPaths        []string `json:"created_paths"`
+	SchemaPaths         []string `json:"schema_paths"`
+	InitialEventID      string   `json:"initial_event_id,omitempty"`
+	ReconfiguredEventID string   `json:"reconfigured_event_id,omitempty"`
+	Forced              bool     `json:"forced"`
 }
 
 type eventAppendOutput struct {
@@ -210,25 +210,6 @@ type diagnosticsExportOutput struct {
 	OutputPath        string                       `json:"output_path,omitempty"`
 }
 
-type installPlanOutput struct {
-	DryRun        bool                               `json:"dry_run"`
-	DriftCheck    bool                               `json:"drift_check"`
-	Status        string                             `json:"status"`
-	Kind          string                             `json:"kind"`
-	Source        string                             `json:"source"`
-	ManifestPath  string                             `json:"manifest_path"`
-	Package       project.InstallPackage             `json:"package"`
-	Compat        project.InstallCompat              `json:"compat"`
-	Compatibility project.InstallCompatibilityResult `json:"compatibility"`
-	Summary       project.InstallPlanSummary         `json:"summary"`
-	Create        []project.InstallPlanAction        `json:"create"`
-	Update        []project.InstallPlanAction        `json:"update"`
-	Unchanged     []project.InstallPlanAction        `json:"unchanged"`
-	Preserve      []project.InstallPlanAction        `json:"preserve"`
-	Conflict      []project.InstallPlanAction        `json:"conflict"`
-	EventID       string                             `json:"event_id,omitempty"`
-}
-
 type globalOptions struct {
 	json bool
 	args []string
@@ -313,9 +294,6 @@ func runWithOptions(args []string, stdout io.Writer, stderr io.Writer, info Buil
 			if command == "schema" {
 				return runSchemaCommand(opts.args[1:], root, stdout, stderr, opts.json)
 			}
-			if command == "install" {
-				return runInstallCommand(opts.args[1:], root, options.workingDir, info, stdout, stderr, opts.json)
-			}
 			if command == "diagnostics" {
 				return runDiagnosticsCommand(opts.args[1:], root, stdout, stderr, opts.json)
 			}
@@ -390,105 +368,18 @@ func parseDiagnosticsArgs(args []string) (project.DiagnosticsExportOptions, *cli
 	return options, nil
 }
 
-func runInstallCommand(args []string, root project.Root, workingDir string, info BuildInfo, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
-	if len(args) == 0 {
-		writeError(stderr, jsonMode, cliError{Code: "install_subcommand_required", Message: "install subcommand is required", Hint: installUsageHint(), ExitCode: ExitUsage})
-		return ExitUsage
-	}
-	kind := args[0]
-	if kind != project.InstallKindSkills && kind != project.InstallKindTemplates {
-		writeError(stderr, jsonMode, cliError{Code: "install_kind_invalid", Message: "install kind is not supported", Hint: installUsageHint(), ExitCode: ExitUsage, Field: "kind", Expected: "skills or templates", Actual: kind})
-		return ExitUsage
-	}
-	options, cliErr := parseInstallArgs(args, workingDir)
-	if cliErr != nil {
-		writeError(stderr, jsonMode, *cliErr)
-		return cliErr.ExitCode
-	}
-	options.Kind = kind
-	options.HelperVersion = info.Version
-	result, err := project.ApplyInstall(root, options)
-	if err != nil {
-		cliErr := errorFromProjectProblem(err)
-		writeError(stderr, jsonMode, cliErr)
-		return cliErr.ExitCode
-	}
-	writeInstallPlanResult(stdout, result, jsonMode)
-	if result.DriftCheck && result.Status != project.InstallStatusClean {
-		return ExitSafety
-	}
-	return ExitOK
-}
-
-func parseInstallArgs(args []string, workingDir string) (project.InstallPlanOptions, *cliError) {
-	options := project.InstallPlanOptions{}
-	seenSource := false
-	seenDryRun := false
-	seenDriftCheck := false
-	for i := 1; i < len(args); i++ {
-		switch args[i] {
-		case "--source":
-			if i+1 >= len(args) {
-				return options, &cliError{Code: "missing_option_value", Message: "--source requires a value", Hint: installUsageHint(), ExitCode: ExitUsage, Field: "--source", Expected: "local path", Actual: "missing"}
-			}
-			if seenSource {
-				return options, &cliError{Code: "duplicate_option", Message: "duplicate install option \"--source\"", Hint: installUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: "--source"}
-			}
-			seenSource = true
-			options.Source = absolutizeInstallSource(workingDir, args[i+1])
-			i++
-		case "--dry-run":
-			if seenDryRun {
-				return options, &cliError{Code: "duplicate_option", Message: "duplicate install option \"--dry-run\"", Hint: installUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: "--dry-run"}
-			}
-			if seenDriftCheck {
-				return options, &cliError{Code: "conflicting_option", Message: "--dry-run and --drift-check cannot be used together", Hint: installUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "one of --dry-run or --drift-check", Actual: "--dry-run --drift-check"}
-			}
-			seenDryRun = true
-			options.DryRun = true
-		case "--drift-check":
-			if seenDriftCheck {
-				return options, &cliError{Code: "duplicate_option", Message: "duplicate install option \"--drift-check\"", Hint: installUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: "--drift-check"}
-			}
-			if seenDryRun {
-				return options, &cliError{Code: "conflicting_option", Message: "--dry-run and --drift-check cannot be used together", Hint: installUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "one of --dry-run or --drift-check", Actual: "--dry-run --drift-check"}
-			}
-			seenDriftCheck = true
-			options.DriftCheck = true
-		default:
-			return options, &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown install option %q", args[i]), Hint: installUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "--source, --dry-run, or --drift-check", Actual: args[i]}
-		}
-	}
-	if !seenSource {
-		return options, &cliError{Code: "missing_required_option", Message: "install requires --source", Hint: installUsageHint(), ExitCode: ExitUsage, Field: "--source", Expected: "required option", Actual: "missing"}
-	}
-	return options, nil
-}
-
-func absolutizeInstallSource(workingDir string, source string) string {
-	trimmed := strings.TrimSpace(source)
-	if trimmed == "" || filepath.IsAbs(filepath.FromSlash(trimmed)) {
-		return source
-	}
-	return filepath.Join(workingDir, filepath.FromSlash(trimmed))
-}
-
 func runProjectCommand(args []string, root project.Root, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
-	if len(args) > 0 && isImplementedProjectSubcommand(args[0]) && len(args) != 1 {
-		writeError(stderr, jsonMode, cliError{
-			Code:     "unknown_option",
-			Message:  fmt.Sprintf("unknown project %s option %q", args[0], args[1]),
-			Hint:     "Use project init, project status, or project doctor without command-specific options; use global --json for JSON output.",
-			ExitCode: ExitUsage,
-			Field:    "option",
-			Expected: "no project subcommand options",
-			Actual:   args[1],
-		})
+	if len(args) == 0 {
+		writeError(stderr, jsonMode, cliError{Code: "project_subcommand_required", Message: "project subcommand is required", Hint: projectUsageHint(), ExitCode: ExitUsage})
 		return ExitUsage
 	}
-
-	if len(args) == 1 && args[0] == "init" {
-		result, err := project.InitProject(root, project.InitOptions{})
+	if args[0] == "init" {
+		options, cliErr := parseProjectInitArgs(args[1:])
+		if cliErr != nil {
+			writeError(stderr, jsonMode, *cliErr)
+			return cliErr.ExitCode
+		}
+		result, err := project.InitProject(root, options)
 		if err != nil {
 			cliErr := errorFromProjectProblem(err)
 			writeError(stderr, jsonMode, cliErr)
@@ -498,7 +389,12 @@ func runProjectCommand(args []string, root project.Root, stdout io.Writer, stder
 		return ExitOK
 	}
 
-	if len(args) == 1 && args[0] == "status" {
+	if len(args) != 1 && isImplementedProjectSubcommand(args[0]) {
+		writeError(stderr, jsonMode, cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown project %s option %q", args[0], args[1]), Hint: projectUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "no project status/doctor options", Actual: args[1]})
+		return ExitUsage
+	}
+
+	if args[0] == "status" {
 		result, err := project.InspectProjectStatus(root)
 		if err != nil {
 			cliErr := errorFromProjectProblem(err)
@@ -509,7 +405,7 @@ func runProjectCommand(args []string, root project.Root, stdout io.Writer, stder
 		return exitCodeForHealth(result.Health)
 	}
 
-	if len(args) == 1 && args[0] == "doctor" {
+	if args[0] == "doctor" {
 		result, err := project.Doctor(root)
 		if err != nil {
 			cliErr := errorFromProjectProblem(err)
@@ -520,13 +416,89 @@ func runProjectCommand(args []string, root project.Root, stdout io.Writer, stder
 		return exitCodeForHealth(result.Health)
 	}
 
-	writeError(stderr, jsonMode, cliError{
-		Code:     "not_implemented",
-		Message:  "project command is not implemented yet",
-		Hint:     "Use project init, project status, or project doctor; other project commands are reserved by docs/specs.md.",
-		ExitCode: ExitUsage,
-	})
+	writeError(stderr, jsonMode, cliError{Code: "not_implemented", Message: "project command is not implemented yet", Hint: projectUsageHint(), ExitCode: ExitUsage})
 	return ExitUsage
+}
+
+func parseProjectInitArgs(args []string) (project.InitOptions, *cliError) {
+	options := project.InitOptions{}
+	seen := map[string]bool{}
+	setString := func(flag string, value string) *cliError {
+		if seen[flag] {
+			return &cliError{Code: "duplicate_option", Message: fmt.Sprintf("duplicate project init option %q", flag), Hint: projectInitUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: flag}
+		}
+		seen[flag] = true
+		switch flag {
+		case "--project-name":
+			options.Bootstrap.ProjectName = value
+		case "--stack":
+			options.Bootstrap.Stack = value
+		case "--repo-path":
+			options.Bootstrap.RepoPath = value
+		case "--commander":
+			options.Bootstrap.Commander = value
+		case "--redteam":
+			options.Bootstrap.Redteam = value
+		case "--docs-map-roadmap":
+			options.Bootstrap.DocsMapRoadmap = value
+		case "--docs-map-spec":
+			options.Bootstrap.DocsMapSpec = value
+		case "--docs-map-architecture":
+			options.Bootstrap.DocsMapArchitecture = value
+		case "--docs-map-adr-dir":
+			options.Bootstrap.DocsMapADRDir = value
+		case "--docs-map-todo-dir":
+			options.Bootstrap.DocsMapTODODir = value
+		case "--docs-map-spec-dir":
+			options.Bootstrap.DocsMapSpecDir = value
+		case "--test-commands":
+			options.Bootstrap.TestCommands = splitCommaSeparated(value)
+		case "--backend-policy":
+			options.Bootstrap.BackendPolicy = value
+		case "--execution-mode":
+			options.Bootstrap.ExecutionMode = value
+		case "--sot-policy":
+			options.Bootstrap.SOTPolicy = value
+		}
+		return nil
+	}
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--force":
+			if seen["--force"] {
+				return options, &cliError{Code: "duplicate_option", Message: "duplicate project init option \"--force\"", Hint: projectInitUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: "--force"}
+			}
+			seen["--force"] = true
+			options.Force = true
+		case "--project-name", "--stack", "--repo-path", "--commander", "--redteam", "--docs-map-roadmap", "--docs-map-spec", "--docs-map-architecture", "--docs-map-adr-dir", "--docs-map-todo-dir", "--docs-map-spec-dir", "--test-commands", "--backend-policy", "--execution-mode", "--sot-policy":
+			if i+1 >= len(args) {
+				return options, &cliError{Code: "missing_option_value", Message: fmt.Sprintf("%s requires a value", args[i]), Hint: projectInitUsageHint(), ExitCode: ExitUsage, Field: args[i], Expected: "non-empty value", Actual: "missing"}
+			}
+			if err := setString(args[i], args[i+1]); err != nil {
+				return options, err
+			}
+			i++
+		default:
+			return options, &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown project init option %q", args[i]), Hint: projectInitUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "project init bootstrap option", Actual: args[i]}
+		}
+	}
+	for _, flag := range []string{"--project-name", "--stack", "--repo-path", "--commander", "--redteam", "--docs-map-roadmap", "--docs-map-spec", "--docs-map-architecture", "--docs-map-adr-dir", "--docs-map-todo-dir", "--docs-map-spec-dir", "--test-commands", "--backend-policy", "--execution-mode", "--sot-policy"} {
+		if !seen[flag] {
+			return options, &cliError{Code: "missing_required_option", Message: "project init requires bootstrap options", Hint: projectInitUsageHint(), ExitCode: ExitUsage, Field: flag, Expected: "required option", Actual: "missing"}
+		}
+	}
+	return options, nil
+}
+
+func splitCommaSeparated(value string) []string {
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 func runRunCommand(args []string, root project.Root, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
@@ -1170,11 +1142,15 @@ func isImplementedProjectSubcommand(command string) bool {
 }
 
 func schemaUsageHint() string {
-	return "Use schema validate <file> --schema <config|status|event|run-metadata|selected-cli|bridge-session-snapshot|install-manifest>, schema export [--schema <name>|--all] [--dry-run], or schema migrate --from <version> --to <version> [--dry-run] with optional global --json."
+	return "Use schema validate <file> --schema <config|status|event|run-metadata|selected-cli|bridge-session-snapshot>, schema export [--schema <name>|--all] [--dry-run], or schema migrate --from <version> --to <version> [--dry-run] with optional global --json."
 }
 
-func installUsageHint() string {
-	return "Use install <skills|templates> --source <local-path> [--dry-run|--drift-check] with optional global --json."
+func projectUsageHint() string {
+	return "Use project init <bootstrap-options> [--force], project status, or project doctor with optional global --json."
+}
+
+func projectInitUsageHint() string {
+	return "Use project init --project-name <name> --stack <stack> --repo-path <path> --commander <profile> --redteam <profile> --docs-map-roadmap <path> --docs-map-spec <path> --docs-map-architecture <path> --docs-map-adr-dir <path> --docs-map-todo-dir <path> --docs-map-spec-dir <path> --test-commands <comma-separated> --backend-policy <policy> --execution-mode <mode> --sot-policy <policy> [--force]."
 }
 
 func diagnosticsUsageHint() string {
@@ -1247,19 +1223,25 @@ func writeVersion(w io.Writer, info BuildInfo, jsonMode bool) {
 
 func writeProjectInitResult(w io.Writer, result project.InitResult, jsonMode bool) {
 	payload := projectInitOutput{
-		RootPath:       result.RootPath,
-		ProjectID:      result.ProjectID,
-		ProjectName:    result.ProjectName,
-		CreatedPaths:   result.CreatedPaths,
-		SchemaPaths:    result.SchemaPaths,
-		InitialEventID: result.InitialEventID,
+		RootPath:            result.RootPath,
+		ProjectID:           result.ProjectID,
+		ProjectName:         result.ProjectName,
+		CreatedPaths:        result.CreatedPaths,
+		SchemaPaths:         result.SchemaPaths,
+		InitialEventID:      result.InitialEventID,
+		ReconfiguredEventID: result.ReconfiguredEventID,
+		Forced:              result.Forced,
 	}
 	if jsonMode {
 		_ = json.NewEncoder(w).Encode(payload)
 		return
 	}
 
-	fmt.Fprintf(w, "initialized kkachi project: %s\n", payload.RootPath)
+	if payload.Forced {
+		fmt.Fprintf(w, "reconfigured kkachi project: %s\n", payload.RootPath)
+	} else {
+		fmt.Fprintf(w, "initialized kkachi project: %s\n", payload.RootPath)
+	}
 	fmt.Fprintf(w, "project_id: %s\n", payload.ProjectID)
 	fmt.Fprintf(w, "created:\n")
 	for _, path := range payload.CreatedPaths {
@@ -1268,7 +1250,12 @@ func writeProjectInitResult(w io.Writer, result project.InitResult, jsonMode boo
 	for _, path := range payload.SchemaPaths {
 		fmt.Fprintf(w, "- %s\n", path)
 	}
-	fmt.Fprintf(w, "initial_event_id: %s\n", payload.InitialEventID)
+	if payload.InitialEventID != "" {
+		fmt.Fprintf(w, "initial_event_id: %s\n", payload.InitialEventID)
+	}
+	if payload.ReconfiguredEventID != "" {
+		fmt.Fprintf(w, "reconfigured_event_id: %s\n", payload.ReconfiguredEventID)
+	}
 }
 
 func writeEventAppendResult(w io.Writer, result project.AppendEventResult, jsonMode bool) {
@@ -1421,38 +1408,6 @@ func writeDiagnosticsExportResult(w io.Writer, result project.DiagnosticsBundle,
 	fmt.Fprintf(w, "schema_versions: %d\n", len(payload.SchemaVersions))
 	fmt.Fprintf(w, "gate_reports: %d\n", len(payload.GateReports))
 	fmt.Fprintf(w, "selected_artifacts: %d\n", len(payload.SelectedArtifacts))
-}
-
-func writeInstallPlanResult(w io.Writer, result project.InstallPlanResult, jsonMode bool) {
-	payload := installPlanOutput{DryRun: result.DryRun, DriftCheck: result.DriftCheck, Status: result.Status, Kind: result.Kind, Source: result.Source, ManifestPath: result.ManifestPath, Package: result.Package, Compat: result.Compat, Compatibility: result.Compatibility, Summary: result.Summary, Create: result.Create, Update: result.Update, Unchanged: result.Unchanged, Preserve: result.Preserve, Conflict: result.Conflict, EventID: result.EventID}
-	if jsonMode {
-		_ = json.NewEncoder(w).Encode(payload)
-		return
-	}
-	mode := "apply"
-	if payload.DryRun {
-		mode = "dry-run"
-	} else if payload.DriftCheck {
-		mode = "drift-check"
-	}
-	fmt.Fprintf(w, "install %s %s: status=%s create=%d update=%d unchanged=%d preserve=%d conflict=%d\n", payload.Kind, mode, payload.Status, payload.Summary.Create, payload.Summary.Update, payload.Summary.Unchanged, payload.Summary.Preserve, payload.Summary.Conflict)
-	if payload.EventID != "" {
-		fmt.Fprintf(w, "event_id: %s\n", payload.EventID)
-	}
-	for _, group := range []struct {
-		label   string
-		actions []project.InstallPlanAction
-	}{
-		{"create", payload.Create},
-		{"update", payload.Update},
-		{"unchanged", payload.Unchanged},
-		{"preserve", payload.Preserve},
-		{"conflict", payload.Conflict},
-	} {
-		for _, action := range group.actions {
-			fmt.Fprintf(w, "- [%s] %s <- %s (%s)\n", group.label, action.Target, action.Source, action.Reason)
-		}
-	}
 }
 
 func writeLockRecoverResult(w io.Writer, result project.LockRecoveryResult, jsonMode bool) {
@@ -1720,7 +1675,7 @@ func writeHumanError(w io.Writer, err cliError) {
 }
 
 func usageHint() string {
-	return "Usage: kkachi-agent-helper [--json] <version|project|run|artifact|gate|event|schema|install|diagnostics>"
+	return "Usage: kkachi-agent-helper [--json] <version|project|run|artifact|gate|event|schema|lock|diagnostics>"
 }
 
 func redactCLIError(err cliError) cliError {

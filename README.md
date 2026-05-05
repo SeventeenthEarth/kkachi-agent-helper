@@ -1,8 +1,8 @@
 # kkachi-agent-helper
 
-`kkachi-agent-helper` is the deterministic local CLI helper for Kkachi project state, run artifacts, locks, schemas, events, diagnostics, and install scaffolding. It stays local-first and scriptable: it does not choose a backend, plan work, review code, call network services, or store secrets.
+`kkachi-agent-helper` is the deterministic local CLI helper for Kkachi project state, run artifacts, locks, schemas, events, diagnostics, and project bootstrap scaffolding. It stays local-first and scriptable: it does not choose a backend, plan work, review code, call network services, or store secrets.
 
-The current implementation covers `corex-001` through `corex-005`, `runwf-001` through `runwf-004`, `gates-001` through `gates-005`, `packg-001` through `packg-004`, and `pilot-004`.
+The current implementation covers `corex-001` through `corex-005`, `runwf-001` through `runwf-004`, `gates-001` through `gates-005`, `packg-001` through `packg-004` plus the project-init bootstrap consolidation, and `pilot-004`.
 
 ## Source of truth
 
@@ -24,7 +24,22 @@ go install github.com/SeventeenthEarth/kkachi-agent-helper@v0.1.0
 export PATH="$(go env GOPATH)/bin:$PATH"
 
 # Initialize helper state in a git repository.
-kkachi-agent-helper project init
+kkachi-agent-helper project init \
+  --project-name kkachi-agent-bridge \
+  --stack go \
+  --repo-path "$PWD" \
+  --commander Gongmyeong \
+  --redteam Macho \
+  --docs-map-roadmap docs/roadmap.md \
+  --docs-map-spec docs/specs.md \
+  --docs-map-architecture docs/architecture.md \
+  --docs-map-adr-dir docs/adr \
+  --docs-map-todo-dir docs/todo \
+  --docs-map-spec-dir docs/specs \
+  --test-commands "go test ./...,make test" \
+  --backend-policy codex \
+  --execution-mode production_write \
+  --sot-policy existing_sot_basis
 kkachi-agent-helper project doctor
 
 # Create and prepare a local run. Copy the run_id from the JSON output.
@@ -70,7 +85,6 @@ make check
   - `dist/kkachi-agent-helper_0.1.0_<goos>_<goarch>.tar.gz`
   - `dist/SHA256SUMS`
 - Tagged `go install ...@v0.1.0` builds derive the helper version from Go module build info; local `make build` still defaults to `0.0.0-dev`.
-- For real `install skills/templates` compatibility checks, use a tagged install or build with a semver helper version. The default `0.0.0-dev` intentionally does not satisfy ranges such as `>=0.1.0`.
 
 Test lanes are intentionally split:
 
@@ -93,7 +107,22 @@ kkachi-agent-helper [--json] <command>
 Project state:
 
 ```sh
-kkachi-agent-helper project init
+kkachi-agent-helper project init \
+  --project-name kkachi-agent-bridge \
+  --stack go \
+  --repo-path "$PWD" \
+  --commander Gongmyeong \
+  --redteam Macho \
+  --docs-map-roadmap docs/roadmap.md \
+  --docs-map-spec docs/specs.md \
+  --docs-map-architecture docs/architecture.md \
+  --docs-map-adr-dir docs/adr \
+  --docs-map-todo-dir docs/todo \
+  --docs-map-spec-dir docs/specs \
+  --test-commands "go test ./...,make test" \
+  --backend-policy codex \
+  --execution-mode production_write \
+  --sot-policy existing_sot_basis [--force] [--json]
 kkachi-agent-helper project status [--json]
 kkachi-agent-helper project doctor [--json]
 ```
@@ -128,7 +157,7 @@ kkachi-agent-helper gate final <run_id> [--json]
 Schemas and migrations:
 
 ```sh
-kkachi-agent-helper schema validate <file> --schema <config|status|event|run-metadata|selected-cli|bridge-session-snapshot|install-manifest> [--json]
+kkachi-agent-helper schema validate <file> --schema <config|status|event|run-metadata|selected-cli|bridge-session-snapshot> [--json]
 kkachi-agent-helper schema export [--schema <name>|--all] [--dry-run] [--json]
 kkachi-agent-helper schema migrate --from <version> --to <version> [--dry-run] [--json]
 ```
@@ -139,12 +168,7 @@ Locks:
 kkachi-agent-helper lock recover <active-run|project-write|all> --reason <text> [--run <run_id>] [--json]
 ```
 
-Local skill/template install:
-
-```sh
-kkachi-agent-helper install skills --source <local-path> [--dry-run|--drift-check] [--json]
-kkachi-agent-helper install templates --source <local-path> [--dry-run|--drift-check] [--json]
-```
+Project bootstrap is handled by `project init`; KAH no longer provides a local `install` command for Hermes skills or templates. Hermes skill installation belongs to the Hermes native skill system.
 
 Diagnostics:
 
@@ -154,9 +178,9 @@ kkachi-agent-helper diagnostics export [--run <run_id>] [--output <repo-relative
 
 ## Operational notes
 
-- `.kkachi/config.yaml`, `.kkachi/status.json`, `.kkachi/events.jsonl`, `.kkachi/schemas/*.schema.json`, and `.kkachi/runs/<run_id>/...` are the local helper state and evidence surfaces.
+- `.kkachi/config.yaml`, `.kkachi/project-overlay.yaml`, `docs/kkachi-docs-map.yaml`, `.kkachi/status.json`, `.kkachi/events.jsonl`, `.kkachi/schemas/*.schema.json`, and `.kkachi/runs/<run_id>/...` are the local helper state and evidence surfaces.
 - Mutating commands fail closed when `status.last_event_id` and the event log tail diverge.
-- `project status`, `project doctor`, `artifact list`, install dry-runs, install drift checks, and diagnostics stdout export are read-only.
+- `project status`, `project doctor`, `artifact list`, and diagnostics stdout export are read-only.
 - `gate check` records deterministic pass/fail/blocked results in run metadata, project status, events, and run-local gate reports.
 - `diagnostics export` redacts token-like values and exports only a selected support-safe artifact set.
 - Canonical exit codes are `0` success, `1` internal failure, `2` usage/unsupported command state, `3` fail-closed state or validation problems, and `4` missing repository root.

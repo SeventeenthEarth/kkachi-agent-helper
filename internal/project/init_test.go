@@ -23,8 +23,8 @@ func TestInitProjectCreatesInitialState(t *testing.T) {
 		t.Fatalf("InitProject() error = %v", err)
 	}
 
-	if result.ProjectName != filepath.Base(repo) {
-		t.Fatalf("ProjectName = %q, want %q", result.ProjectName, filepath.Base(repo))
+	if result.ProjectName != "kkachi-test" {
+		t.Fatalf("ProjectName = %q, want kkachi-test", result.ProjectName)
 	}
 	if !strings.HasPrefix(result.ProjectID, "kkachi-project-"+result.ProjectName+"-") {
 		t.Fatalf("ProjectID = %q, want project slug prefix", result.ProjectID)
@@ -34,7 +34,7 @@ func TestInitProjectCreatesInitialState(t *testing.T) {
 	}
 
 	config := readText(t, filepath.Join(repo, ".kkachi", "config.yaml"))
-	if !strings.Contains(config, `version: "0.1"`) || !strings.Contains(config, `name: "`+result.ProjectName+`"`) {
+	if !strings.Contains(config, `version: "0.1"`) || !strings.Contains(config, `name: "`+result.ProjectName+`"`) || !strings.Contains(config, `project_overlay_file`) {
 		t.Fatalf("config.yaml = %q, want version and project name", config)
 	}
 
@@ -63,6 +63,13 @@ func TestInitProjectCreatesInitialState(t *testing.T) {
 	}
 	if event["event_id"] != "evt-000001" || event["type"] != "project.initialized" || event["actor"] != "helper" {
 		t.Fatalf("event = %#v, want initial helper event", event)
+	}
+
+	if overlay := readText(t, filepath.Join(repo, ".kkachi", "project-overlay.yaml")); !strings.Contains(overlay, `project: "kkachi-test"`) || !strings.Contains(overlay, `backend_policy: "codex"`) {
+		t.Fatalf("project-overlay.yaml = %q, want bootstrap content", overlay)
+	}
+	if docsMap := readText(t, filepath.Join(repo, "docs", "kkachi-docs-map.yaml")); !strings.Contains(docsMap, `roadmap: "docs/roadmap.md"`) || !strings.Contains(docsMap, `docs/architecture.md`) {
+		t.Fatalf("kkachi-docs-map.yaml = %q, want docs map content", docsMap)
 	}
 
 	for _, schemaPath := range schemaPaths {
@@ -139,7 +146,12 @@ func deterministicInitOptions() InitOptions {
 		RandomHex: func(int) (string, error) {
 			return "abcdef123456", nil
 		},
+		Bootstrap: testInitBootstrap(),
 	}
+}
+
+func testInitBootstrap() InitBootstrapOptions {
+	return InitBootstrapOptions{ProjectName: "kkachi-test", Stack: "go", RepoPath: "/tmp/kkachi-test", Commander: "Gongmyeong", Redteam: "Macho", DocsMapRoadmap: "docs/roadmap.md", DocsMapSpec: "docs/specs.md", DocsMapArchitecture: "docs/architecture.md", DocsMapADRDir: "docs/adr", DocsMapTODODir: "docs/todo", DocsMapSpecDir: "docs/specs", TestCommands: []string{"go test ./...", "make test"}, BackendPolicy: "codex", ExecutionMode: "production_write", SOTPolicy: "existing_sot_basis"}
 }
 
 func readText(t *testing.T, path string) string {
@@ -159,5 +171,50 @@ func readJSONFile(t *testing.T, path string, target any) {
 	}
 	if err := json.Unmarshal(data, target); err != nil {
 		t.Fatalf("%s is not JSON: %v\n%s", path, err, string(data))
+	}
+}
+
+func TestInitProjectForceReconfiguresBootstrapAndPreservesHistory(t *testing.T) {
+	repo := t.TempDir()
+	mustMkdir(t, filepath.Join(repo, ".git"))
+	root, err := DiscoverRoot(repo)
+	if err != nil {
+		t.Fatalf("DiscoverRoot() error = %v", err)
+	}
+	initial, err := InitProject(root, deterministicInitOptions())
+	if err != nil {
+		t.Fatalf("InitProject() error = %v", err)
+	}
+	mustMkdir(t, filepath.Join(repo, ".kkachi", "runs", "run-001"))
+	if err := os.WriteFile(filepath.Join(repo, ".kkachi", "runs", "run-001", "evidence.md"), []byte("keep\n"), 0o600); err != nil {
+		t.Fatalf("write run evidence: %v", err)
+	}
+
+	forcedOptions := deterministicInitOptions()
+	forcedOptions.Force = true
+	forcedOptions.Bootstrap.ProjectName = "kkachi-reset"
+	forcedOptions.Bootstrap.Stack = "rust"
+	forcedOptions.Bootstrap.TestCommands = []string{"cargo test"}
+	result, err := InitProject(root, forcedOptions)
+	if err != nil {
+		t.Fatalf("InitProject(force) error = %v", err)
+	}
+	if !result.Forced || result.ReconfiguredEventID != "evt-000002" || result.ProjectID != initial.ProjectID {
+		t.Fatalf("result = %#v, want forced reconfiguration preserving project id", result)
+	}
+	if got := readText(t, filepath.Join(repo, ".kkachi", "project-overlay.yaml")); !strings.Contains(got, `project: "kkachi-reset"`) || !strings.Contains(got, `stack: "rust"`) || !strings.Contains(got, `cargo test`) {
+		t.Fatalf("project-overlay.yaml = %q, want forced bootstrap content", got)
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".kkachi", "runs", "run-001", "evidence.md")); err != nil {
+		t.Fatalf("force removed run evidence: %v", err)
+	}
+	var status map[string]any
+	readJSONFile(t, filepath.Join(repo, ".kkachi", "status.json"), &status)
+	if status["project_id"] != initial.ProjectID || status["last_event_id"] != "evt-000002" {
+		t.Fatalf("status = %#v, want preserved project id and reconfigured event", status)
+	}
+	events := readText(t, filepath.Join(repo, ".kkachi", "events.jsonl"))
+	if !strings.Contains(events, `"type":"project.initialized"`) || !strings.Contains(events, `"type":"project.reconfigured"`) {
+		t.Fatalf("events = %s, want initialized and reconfigured", events)
 	}
 }

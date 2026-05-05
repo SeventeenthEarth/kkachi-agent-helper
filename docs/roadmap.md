@@ -19,7 +19,7 @@ Status values: `Planned`, `In Progress`, `Blocked`, `Completed`, `Deferred`.
 | 1 | `corex` | Usable helper binary that can initialize and inspect `.kkachi/` state. |
 | 2 | `runwf` | Safe run lifecycle with locks and run artifact initialization. |
 | 3 | `gates` | Deterministic workflow gates for Kkachi Path A / Path B readiness. |
-| 4 | `packg` | Versioned schemas, migration surface, and safe skill/template install. |
+| 4 | `packg` | Versioned schemas, migration surface, and historical package/bootstrap contract. |
 | 5 | `pilot` | End-to-end evidence, diagnostics, docs, release, and MVP pilot proof. |
 
 ## Active roadmap
@@ -61,14 +61,14 @@ Status values: `Planned`, `In Progress`, `Blocked`, `Completed`, `Deferred`.
 
 ### EPIC: packg — Schemas, migrations, and install packaging
 
-> Goal: make helper contracts transparent, versioned, migratable, and safely installable with Kkachi skills/templates.
+> Goal: make helper contracts transparent, versioned, migratable, and safely bootstrap project-local Kkachi state.
 
 | Task ID | Title | Status | Work guide | Notes |
 |---|---|---|---|---|
 | packg-001 | Embedded schema registry and validation CLI | Completed | Embed config, status, event, run metadata, selected CLI, and bridge snapshot schemas. Implement `schema validate` and schema export/copy into `.kkachi/schemas/`. | Implemented embedded registry-backed validation, `schema validate`, `schema export [--schema <name>|--all] [--dry-run]`, full schema copies during `project init`, and `schema.exported` event recording for real exports. |
 | packg-002 | State migration framework | Completed | Add migration registration, dry-run summary, backup behavior, event recording, and refusal of unknown source versions. Include first no-op/sample migration fixture. | Implemented `schema migrate --from <version> --to <version> [--dry-run]` with the initial `0.1 -> 0.1` no-op migration, run-safe backup copies, `schema.migrated` events, and unknown-source/path refusal. |
-| packg-003 | Skill/template install manifest and dry-run | Completed | Define install manifest, checksums, helper-owned markers, target paths, compatibility fields, and dry-run diff output. Do not mutate target files yet except in fixtures. | Implemented JSON v1 `kkachi-install-manifest.json`, embedded `install-manifest` schema, and read-only `install skills/templates --source <local-path> --dry-run` path-action planning. |
-| packg-004 | Local install, update, drift, and compatibility gate | Completed | Implement local source install/update for skills/templates, conflict detection, helper-owned replacement, user-owned preservation, and helper/bridge/skills version compatibility checks. | Implemented local path real install/update, read-only drift checks, pre-write preserve/conflict blocking, `install.applied` event recording, and conservative helper compat enforcement with bridge/skills reported as not checked. |
+| packg-003 | Historical install manifest and dry-run contract | Superseded | Defined the first manifest/checksum package contract. | Superseded by project-init bootstrap: KAH no longer exposes an `install` command; Hermes skill installation belongs to Hermes native tooling. |
+| packg-004 | Local install/update compatibility gate | Superseded | Implemented local manifest apply/update safety. | Superseded by `project init` plus `project init --force`, which owns bootstrap/reconfiguration without installing skill content. |
 
 ### EPIC: pilot — E2E proof, diagnostics, docs, and release
 

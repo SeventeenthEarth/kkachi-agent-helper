@@ -20,7 +20,6 @@ const (
 	SchemaRunMetadata           = "run-metadata"
 	SchemaSelectedCLI           = "selected-cli"
 	SchemaBridgeSessionSnapshot = "bridge-session-snapshot"
-	SchemaInstallManifest       = "install-manifest"
 
 	schemaExportedEventType = "schema.exported"
 
@@ -36,7 +35,6 @@ var canonicalSchemaNames = []string{
 	SchemaRunMetadata,
 	SchemaSelectedCLI,
 	SchemaBridgeSessionSnapshot,
-	SchemaInstallManifest,
 }
 
 type SchemaCheck struct {
@@ -324,8 +322,6 @@ func validateContentAgainstSchema(schemaName, relative string, content []byte) [
 		return validateSelectedCLIObject(relative, object)
 	case SchemaBridgeSessionSnapshot:
 		return validateBridgeSnapshotObject(relative, object)
-	case SchemaInstallManifest:
-		return validateInstallManifestObject(relative, object)
 	default:
 		return []SchemaCheck{schemaPass("schema", relative, "schema is registered")}
 	}
@@ -470,63 +466,6 @@ func validateBridgeSnapshotObject(relative string, object map[string]any) []Sche
 	checks = append(checks, requireStringField(relative, object, "lifecycle_class", "non-empty string", false))
 	checks = append(checks, requireIntegerField(relative, object, "open_pendings"))
 	return checks
-}
-
-func validateInstallManifestObject(relative string, object map[string]any) []SchemaCheck {
-	checks := []SchemaCheck{}
-	checks = append(checks, requireStringField(relative, object, "version", SchemaVersion, true))
-	checks = append(checks, requireEnumField(relative, object, "kind", []string{InstallKindSkills, InstallKindTemplates}))
-	checks = append(checks, requireObjectField(relative, object, "package"))
-	checks = append(checks, requireObjectField(relative, object, "compat"))
-	checks = append(checks, requireInstallManifestNestedObject(relative, object, "package", "name", "non-empty string"))
-	checks = append(checks, requireInstallManifestNestedObject(relative, object, "package", "version", "non-empty string"))
-	checks = append(checks, requireInstallManifestNestedObject(relative, object, "compat", "required_helper", "non-empty helper version range"))
-	items, ok := object["items"].([]any)
-	if !ok || len(items) == 0 {
-		checks = append(checks, schemaFail("items", relative, "install manifest items are missing or invalid", "Declare at least one install item.", "items", "non-empty array", fmt.Sprintf("%v", object["items"])))
-		return checks
-	}
-	checks = append(checks, schemaPass("items", relative, "install manifest items array is present"))
-	for i, raw := range items {
-		item, ok := raw.(map[string]any)
-		fieldPrefix := fmt.Sprintf("items[%d]", i)
-		if !ok || item == nil {
-			checks = append(checks, schemaFail(fieldPrefix, relative, "install manifest item must be an object", "Use object entries for install items.", fieldPrefix, "object", fmt.Sprintf("%T", raw)))
-			continue
-		}
-		checks = append(checks, requireInstallManifestItemString(relative, item, fieldPrefix, "source", "non-empty relative path"))
-		checks = append(checks, requireInstallManifestItemString(relative, item, fieldPrefix, "target", "non-empty repository-relative path"))
-		sha, _ := item["sha256"].(string)
-		if !isSHA256Hex(sha) {
-			checks = append(checks, schemaFail(fieldPrefix+".sha256", relative, "install manifest checksum is invalid", "Use a lowercase hex SHA-256 digest for each item.", fieldPrefix+".sha256", "64 lowercase hex characters", fmt.Sprintf("%v", item["sha256"])))
-		} else {
-			checks = append(checks, schemaPass(fieldPrefix+".sha256", relative, "install manifest checksum is valid"))
-		}
-		checks = append(checks, requireInstallManifestItemString(relative, item, fieldPrefix, "owner_marker", "non-empty helper-owned marker"))
-	}
-	return checks
-}
-
-func requireInstallManifestNestedObject(relative string, object map[string]any, parent string, child string, expected string) SchemaCheck {
-	nested, ok := object[parent].(map[string]any)
-	field := parent + "." + child
-	if !ok || nested == nil {
-		return schemaFail(field, relative, "install manifest object field is missing", "Record package and compat objects in the manifest.", field, expected, "missing")
-	}
-	value, ok := nested[child].(string)
-	if !ok || strings.TrimSpace(value) == "" {
-		return schemaFail(field, relative, "required string field is missing or invalid", "Record a non-empty string for this schema field.", field, expected, fmt.Sprintf("%v", nested[child]))
-	}
-	return schemaPass(field, relative, "string field is valid")
-}
-
-func requireInstallManifestItemString(relative string, item map[string]any, fieldPrefix string, key string, expected string) SchemaCheck {
-	field := fieldPrefix + "." + key
-	value, ok := item[key].(string)
-	if !ok || strings.TrimSpace(value) == "" {
-		return schemaFail(field, relative, "required string field is missing or invalid", "Record a non-empty string for this schema field.", field, expected, fmt.Sprintf("%v", item[key]))
-	}
-	return schemaPass(field, relative, "string field is valid")
 }
 
 func requireStringField(relative string, object map[string]any, field, expected string, exact bool) SchemaCheck {
@@ -742,15 +681,6 @@ func schemaObject(name string) map[string]any {
 			"state":           map[string]any{"type": "string", "minLength": 1},
 			"lifecycle_class": map[string]any{"type": "string", "minLength": 1},
 			"open_pendings":   map[string]any{"type": "integer", "minimum": 0},
-		}
-	case SchemaInstallManifest:
-		object["required"] = []string{"version", "kind", "package", "compat", "items"}
-		object["properties"] = map[string]any{
-			"version": map[string]any{"const": SchemaVersion},
-			"kind":    map[string]any{"enum": []string{InstallKindSkills, InstallKindTemplates}},
-			"package": map[string]any{"type": "object"},
-			"compat":  map[string]any{"type": "object"},
-			"items":   map[string]any{"type": "array", "minItems": 1},
 		}
 	}
 	if _, ok := object["properties"]; !ok {

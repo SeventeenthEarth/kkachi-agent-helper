@@ -6,7 +6,7 @@ Status: initial source of truth
 
 ## 1. Purpose
 
-`kkachi-agent-helper` is the deterministic command-line helper for the Kkachi software delivery harness. It owns local project state, run artifacts, locks, schema validation, event logging, and installation of Kkachi project scaffolding. It does not plan work, choose a coding backend, review code, or act as an intelligence layer.
+`kkachi-agent-helper` is the deterministic command-line helper for the Kkachi software delivery harness. It owns local project state, run artifacts, locks, schema validation, event logging, and initialization of Kkachi project scaffolding. It does not plan work, choose a coding backend, review code, or act as an intelligence layer.
 
 The helper exists so Hermes team members and external coding CLIs can operate through a repeatable, auditable workflow without relying on chat memory or prompt claims as the source of truth.
 
@@ -17,7 +17,7 @@ Kkachi is split into three independently versioned repositories:
 | Repository | Responsibility |
 |---|---|
 | `kkachi-agent-bridge` | Runtime integration with external AI coding CLIs. |
-| `kkachi-agent-helper` | Deterministic state, artifact, schema, lock, and install tooling. |
+| `kkachi-agent-helper` | Deterministic state, artifact, schema, lock, and bootstrap tooling. |
 | `kkachi-hermes-skills` | Hermes phase skills, orchestration skills, templates, registries, and evaluation assets. |
 
 `kkachi-agent-helper` must stay small, local-first, scriptable, and safe to call from agents, shell scripts, and future UI surfaces.
@@ -314,7 +314,22 @@ The helper must not override the commander's backend choice. It may fail a gate 
 Initial command groups:
 
 ```text
-kkachi-agent-helper project init
+kkachi-agent-helper project init \
+  --project-name kkachi-agent-bridge \
+  --stack go \
+  --repo-path "$PWD" \
+  --commander Gongmyeong \
+  --redteam Macho \
+  --docs-map-roadmap docs/roadmap.md \
+  --docs-map-spec docs/specs.md \
+  --docs-map-architecture docs/architecture.md \
+  --docs-map-adr-dir docs/adr \
+  --docs-map-todo-dir docs/todo \
+  --docs-map-spec-dir docs/specs \
+  --test-commands "go test ./...,make test" \
+  --backend-policy codex \
+  --execution-mode production_write \
+  --sot-policy existing_sot_basis [--force]
 kkachi-agent-helper project doctor
 kkachi-agent-helper project status [--json]
 kkachi-agent-helper run create --title <title> --work-path <A_development_execution|B_discovery_shaping> --work-mode <standard|light> --urgency <normal|urgent|critical> --sot-policy <existing_sot_basis|minimal_sot_before_code|full_sot_before_code> --execution-mode <production_write|adapter_qa|readiness_hardening|research|verification|docs_only> --commander <profile> [--task-id <id>] [--redteam <profile>]
@@ -332,8 +347,6 @@ kkachi-agent-helper event append <type> --run <run_id> --payload <json>
 kkachi-agent-helper schema validate <file> --schema <schema>
 kkachi-agent-helper schema export [--schema <schema>|--all] [--dry-run]
 kkachi-agent-helper schema migrate --from <version> --to <version>
-kkachi-agent-helper install skills --source <local-path> [--dry-run|--drift-check]
-kkachi-agent-helper install templates --source <local-path> [--dry-run|--drift-check]
 kkachi-agent-helper diagnostics export [--run <run_id-or-prefix>] [--output <repo-relative-path>]
 ```
 
@@ -491,67 +504,16 @@ The pilot evidence remains local, deterministic, and secret-free. Bridge evidenc
 
 The Go E2E package preserves coverage for project lifecycle, lock recovery, golden workspace failures, diagnostics redaction, release packaging, and the MVP pilot acceptance run. It also includes harness-contract checks that prevent reintroducing Python-assisted E2E helpers or references to removed shell scenarios.
 
-### `install skills/templates`
+### Project bootstrap via `project init`
 
-`packg-003` froze the initial install package contract, and `packg-004` applies it to local install/update, read-only dry-run previews, read-only drift checks, and conservative compatibility gating. Local package sources contain a JSON manifest named `kkachi-install-manifest.json` at the source root. Versioned package sources remain future work.
+KAH no longer exposes an `install` command. Hermes skill installation is handled by Hermes native skill tooling, while KAH initializes the project-local files that KHS/Hermes skills use as their deterministic working contract.
 
-Manifest shape:
+`project init` is a one-shot bootstrap command that requires explicit project parameters. It creates existing helper state plus:
 
-```json
-{
-  "version": "0.1",
-  "kind": "skills",
-  "package": {"name": "kkachi-hermes-skills", "version": "0.1.0"},
-  "compat": {
-    "required_helper": ">=0.1.0",
-    "required_bridge": ">=0.1.0",
-    "required_skills": ">=0.1.0"
-  },
-  "items": [
-    {
-      "source": "skills/kkachi-orchestrate/SKILL.md",
-      "target": ".codex/skills/kkachi-orchestrate/SKILL.md",
-      "sha256": "64-lowercase-hex-digest",
-      "owner_marker": "<!-- kkachi-agent-helper:managed -->"
-    }
-  ]
-}
-```
+- `.kkachi/project-overlay.yaml`
+- `docs/kkachi-docs-map.yaml`
 
-Install JSON output has the following stable shape:
-
-```json
-{
-  "dry_run": true,
-  "drift_check": false,
-  "status": "planned",
-  "kind": "skills",
-  "source": "/local/package",
-  "manifest_path": "/local/package/kkachi-install-manifest.json",
-  "package": {"name": "kkachi-hermes-skills", "version": "0.1.0"},
-  "compat": {"required_helper": ">=0.1.0"},
-  "compatibility": {
-    "helper": {"status": "pass", "required": ">=0.1.0", "actual": "0.1.0", "reason": "..."},
-    "bridge": {"status": "not_checked", "required": ">=0.1.0", "reason": "..."},
-    "skills": {"status": "not_checked", "required": ">=0.1.0", "reason": "..."}
-  },
-  "summary": {"create": 1, "update": 0, "unchanged": 0, "preserve": 0, "conflict": 0},
-  "create": [{"target": ".codex/skills/x/SKILL.md", "source": "skills/x/SKILL.md", "sha256": "...", "owner_marker": "...", "reason": "..."}],
-  "update": [],
-  "unchanged": [],
-  "preserve": [],
-  "conflict": [],
-  "event_id": "evt-000002"
-}
-```
-
-`event_id` appears only for real installs that successfully append `install.applied`. Status values are `planned` for dry-run previews, `clean` for passing drift checks, `drifted` for read-only drift findings, `blocked` for read-only preserve/conflict/compat failures, and `applied` for successful real installs.
-
-Dry-run install is read-only: it does not take `.kkachi/project_write.lock`, does not append events, and does not create or replace target files. It validates manifest shape, command kind, source-root confinement, target repository confinement, duplicate targets, SHA-256 checksums, and source owner markers. Existing regular files containing the declared owner marker are classified as `unchanged` or `update`; existing regular files without the owner marker are classified as `preserve`; non-regular targets are reported as `conflict`.
-
-Real install/update is the default when neither `--dry-run` nor `--drift-check` is passed. It first computes the full plan and refuses to write anything if helper compatibility fails, if any target is `preserve`, or if any target is `conflict`. On success, it serializes through `.kkachi/project_write.lock`, recomputes the plan under the lock, writes only `create` and `update` targets with atomic file replacement, preserves `unchanged` targets, and appends `install.applied` after successful writes. `--drift-check` is read-only and exits `0` only when all items are `unchanged` and helper compatibility passes; create/update drift, preserve/conflict, or helper compatibility failure exits `3`.
-
-Compatibility v1 enforces only `compat.required_helper` against the running helper version. Supported helper ranges are exact `x.y.z` and `>=x.y.z`; unsupported range syntax or a non-matching helper version fails closed. Development builds that keep the default `0.0.0-dev` version do not satisfy semver compatibility ranges; use a release build or set a semver version such as `VERSION=0.1.0` when validating real installs. `compat.required_bridge` and `compat.required_skills` are reported as `not_checked` until a future compatibility task records authoritative bridge/skills version sources.
+`project init --force` is a reconfiguration command, not a destructive reset. It rewrites `.kkachi/config.yaml`, `.kkachi/project-overlay.yaml`, `docs/kkachi-docs-map.yaml`, and schema copies from the supplied parameters, preserves `status.json`, `events.jsonl`, `.kkachi/runs/**`, run metadata, artifacts, and gate history, and appends `project.reconfigured`.
 
 Command UX rules:
 
@@ -688,29 +650,33 @@ Initial gate names:
 | `docs` | `docs-update.md` and changed docs list or no-change reason. |
 | `final` | all required gates pass, no open blockers, `final-report.md` exists. |
 
-## 14. Install and project initialization
+## 14. Project initialization and bootstrap
 
-`project init` creates `.kkachi/`, default config, schemas, status, and event log. It must not overwrite existing helper state without an explicit migration or reset command.
+`project init` creates `.kkachi/`, config, schemas, status, event log, project overlay, and docs map. It does not install Hermes skills; use Hermes native skill installation for KHS skill content.
 
-Initial `project init` defaults:
+Required bootstrap parameters:
 
-- `project.name` is derived from the repository basename as a slug.
+- `--project-name`, `--stack`, `--repo-path`
+- `--commander`, `--redteam`
+- `--docs-map-roadmap`, `--docs-map-spec`, `--docs-map-architecture`
+- `--docs-map-adr-dir`, `--docs-map-todo-dir`, `--docs-map-spec-dir`
+- `--test-commands`, `--backend-policy`, `--execution-mode`, `--sot-policy`
+
+Initial `project init` behavior:
+
 - `status.project_id` uses `kkachi-project-<project-slug>-<random-hex>`.
 - `status.last_event_id` is `evt-000001`.
-- `.kkachi/events.jsonl` contains exactly one initial `project.initialized` JSONL record.
-- `.kkachi/schemas/` contains local schema copies for config, status, event, run metadata, selected CLI, bridge session snapshot, and install manifest.
+- `.kkachi/events.jsonl` contains exactly one `project.initialized` record with bootstrap summary payload.
+- `.kkachi/schemas/` contains local schema copies for config, status, event, run metadata, selected CLI, and bridge session snapshot.
+- `.kkachi/project-overlay.yaml` records project, stack, repo path, commander/redteam, test commands, backend policy, execution mode, and SOT policy.
+- `docs/kkachi-docs-map.yaml` records roadmap, SOT docs, ADR/todo/spec directories, and test commands.
 
-Skill and template installation supports:
+`project init --force` behavior:
 
-- local path source for development;
-- manifest with checksums;
-- dry-run preview;
-- read-only drift checks;
-- real local install/update for helper-owned files only;
-- preservation of user-owned files through pre-write failure;
-- helper compatibility enforcement for exact `x.y.z` and `>=x.y.z` ranges;
-- `install.applied` event recording after successful real installs;
-- versioned package source later.
+- preserves `status.json`, `events.jsonl`, `.kkachi/runs/**`, run metadata, artifacts, and gate history;
+- rewrites config, overlay, docs map, and schema copies from the supplied parameters;
+- appends `project.reconfigured`;
+- is not a full reset/delete command.
 
 ## 15. Testing standard
 
