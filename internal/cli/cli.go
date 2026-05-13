@@ -260,6 +260,24 @@ type diagnosticsExportOutput struct {
 	OutputPath        string                       `json:"output_path,omitempty"`
 }
 
+type helpOutput struct {
+	Command      string     `json:"command"`
+	Status       string     `json:"status"`
+	Usage        string     `json:"usage"`
+	Summary      string     `json:"summary"`
+	Arguments    []helpItem `json:"arguments,omitempty"`
+	Options      []helpItem `json:"options,omitempty"`
+	Subcommands  []helpItem `json:"subcommands,omitempty"`
+	JSONBehavior string     `json:"json_behavior"`
+	Notes        []string   `json:"notes,omitempty"`
+}
+
+type helpItem struct {
+	Name        string `json:"name"`
+	Required    bool   `json:"required,omitempty"`
+	Description string `json:"description"`
+}
+
 type globalOptions struct {
 	json bool
 	args []string
@@ -288,6 +306,25 @@ func Run(args []string, stdout io.Writer, stderr io.Writer, info BuildInfo) int 
 
 func runWithOptions(args []string, stdout io.Writer, stderr io.Writer, info BuildInfo, options runOptions) int {
 	opts := parseGlobalOptions(args)
+	if isHelpRequest(opts.args) {
+		helpTopic := helpPath(opts.args)
+		helpTopicText := strings.Join(helpTopic, " ")
+		page, ok := lookupHelpPage(helpTopic)
+		if !ok {
+			writeError(stderr, opts.json, cliError{
+				Code:     "unknown_help_topic",
+				Message:  fmt.Sprintf("unknown help topic %q", helpTopicText),
+				Hint:     usageHint(),
+				ExitCode: ExitUsage,
+				Field:    "topic",
+				Expected: "known command or command group",
+				Actual:   helpTopicText,
+			})
+			return ExitUsage
+		}
+		writeHelp(stdout, page, opts.json)
+		return ExitOK
+	}
 	if len(opts.args) == 0 {
 		if opts.json {
 			writeJSONError(stderr, cliError{
@@ -383,6 +420,41 @@ func runCapabilitiesCommand(args []string, stdout io.Writer, stderr io.Writer, i
 	}
 	writeCapabilities(stdout, info, jsonMode)
 	return ExitOK
+}
+
+func isHelpRequest(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	if args[0] == "help" || args[0] == "--help" {
+		return true
+	}
+	for _, arg := range args {
+		if arg == "--help" {
+			return true
+		}
+	}
+	return false
+}
+
+func helpPath(args []string) []string {
+	if len(args) == 0 || args[0] == "--help" {
+		return nil
+	}
+	if args[0] == "help" {
+		return stripHelpFlags(args[1:])
+	}
+	return stripHelpFlags(args)
+}
+
+func stripHelpFlags(args []string) []string {
+	out := make([]string, 0, len(args))
+	for _, arg := range args {
+		if arg != "--help" {
+			out = append(out, arg)
+		}
+	}
+	return out
 }
 
 func runDiagnosticsCommand(args []string, root project.Root, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
@@ -1309,6 +1381,52 @@ func writeCapabilities(w io.Writer, info BuildInfo, jsonMode bool) {
 	fmt.Fprintln(w, "json_contract: use capabilities --json")
 }
 
+func writeHelp(w io.Writer, page helpOutput, jsonMode bool) {
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(page)
+		return
+	}
+	fmt.Fprintf(w, "%s\n", page.Command)
+	fmt.Fprintf(w, "\nUsage:\n  %s\n", page.Usage)
+	if page.Status != "" {
+		fmt.Fprintf(w, "\nStatus: %s\n", page.Status)
+	}
+	if page.Summary != "" {
+		fmt.Fprintf(w, "\nSummary:\n  %s\n", page.Summary)
+	}
+	writeHelpItems(w, "Subcommands", page.Subcommands)
+	writeHelpItems(w, "Arguments", page.Arguments)
+	writeHelpItems(w, "Options", page.Options)
+	if page.JSONBehavior != "" {
+		fmt.Fprintf(w, "\nJSON behavior:\n  %s\n", page.JSONBehavior)
+	}
+	writeHelpNotes(w, page.Notes)
+}
+
+func writeHelpItems(w io.Writer, title string, items []helpItem) {
+	if len(items) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "\n%s:\n", title)
+	for _, item := range items {
+		required := ""
+		if item.Required {
+			required = " (required)"
+		}
+		fmt.Fprintf(w, "  %s%s - %s\n", item.Name, required, item.Description)
+	}
+}
+
+func writeHelpNotes(w io.Writer, notes []string) {
+	if len(notes) == 0 {
+		return
+	}
+	fmt.Fprintln(w, "\nNotes:")
+	for _, note := range notes {
+		fmt.Fprintf(w, "  - %s\n", note)
+	}
+}
+
 func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
 	return capabilitiesOutput{
 		Helper:                    info,
@@ -1349,6 +1467,132 @@ func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
 			{Name: "install", Status: capabilityStatusOmitted, Reason: "KAH project bootstrap is handled by project init; Hermes/KHS skill installation belongs to Hermes native tooling."},
 		},
 	}
+}
+
+var helpPages = map[string]helpOutput{
+	"": {
+		Command:      "kkachi-agent-helper",
+		Status:       capabilityStatusSupported,
+		Usage:        "kkachi-agent-helper [--json] <command> [subcommand] [options]",
+		Summary:      "Deterministic local helper for Kkachi project state, run artifacts, gates, events, schemas, locks, diagnostics, and compatibility discovery.",
+		Subcommands:  []helpItem{{Name: "version", Description: "Print helper build version."}, {Name: "capabilities", Description: "Print the command-surface compatibility report."}, {Name: "project", Description: "Initialize and inspect helper project state."}, {Name: "run", Description: "Create, list, show, activate, close, or abort helper runs."}, {Name: "artifact", Description: "Initialize, list, and validate canonical run artifacts."}, {Name: "gate", Description: "Run deterministic gate checks."}, {Name: "event", Description: "Append attributed helper events."}, {Name: "schema", Description: "Validate, export, or migrate helper schemas/state."}, {Name: "lock", Description: "Recover stale helper write locks explicitly."}, {Name: "diagnostics", Description: "Export redacted diagnostics bundles."}, {Name: "phase-plan", Description: "Planned KHS-declared phase-plan validation surface."}, {Name: "help", Description: "Show help for the top level or a command topic."}},
+		Options:      []helpItem{{Name: "--json", Description: "Emit machine-readable JSON for commands that support JSON output."}, {Name: "--help", Description: "Show help and exit 0 without requiring helper project state."}, {Name: "--version", Description: "Print helper build version."}},
+		JSONBehavior: "Use --json with help for structured help. Use capabilities --json for stable machine compatibility checks; command help is supplemental documentation.",
+	},
+	"help": {
+		Command:      "kkachi-agent-helper help",
+		Status:       capabilityStatusSupported,
+		Usage:        "kkachi-agent-helper help [command] [subcommand]",
+		Summary:      "Show help for the top level or a command topic without requiring helper project state.",
+		Arguments:    []helpItem{{Name: "[command] [subcommand]", Description: "Optional help topic such as run create, project init, schema, event, lock, or phase-plan."}},
+		JSONBehavior: "Use --json with help for structured help. Use capabilities --json for stable machine compatibility checks; command help is supplemental documentation.",
+	},
+	"project": {
+		Command:      "kkachi-agent-helper project",
+		Status:       capabilityStatusSupported,
+		Usage:        "kkachi-agent-helper project <init|status|doctor> [options]",
+		Summary:      "Manage helper project bootstrap and read-only project health inspection.",
+		Subcommands:  []helpItem{{Name: "init", Description: "Create or reconfigure local .kkachi helper state."}, {Name: "status", Description: "Inspect current project health and active run state."}, {Name: "doctor", Description: "Run deterministic project health checks."}},
+		Options:      []helpItem{{Name: "--json", Description: "Emit JSON for supported project subcommands."}, {Name: "--help", Description: "Show project help and exit 0."}},
+		JSONBehavior: "Project subcommands support global --json for structured output and structured errors. project --help --json emits structured help only.",
+	},
+	"project init": {
+		Command:      "kkachi-agent-helper project init",
+		Status:       capabilityStatusSupported,
+		Usage:        "kkachi-agent-helper project init --project-name <name> --stack <stack> --repo-path <path> --commander <profile> --redteam <profile> --docs-map-roadmap <path> --docs-map-spec <path> --docs-map-architecture <path> --docs-map-adr-dir <path> --docs-map-todo-dir <path> --docs-map-spec-dir <path> --test-commands <comma-separated> --backend-policy <policy> --execution-mode <mode> --sot-policy <policy> [--force] [--json]",
+		Summary:      "Initialize helper-managed project state, local schema copies, event log, project overlay, and docs map.",
+		Options:      []helpItem{{Name: "--project-name <name>", Required: true, Description: "Project display name."}, {Name: "--stack <stack>", Required: true, Description: "Project stack label."}, {Name: "--repo-path <path>", Required: true, Description: "Repository path recorded in helper overlay."}, {Name: "--commander <profile>", Required: true, Description: "Commander profile name."}, {Name: "--redteam <profile>", Required: true, Description: "Red-team profile name."}, {Name: "--docs-map-roadmap <path>", Required: true, Description: "Roadmap document path."}, {Name: "--docs-map-spec <path>", Required: true, Description: "Main spec document path."}, {Name: "--docs-map-architecture <path>", Required: true, Description: "Architecture document path."}, {Name: "--docs-map-adr-dir <path>", Required: true, Description: "ADR directory path."}, {Name: "--docs-map-todo-dir <path>", Required: true, Description: "TODO directory path."}, {Name: "--docs-map-spec-dir <path>", Required: true, Description: "Supplemental specs directory path."}, {Name: "--test-commands <comma-separated>", Required: true, Description: "Configured verification commands."}, {Name: "--backend-policy <policy>", Required: true, Description: "Declared backend policy."}, {Name: "--execution-mode <mode>", Required: true, Description: "Declared execution mode."}, {Name: "--sot-policy <policy>", Required: true, Description: "Declared source-of-truth policy."}, {Name: "--force", Description: "Reconfigure bootstrap files while preserving runs, status, and events."}, {Name: "--json", Description: "Emit structured init result."}},
+		JSONBehavior: "With --json, successful init emits project paths, project id, created schema paths, event id, and force status. Errors are structured on stderr.",
+	},
+	"run": {
+		Command:      "kkachi-agent-helper run",
+		Status:       capabilityStatusSupported,
+		Usage:        "kkachi-agent-helper run <create|list|show|activate|close|abort> [arguments] [options]",
+		Summary:      "Manage helper run lifecycle metadata and active-run state.",
+		Subcommands:  []helpItem{{Name: "create", Description: "Create a run with deterministic classification metadata."}, {Name: "list", Description: "List known runs."}, {Name: "show <run_id>", Description: "Show one run by id or unique prefix."}, {Name: "activate <run_id>", Description: "Mark a run active."}, {Name: "close <run_id>", Description: "Close a run."}, {Name: "abort <run_id>", Description: "Abort a run."}},
+		Options:      []helpItem{{Name: "--json", Description: "Emit JSON for supported run subcommands."}, {Name: "--help", Description: "Show run help and exit 0."}},
+		JSONBehavior: "Run subcommands support global --json for structured output and structured errors. run --help --json emits structured help only.",
+	},
+	"run create": {
+		Command:      "kkachi-agent-helper run create",
+		Status:       capabilityStatusSupported,
+		Usage:        "kkachi-agent-helper run create --title <title> --work-path <A_development_execution|B_discovery_shaping> --work-mode <standard|light> --urgency <normal|urgent|critical> --sot-policy <existing_sot_basis|minimal_sot_before_code|full_sot_before_code> --execution-mode <production_write|adapter_qa|readiness_hardening|research|verification|docs_only> --commander <profile> [--backend-evidence <auto|required|not_applicable>] [--task-id <id>] [--redteam <profile>] [--json]",
+		Summary:      "Create a helper run and append a run.created event.",
+		Options:      []helpItem{{Name: "--title <title>", Required: true, Description: "Human-readable run title."}, {Name: "--work-path <A_development_execution|B_discovery_shaping>", Required: true, Description: "Declared Kkachi work path."}, {Name: "--work-mode <standard|light>", Required: true, Description: "Declared work mode."}, {Name: "--urgency <normal|urgent|critical>", Required: true, Description: "Declared urgency."}, {Name: "--sot-policy <existing_sot_basis|minimal_sot_before_code|full_sot_before_code>", Required: true, Description: "Declared source-of-truth policy."}, {Name: "--execution-mode <production_write|adapter_qa|readiness_hardening|research|verification|docs_only>", Required: true, Description: "Declared execution mode."}, {Name: "--commander <profile>", Required: true, Description: "Commander profile name."}, {Name: "--backend-evidence <auto|required|not_applicable>", Description: "Declare backend evidence requirement independently of execution mode."}, {Name: "--task-id <id>", Description: "Optional roadmap/task id."}, {Name: "--redteam <profile>", Description: "Optional red-team profile override."}, {Name: "--json", Description: "Emit structured run creation result."}},
+		JSONBehavior: "With --json, successful create emits run id, state, run path, event id, and metadata. Errors are structured on stderr.",
+	},
+	"artifact": {
+		Command:      "kkachi-agent-helper artifact",
+		Status:       capabilityStatusSupported,
+		Usage:        "kkachi-agent-helper artifact <init|list|validate> <run_id> [options]",
+		Summary:      "Initialize, list, and validate canonical run artifacts.",
+		Subcommands:  []helpItem{{Name: "init <run_id>", Description: "Create required artifact placeholders/status for a run."}, {Name: "list <run_id>", Description: "List artifact statuses for a run."}, {Name: "validate <run_id> [--gate intake]", Description: "Validate artifacts for the supported artifact validation gate."}},
+		Options:      []helpItem{{Name: "--gate intake", Description: "Select artifact validation gate for artifact validate."}, {Name: "--json", Description: "Emit JSON for supported artifact subcommands."}, {Name: "--help", Description: "Show artifact help and exit 0."}},
+		JSONBehavior: "Artifact subcommands support global --json for structured output and structured errors. artifact --help --json emits structured help only.",
+	},
+	"gate": {
+		Command:      "kkachi-agent-helper gate",
+		Status:       capabilityStatusSupported,
+		Usage:        "kkachi-agent-helper gate check <run_id> <gate> [--json]\n  kkachi-agent-helper gate final <run_id> [--json]",
+		Summary:      "Run deterministic gate checks and record gate reports/events.",
+		Arguments:    []helpItem{{Name: "<run_id>", Required: true, Description: "Run id or unique prefix."}, {Name: "<gate>", Required: true, Description: "One of: " + strings.Join(project.KnownGates(), ", ") + "."}},
+		Subcommands:  []helpItem{{Name: "check <run_id> <gate>", Description: "Check a named gate."}, {Name: "final <run_id>", Description: "Check the final gate."}},
+		Options:      []helpItem{{Name: "--json", Description: "Emit structured gate check result."}, {Name: "--help", Description: "Show gate help and exit 0."}},
+		JSONBehavior: "With --json, gate checks emit gate status, checks, missing evidence, event id, and report path. Failing gates exit 3 with structured output.",
+	},
+	"schema": {
+		Command: "kkachi-agent-helper schema",
+		Status:  capabilityStatusSupported,
+		Usage: "kkachi-agent-helper schema validate <file> --schema <schema> [--json]\n" +
+			"  kkachi-agent-helper schema export [--schema <name>|--all] [--dry-run] [--json]\n" +
+			"  kkachi-agent-helper schema migrate --from <version> --to <version> [--dry-run] [--json]",
+		Summary:      "Validate helper state/evidence files against embedded schemas, export schema copies, or run registered migrations.",
+		Subcommands:  []helpItem{{Name: "validate <file> --schema <schema>", Description: "Validate a repository file against an embedded schema name or canonical schema path."}, {Name: "export [--schema <name>|--all] [--dry-run]", Description: "Copy embedded schemas into .kkachi/schemas or preview the copy."}, {Name: "migrate --from <version> --to <version> [--dry-run]", Description: "Run registered helper state migrations or preview them."}},
+		Options:      []helpItem{{Name: "--schema <schema|name>", Description: "Schema selector for validate/export."}, {Name: "--all", Description: "Export all embedded schemas."}, {Name: "--from <version>", Required: true, Description: "Source schema version for migrate."}, {Name: "--to <version>", Required: true, Description: "Target schema version for migrate."}, {Name: "--dry-run", Description: "Preview export or migration without mutation."}, {Name: "--json", Description: "Emit structured schema command output."}, {Name: "--help", Description: "Show schema help and exit 0."}},
+		JSONBehavior: "Schema commands support global --json for structured output and structured errors. schema --help --json emits structured help only.",
+	},
+	"event": {
+		Command:      "kkachi-agent-helper event",
+		Status:       capabilityStatusSupported,
+		Usage:        "kkachi-agent-helper event append <type> --run <run_id> --payload <json-object> [--json]",
+		Summary:      "Append an attributed helper event after validating payload shape and state/event coherence.",
+		Subcommands:  []helpItem{{Name: "append <type>", Description: "Append one JSONL event with a compact JSON object payload."}},
+		Arguments:    []helpItem{{Name: "<type>", Required: true, Description: "Event type string."}},
+		Options:      []helpItem{{Name: "--run <run_id>", Required: true, Description: "Run id for event attribution."}, {Name: "--payload <json-object>", Required: true, Description: "Compact JSON object payload."}, {Name: "--json", Description: "Emit structured append result."}, {Name: "--help", Description: "Show event help and exit 0."}},
+		JSONBehavior: "With --json, successful append emits event id, previous id, paths, and timestamp. Errors are structured on stderr.",
+	},
+	"lock": {
+		Command:      "kkachi-agent-helper lock",
+		Status:       capabilityStatusSupported,
+		Usage:        "kkachi-agent-helper lock recover <active-run|project-write|all> --reason <text> [--run <run_id>] [--json]",
+		Summary:      "Explicitly recover stale helper locks without silently removing fresh or malformed locks.",
+		Subcommands:  []helpItem{{Name: "recover <active-run|project-write|all>", Description: "Recover one stale lock target and record an event."}},
+		Arguments:    []helpItem{{Name: "<active-run|project-write|all>", Required: true, Description: "Lock recovery target."}},
+		Options:      []helpItem{{Name: "--reason <text>", Required: true, Description: "Operator reason for recovery."}, {Name: "--run <run_id>", Description: "Run id when recovering active-run locks."}, {Name: "--json", Description: "Emit structured recovery result."}, {Name: "--help", Description: "Show lock help and exit 0."}},
+		JSONBehavior: "With --json, successful recovery emits recovered lock metadata. Errors are structured on stderr.",
+	},
+	"diagnostics": {
+		Command:      "kkachi-agent-helper diagnostics",
+		Status:       capabilityStatusSupported,
+		Usage:        "kkachi-agent-helper diagnostics export [--run <run_id>] [--output <repo-relative-path>] [--json]",
+		Summary:      "Export support-safe diagnostics with token-like redaction.",
+		Subcommands:  []helpItem{{Name: "export", Description: "Write or print a redacted diagnostics bundle."}},
+		Options:      []helpItem{{Name: "--run <run_id>", Description: "Include selected run-local diagnostics."}, {Name: "--output <repo-relative-path>", Description: "Write bundle to a repository-relative path instead of stdout."}, {Name: "--json", Description: "Emit structured export metadata."}, {Name: "--help", Description: "Show diagnostics help and exit 0."}},
+		JSONBehavior: "With --json, diagnostics export emits bundle metadata. Without --output, the diagnostics bundle itself is JSON on stdout.",
+	},
+	"phase-plan": {
+		Command:      "kkachi-agent-helper phase-plan",
+		Status:       capabilityStatusPlanned,
+		Usage:        "kkachi-agent-helper phase-plan --help",
+		Summary:      "Planned KHS-declared phase-plan validation and diagnostics surface for align-005.",
+		JSONBehavior: "Only help is available now. capabilities --json reports phase_plan=false until align-005 implements this surface.",
+		Notes:        []string{"KAH will store and validate declared phase state only; KHS remains responsible for phase applicability and workflow policy."},
+	},
+}
+
+func lookupHelpPage(path []string) (helpOutput, bool) {
+	page, ok := helpPages[strings.Join(path, " ")]
+	return page, ok
 }
 
 func writeProjectInitResult(w io.Writer, result project.InitResult, jsonMode bool) {

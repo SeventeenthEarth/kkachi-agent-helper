@@ -63,6 +63,33 @@ func TestCapabilitiesJSONAtBinaryBoundary(t *testing.T) {
 	}
 }
 
+func TestHelpAtBinaryBoundaryDoesNotRequireProjectState(t *testing.T) {
+	binary := buildHelperBinary(t)
+
+	output := runHelper(t, binary, t.TempDir(), "--help")
+	assertOutputContains(t, output, "kkachi-agent-helper", "top-level help")
+	assertOutputContains(t, output, "Usage:", "top-level help")
+	assertOutputContains(t, output, "JSON behavior:", "top-level help")
+
+	output = runHelper(t, binary, t.TempDir(), "run", "create", "--help")
+	assertOutputContains(t, output, "kkachi-agent-helper run create", "run create help")
+	assertOutputContains(t, output, "--title <title> (required)", "run create help")
+	assertOutputContains(t, output, "--backend-evidence <auto|required|not_applicable>", "run create help")
+
+	output = runHelper(t, binary, t.TempDir(), "--json", "phase-plan", "--help")
+	var payload struct {
+		Command      string `json:"command"`
+		Status       string `json:"status"`
+		JSONBehavior string `json:"json_behavior"`
+	}
+	if err := json.Unmarshal(output, &payload); err != nil {
+		t.Fatalf("phase-plan help output is not JSON: %v\n%s", err, string(output))
+	}
+	if payload.Command != "kkachi-agent-helper phase-plan" || payload.Status != "planned" || !strings.Contains(payload.JSONBehavior, "phase_plan=false") {
+		t.Fatalf("payload = %#v, want planned phase-plan help", payload)
+	}
+}
+
 func TestInstallCommandRemovedAtBinaryBoundary(t *testing.T) {
 	binary := buildHelperBinary(t)
 	repo := t.TempDir()

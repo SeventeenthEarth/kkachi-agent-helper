@@ -162,6 +162,102 @@ func TestCapabilitiesRejectsSubcommands(t *testing.T) {
 	}
 }
 
+func TestHelpCommandsExitZeroWithoutProjectState(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{name: "help", args: []string{"help"}, want: []string{"kkachi-agent-helper", "Usage:", "JSON behavior:"}},
+		{name: "global help", args: []string{"--help"}, want: []string{"kkachi-agent-helper", "capabilities", "--json"}},
+		{name: "project group", args: []string{"project", "--help"}, want: []string{"kkachi-agent-helper project", "init", "status", "doctor"}},
+		{name: "project init", args: []string{"project", "init", "--help"}, want: []string{"kkachi-agent-helper project init", "--project-name <name> (required)", "--force"}},
+		{name: "run group", args: []string{"run", "--help"}, want: []string{"kkachi-agent-helper run", "create", "activate <run_id>"}},
+		{name: "run create", args: []string{"run", "create", "--help"}, want: []string{"kkachi-agent-helper run create", "--title <title> (required)", "--backend-evidence <auto|required|not_applicable>"}},
+		{name: "artifact group", args: []string{"artifact", "--help"}, want: []string{"kkachi-agent-helper artifact", "validate <run_id> [--gate intake]", "--gate intake"}},
+		{name: "gate group", args: []string{"gate", "--help"}, want: []string{"kkachi-agent-helper gate", "check <run_id> <gate>", "intake, sot, roadmap"}},
+		{name: "schema group", args: []string{"schema", "--help"}, want: []string{"kkachi-agent-helper schema", "validate <file> --schema <schema>", "migrate --from <version> --to <version>"}},
+		{name: "event group", args: []string{"event", "--help"}, want: []string{"kkachi-agent-helper event", "append <type>", "--payload <json-object> (required)"}},
+		{name: "lock group", args: []string{"lock", "--help"}, want: []string{"kkachi-agent-helper lock", "recover <active-run|project-write|all>", "--reason <text> (required)"}},
+		{name: "diagnostics group", args: []string{"diagnostics", "--help"}, want: []string{"kkachi-agent-helper diagnostics", "export", "--output <repo-relative-path>"}},
+		{name: "phase plan planned", args: []string{"phase-plan", "--help"}, want: []string{"kkachi-agent-helper phase-plan", "planned", "phase_plan=false"}},
+		{name: "help alias", args: []string{"help", "run", "create"}, want: []string{"kkachi-agent-helper run create", "--execution-mode"}},
+		{name: "help help", args: []string{"help", "help"}, want: []string{"kkachi-agent-helper help", "[command] [subcommand]", "JSON behavior:"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			exitCode := runWithOptions(tc.args, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: t.TempDir()})
+			if exitCode != ExitOK {
+				t.Fatalf("exitCode = %d, want %d stderr=%s", exitCode, ExitOK, stderr.String())
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("stderr = %q, want empty", stderr.String())
+			}
+			output := stdout.String()
+			if output == "" {
+				t.Fatal("stdout is empty")
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(output, want) {
+					t.Fatalf("stdout = %q, want %q", output, want)
+				}
+			}
+		})
+	}
+}
+
+func TestImplementedCommandGroupsHaveHelpPages(t *testing.T) {
+	for command := range commandGroups {
+		if _, ok := helpPages[command]; !ok {
+			t.Fatalf("command group %q missing help page", command)
+		}
+	}
+}
+
+func TestHelpJSONOutput(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runWithOptions([]string{"--json", "run", "create", "--help"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: t.TempDir()})
+	if exitCode != ExitOK {
+		t.Fatalf("exitCode = %d, want %d stderr=%s", exitCode, ExitOK, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	assertNoHumanDecoration(t, stdout.String())
+	var payload helpOutput
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v\n%s", err, stdout.String())
+	}
+	if payload.Command != "kkachi-agent-helper run create" || payload.Status != capabilityStatusSupported {
+		t.Fatalf("payload = %#v, want run create help", payload)
+	}
+	if !strings.Contains(payload.JSONBehavior, "structured") {
+		t.Fatalf("json_behavior = %q, want structured behavior documentation", payload.JSONBehavior)
+	}
+}
+
+func TestHelpDoesNotChangeNonHelpUsageErrors(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runWithOptions([]string{"run", "create", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: tempGitRepo(t)})
+	if exitCode != ExitUsage {
+		t.Fatalf("exitCode = %d, want %d", exitCode, ExitUsage)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	env := decodeErrorEnvelope(t, stderr.Bytes())
+	if env.Error.Code != "missing_required_option" {
+		t.Fatalf("error code = %q, want missing_required_option", env.Error.Code)
+	}
+}
+
 func TestNoCommandReturnsUsageError(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

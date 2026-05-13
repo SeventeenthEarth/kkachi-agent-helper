@@ -2,7 +2,7 @@
 
 `kkachi-agent-helper` is the deterministic local CLI helper for Kkachi project state, run artifacts, locks, schemas, events, diagnostics, and project bootstrap scaffolding. It stays local-first and scriptable: it does not choose a backend, plan work, review code, call network services, or store secrets.
 
-The current implementation covers `corex-001` through `corex-005`, `runwf-001` through `runwf-004`, `gates-001` through `gates-005`, `packg-001` through `packg-004` plus the project-init bootstrap consolidation, and `pilot-004`.
+The current implementation covers `corex-001` through `corex-005`, `runwf-001` through `runwf-004`, `gates-001` through `gates-005`, `packg-001` through `packg-004`, `pilot-001` through `pilot-005`, and `align-001` through `align-004`.
 
 ## Source of truth
 
@@ -103,10 +103,14 @@ Global options:
 kkachi-agent-helper --version
 kkachi-agent-helper version --json
 kkachi-agent-helper capabilities --json
+kkachi-agent-helper help
+kkachi-agent-helper --help
 kkachi-agent-helper [--json] <command>
 ```
 
 `capabilities --json` is the stable machine-readable command-surface report for KHS activation checks. It includes helper build info, the embedded project schema version, supported command groups, compatibility flags, and explicit omitted surfaces such as the removed `install` command.
+
+Help is project-independent and exits `0`. Use `kkachi-agent-helper <command> --help`, supported subcommand topics such as `kkachi-agent-helper project init --help` and `kkachi-agent-helper run create --help`, or `kkachi-agent-helper help <command> [subcommand]` for required arguments, options, and JSON behavior. Implemented command groups have group help pages, including `schema`, `event`, and `lock`. `--json` with help emits structured help JSON; compatibility automation should still prefer `capabilities --json`.
 
 Project state:
 

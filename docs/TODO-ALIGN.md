@@ -147,7 +147,7 @@ KHS `main` should use KAH `@latest` where possible, but it needs capability-base
 
 ### align-004 — Standard help UX
 
-Status: Planned
+Status: Completed
 
 #### Problem
 
@@ -176,6 +176,12 @@ kkachi-agent-helper phase-plan --help
 - Help output lists required arguments and options.
 - JSON mode behavior is documented; structured JSON help is preferred, but a clear documented non-JSON behavior is acceptable for the first PR.
 - Existing command errors remain structured and deterministic.
+
+#### Completion notes
+
+- Added project-independent help for `help`, `help help`, `--help`, implemented command groups, key subcommands, and the planned `phase-plan` surface.
+- Help exits `0`, writes to stdout, documents required arguments/options and JSON behavior, and supports structured help JSON with global `--json`.
+- Unit, integration, and E2E regressions cover help outside initialized helper state, release artifact help behavior, and preserved non-help usage errors.
 
 ### align-005 — Phase-plan validation and diagnostics
 

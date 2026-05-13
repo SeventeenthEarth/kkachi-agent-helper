@@ -351,6 +351,11 @@ kkachi-agent-helper schema export [--schema <schema>|--all] [--dry-run]
 kkachi-agent-helper schema migrate --from <version> --to <version>
 kkachi-agent-helper diagnostics export [--run <run_id-or-prefix>] [--output <repo-relative-path>]
 kkachi-agent-helper capabilities --json
+kkachi-agent-helper help
+kkachi-agent-helper --help
+kkachi-agent-helper <command> --help
+kkachi-agent-helper project init --help
+kkachi-agent-helper run create --help
 ```
 
 ### `capabilities --json`
@@ -358,6 +363,10 @@ kkachi-agent-helper capabilities --json
 `align-003` introduces a project-independent capabilities report for KHS activation checks. The command exits `0` on a healthy binary and does not require `.kkachi/` project state. JSON output is the compatibility contract; human output is informational only.
 
 Stable JSON output includes helper build info, `capabilities_schema_version`, embedded `project_schema_version`, supported command groups/subcommands, compatibility booleans, deprecated surfaces, and omitted surfaces. Current compatibility flags report project init/status/doctor, run lifecycle, artifact init/list/validate, gates, declared backend evidence requirements, and diagnostics export as supported. Phase-plan and approval records are reported as unsupported until their later `align` tasks land. The removed `install` command is reported as an omitted surface because Hermes/KHS skill installation belongs to Hermes native tooling.
+
+### Help UX
+
+`align-004` introduces project-independent help output for top-level discovery, implemented command groups, selected high-argument subcommands (`project init` and `run create` initially), and the planned `phase-plan` surface. `help`, `help help`, `--help`, supported `<command> --help`, and supported subcommand help topics exit `0`, write help to stdout, do not require `.kkachi/` state, and list usage, required arguments/options, subcommands, and JSON behavior. Implemented command groups have group help pages, including `schema`, `event`, and `lock`. `--json` with help emits structured help JSON. Machine compatibility checks should continue to use `capabilities --json`; help JSON is supplemental command documentation.
 
 ### `gate check`
 
@@ -528,6 +537,7 @@ KAH no longer exposes an `install` command. Hermes skill installation is handled
 Command UX rules:
 
 - `--json` emits machine-readable output and no decorative text.
+- Help output exits `0`, writes to stdout, and does not require repository or helper state discovery.
 - Non-zero exit means the requested action did not succeed.
 - Validation failures include path, field, expected value, actual value, and remediation hint.
 - Canonical exit codes are `0` for success, including read-only diagnostic reports with warnings only; `1` for internal helper failures; `2` for usage errors, unsupported commands, or unsupported command options; `3` for fail-closed state/safety problems such as malformed helper state, unsafe paths, schema failures, or status/event coherence mismatches; and `4` for repository root discovery failure.
