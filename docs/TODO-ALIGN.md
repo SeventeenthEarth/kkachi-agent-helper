@@ -119,7 +119,7 @@ Execution mode and KAB usage must be separate concepts.
 
 ### align-003 — Command-surface capabilities report
 
-Status: Planned
+Status: Completed
 
 #### Problem
 
@@ -138,6 +138,12 @@ KHS `main` should use KAH `@latest` where possible, but it needs capability-base
 - Output includes helper version and project schema version.
 - Output lets KHS determine whether project init, run lifecycle, artifact init/list/validate, gates, backend evidence requirements, phase-plan support, approval records, diagnostics, and omitted install behavior are available.
 - Output is stable enough for KHS activation checks.
+
+#### Completion notes
+
+- Added project-independent `capabilities --json` with helper build info, capabilities schema version, embedded project schema version, command-group inventory, compatibility flags, and explicit omitted `install` surface.
+- Current flags expose supported project/run/artifact/gate/backend-evidence/diagnostics surfaces and report phase-plan plus approval records as unavailable until later align tasks.
+- Unit, integration, and e2e release packaging coverage verify the JSON shape and version propagation.
 
 ### align-004 — Standard help UX
 

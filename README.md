@@ -102,8 +102,11 @@ Global options:
 ```sh
 kkachi-agent-helper --version
 kkachi-agent-helper version --json
+kkachi-agent-helper capabilities --json
 kkachi-agent-helper [--json] <command>
 ```
+
+`capabilities --json` is the stable machine-readable command-surface report for KHS activation checks. It includes helper build info, the embedded project schema version, supported command groups, compatibility flags, and explicit omitted surfaces such as the removed `install` command.
 
 Project state:
 

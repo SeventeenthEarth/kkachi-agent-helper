@@ -350,7 +350,14 @@ kkachi-agent-helper schema validate <file> --schema <schema>
 kkachi-agent-helper schema export [--schema <schema>|--all] [--dry-run]
 kkachi-agent-helper schema migrate --from <version> --to <version>
 kkachi-agent-helper diagnostics export [--run <run_id-or-prefix>] [--output <repo-relative-path>]
+kkachi-agent-helper capabilities --json
 ```
+
+### `capabilities --json`
+
+`align-003` introduces a project-independent capabilities report for KHS activation checks. The command exits `0` on a healthy binary and does not require `.kkachi/` project state. JSON output is the compatibility contract; human output is informational only.
+
+Stable JSON output includes helper build info, `capabilities_schema_version`, embedded `project_schema_version`, supported command groups/subcommands, compatibility booleans, deprecated surfaces, and omitted surfaces. Current compatibility flags report project init/status/doctor, run lifecycle, artifact init/list/validate, gates, declared backend evidence requirements, and diagnostics export as supported. Phase-plan and approval records are reported as unsupported until their later `align` tasks land. The removed `install` command is reported as an omitted surface because Hermes/KHS skill installation belongs to Hermes native tooling.
 
 ### `gate check`
 

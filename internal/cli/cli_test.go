@@ -75,6 +75,93 @@ func TestVersionJSONOutput(t *testing.T) {
 	}
 }
 
+func TestCapabilitiesJSONOutputIsProjectIndependent(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runWithOptions([]string{"capabilities", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: t.TempDir()})
+
+	if exitCode != ExitOK {
+		t.Fatalf("exitCode = %d, want %d stderr=%s", exitCode, ExitOK, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	assertNoHumanDecoration(t, stdout.String())
+	rawJSON := stdout.String()
+	for _, want := range []string{`"capabilities_schema_version":"0.1"`, `"project_schema_version":"0.1"`, `"compatibility_flags":`, `"omitted_surfaces":`} {
+		if !strings.Contains(rawJSON, want) {
+			t.Fatalf("stdout = %q, want raw JSON field %q", rawJSON, want)
+		}
+	}
+
+	var payload capabilitiesOutput
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v\n%s", err, stdout.String())
+	}
+	if payload.Helper != testBuildInfo() {
+		t.Fatalf("helper = %#v, want %#v", payload.Helper, testBuildInfo())
+	}
+	if payload.CapabilitiesSchemaVersion != capabilitiesSchemaVersion {
+		t.Fatalf("capabilities schema version = %q, want %q", payload.CapabilitiesSchemaVersion, capabilitiesSchemaVersion)
+	}
+	if payload.ProjectSchemaVersion != project.SchemaVersion {
+		t.Fatalf("project schema version = %q, want %q", payload.ProjectSchemaVersion, project.SchemaVersion)
+	}
+	flags := payload.CompatibilityFlags
+	if !flags.ProjectInit || !flags.RunLifecycle || !flags.ArtifactInit || !flags.ArtifactList || !flags.ArtifactValidate || !flags.Gates || !flags.BackendEvidenceRequirements || !flags.DiagnosticsExport {
+		t.Fatalf("compatibility flags = %#v, want implemented surfaces enabled", flags)
+	}
+	if flags.PhasePlan || flags.ApprovalRecords || flags.InstallCommand {
+		t.Fatalf("compatibility flags = %#v, want planned/omitted surfaces disabled", flags)
+	}
+	assertCapabilityCommandGroups(t, payload.CommandGroups)
+	if len(payload.DeprecatedSurfaces) != 0 {
+		t.Fatalf("deprecated surfaces = %#v, want none", payload.DeprecatedSurfaces)
+	}
+	if len(payload.OmittedSurfaces) != 1 || payload.OmittedSurfaces[0].Name != "install" || payload.OmittedSurfaces[0].Status != capabilityStatusOmitted || payload.OmittedSurfaces[0].Reason == "" {
+		t.Fatalf("omitted surfaces = %#v, want install omitted", payload.OmittedSurfaces)
+	}
+}
+
+func TestCapabilitiesHumanOutput(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runWithOptions([]string{"capabilities"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: t.TempDir()})
+
+	if exitCode != ExitOK {
+		t.Fatalf("exitCode = %d, want %d stderr=%s", exitCode, ExitOK, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	output := stdout.String()
+	for _, want := range []string{"kkachi-agent-helper capabilities", "helper_version: 1.2.3", "project_schema_version: 0.1", "json_contract: use capabilities --json"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("stdout = %q, want %q", output, want)
+		}
+	}
+}
+
+func TestCapabilitiesRejectsSubcommands(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runWithOptions([]string{"capabilities", "extra", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: t.TempDir()})
+
+	if exitCode != ExitUsage {
+		t.Fatalf("exitCode = %d, want %d", exitCode, ExitUsage)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	env := decodeErrorEnvelope(t, stderr.Bytes())
+	if env.Error.Code != "unknown_option" {
+		t.Fatalf("error code = %q, want unknown_option", env.Error.Code)
+	}
+}
+
 func TestNoCommandReturnsUsageError(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -1223,6 +1310,27 @@ func testBuildInfo() BuildInfo {
 		Version:   "1.2.3",
 		Commit:    "abc123",
 		BuildDate: "2026-04-30T00:00:00Z",
+	}
+}
+
+func assertCapabilityCommandGroups(t *testing.T, groups []capabilityCommandGroup) {
+	t.Helper()
+	want := []capabilityCommandGroup{
+		{Name: "project", Status: capabilityStatusSupported, Subcommands: []string{"init", "status", "doctor"}},
+		{Name: "run", Status: capabilityStatusSupported, Subcommands: []string{"create", "activate", "close", "abort", "list", "show"}},
+		{Name: "artifact", Status: capabilityStatusSupported, Subcommands: []string{"init", "list", "validate"}},
+		{Name: "gate", Status: capabilityStatusSupported, Subcommands: []string{"check", "final"}},
+		{Name: "event", Status: capabilityStatusSupported, Subcommands: []string{"append"}},
+		{Name: "schema", Status: capabilityStatusSupported, Subcommands: []string{"validate", "export", "migrate"}},
+		{Name: "lock", Status: capabilityStatusSupported, Subcommands: []string{"recover"}},
+		{Name: "diagnostics", Status: capabilityStatusSupported, Subcommands: []string{"export"}},
+		{Name: "phase-plan", Status: capabilityStatusPlanned, Subcommands: []string{}},
+		{Name: "approval", Status: capabilityStatusPlanned, Subcommands: []string{}},
+	}
+	if !slices.EqualFunc(groups, want, func(got capabilityCommandGroup, want capabilityCommandGroup) bool {
+		return got.Name == want.Name && got.Status == want.Status && slices.Equal(got.Subcommands, want.Subcommands)
+	}) {
+		t.Fatalf("command groups = %#v, want %#v", groups, want)
 	}
 }
 

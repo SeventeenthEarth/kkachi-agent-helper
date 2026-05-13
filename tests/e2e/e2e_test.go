@@ -631,6 +631,16 @@ func TestReleasePackaging(t *testing.T) {
 		t.Fatalf("release artifact version: %v", err)
 	}
 	requireContains(t, string(out), `"version":"0.1.0"`, "version JSON")
+	capabilities := exec.Command(artifact, "capabilities", "--json")
+	out, err = capabilities.Output()
+	if err != nil {
+		t.Fatalf("release artifact capabilities: %v", err)
+	}
+	requireContains(t, string(out), `"version":"0.1.0"`, "capabilities helper version")
+	requireContains(t, string(out), `"project_schema_version":"0.1"`, "capabilities schema version")
+	requireContains(t, string(out), `"backend_evidence_requirements":true`, "capabilities backend evidence flag")
+	requireContains(t, string(out), `"phase_plan":false`, "capabilities phase-plan flag")
+	requireContains(t, string(out), `"name":"install"`, "capabilities omitted install")
 	runMake(t, "VERSION=0.1.0", "COMMIT=e2e", "BUILD_DATE=2026-01-01T00:00:00Z", "PREFIX="+prefix, "install-local")
 	installed := filepath.Join(prefix, "bin/kkachi-agent-helper")
 	out, err = exec.Command(installed, "version", "--json").Output()
@@ -638,6 +648,11 @@ func TestReleasePackaging(t *testing.T) {
 		t.Fatalf("installed version: %v", err)
 	}
 	requireContains(t, string(out), `"commit":"e2e"`, "installed version JSON")
+	out, err = exec.Command(installed, "capabilities", "--json").Output()
+	if err != nil {
+		t.Fatalf("installed capabilities: %v", err)
+	}
+	requireContains(t, string(out), `"commit":"e2e"`, "installed capabilities JSON")
 }
 
 func runMake(t *testing.T, args ...string) {

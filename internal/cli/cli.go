@@ -19,6 +19,9 @@ const (
 	ExitNotFound = 4
 )
 
+// commandGroups contains top-level command groups that require repository root
+// discovery before dispatch. Project-independent commands such as version and
+// capabilities are handled before this map is consulted.
 var commandGroups = map[string]struct{}{
 	"project":     {},
 	"run":         {},
@@ -30,12 +33,59 @@ var commandGroups = map[string]struct{}{
 	"diagnostics": {},
 }
 
+const (
+	// capabilitiesSchemaVersion versions the JSON contract emitted by
+	// capabilities --json. Keep bump rules in sync with docs/compatibility.md.
+	capabilitiesSchemaVersion = "0.1"
+	capabilityStatusSupported = "supported"
+	capabilityStatusPlanned   = "planned"
+	capabilityStatusOmitted   = "omitted"
+)
+
 // BuildInfo is the public version payload returned by the CLI.
 type BuildInfo struct {
 	Name      string `json:"name"`
 	Version   string `json:"version"`
 	Commit    string `json:"commit"`
 	BuildDate string `json:"build_date"`
+}
+
+type capabilitiesOutput struct {
+	Helper                    BuildInfo                 `json:"helper"`
+	CapabilitiesSchemaVersion string                    `json:"capabilities_schema_version"`
+	ProjectSchemaVersion      string                    `json:"project_schema_version"`
+	CommandGroups             []capabilityCommandGroup  `json:"command_groups"`
+	CompatibilityFlags        compatibilityFlagsOutput  `json:"compatibility_flags"`
+	DeprecatedSurfaces        []capabilitySurfaceOutput `json:"deprecated_surfaces"`
+	OmittedSurfaces           []capabilitySurfaceOutput `json:"omitted_surfaces"`
+}
+
+type capabilityCommandGroup struct {
+	Name        string   `json:"name"`
+	Status      string   `json:"status"`
+	Subcommands []string `json:"subcommands"`
+}
+
+type compatibilityFlagsOutput struct {
+	ProjectInit                 bool `json:"project_init"`
+	ProjectStatus               bool `json:"project_status"`
+	ProjectDoctor               bool `json:"project_doctor"`
+	RunLifecycle                bool `json:"run_lifecycle"`
+	ArtifactInit                bool `json:"artifact_init"`
+	ArtifactList                bool `json:"artifact_list"`
+	ArtifactValidate            bool `json:"artifact_validate"`
+	Gates                       bool `json:"gates"`
+	BackendEvidenceRequirements bool `json:"backend_evidence_requirements"`
+	DiagnosticsExport           bool `json:"diagnostics_export"`
+	PhasePlan                   bool `json:"phase_plan"`
+	ApprovalRecords             bool `json:"approval_records"`
+	InstallCommand              bool `json:"install_command"`
+}
+
+type capabilitySurfaceOutput struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Reason string `json:"reason"`
 }
 
 type cliError struct {
@@ -265,6 +315,8 @@ func runWithOptions(args []string, stdout io.Writer, stderr io.Writer, info Buil
 	case "version":
 		writeVersion(stdout, info, opts.json)
 		return ExitOK
+	case "capabilities":
+		return runCapabilitiesCommand(opts.args[1:], stdout, stderr, info, opts.json)
 	default:
 		if _, ok := commandGroups[command]; ok {
 			root, err := project.DiscoverRoot(options.workingDir)
@@ -314,6 +366,23 @@ func runWithOptions(args []string, stdout io.Writer, stderr io.Writer, info Buil
 		})
 		return ExitUsage
 	}
+}
+
+func runCapabilitiesCommand(args []string, stdout io.Writer, stderr io.Writer, info BuildInfo, jsonMode bool) int {
+	if len(args) != 0 {
+		writeError(stderr, jsonMode, cliError{
+			Code:     "unknown_option",
+			Message:  fmt.Sprintf("unknown capabilities option %q", args[0]),
+			Hint:     capabilitiesUsageHint(),
+			ExitCode: ExitUsage,
+			Field:    "option",
+			Expected: "optional global --json only",
+			Actual:   args[0],
+		})
+		return ExitUsage
+	}
+	writeCapabilities(stdout, info, jsonMode)
+	return ExitOK
 }
 
 func runDiagnosticsCommand(args []string, root project.Root, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
@@ -1179,6 +1248,10 @@ func runUsageHint() string {
 	return "Use run create|activate|close|abort|list|show."
 }
 
+func capabilitiesUsageHint() string {
+	return "Use capabilities --json for the stable command-surface compatibility report."
+}
+
 func runCreateUsageHint() string {
 	return "Use run create --title <title> --work-path <A_development_execution|B_discovery_shaping> --work-mode <standard|light> --urgency <normal|urgent|critical> --sot-policy <existing_sot_basis|minimal_sot_before_code|full_sot_before_code> --execution-mode <production_write|adapter_qa|readiness_hardening|research|verification|docs_only> --commander <profile> [--backend-evidence <auto|required|not_applicable>] [--task-id <id>] [--redteam <profile>]."
 }
@@ -1221,6 +1294,61 @@ func writeVersion(w io.Writer, info BuildInfo, jsonMode bool) {
 		parts = append(parts, "built "+info.BuildDate)
 	}
 	fmt.Fprintln(w, strings.Join(parts, " "))
+}
+
+func writeCapabilities(w io.Writer, info BuildInfo, jsonMode bool) {
+	payload := capabilitiesPayload(info)
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(payload)
+		return
+	}
+	fmt.Fprintf(w, "%s capabilities\n", info.Name)
+	fmt.Fprintf(w, "helper_version: %s\n", info.Version)
+	fmt.Fprintf(w, "capabilities_schema_version: %s\n", payload.CapabilitiesSchemaVersion)
+	fmt.Fprintf(w, "project_schema_version: %s\n", payload.ProjectSchemaVersion)
+	fmt.Fprintln(w, "json_contract: use capabilities --json")
+}
+
+func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
+	return capabilitiesOutput{
+		Helper:                    info,
+		CapabilitiesSchemaVersion: capabilitiesSchemaVersion,
+		ProjectSchemaVersion:      project.SchemaVersion,
+		// Keep this explicit inventory aligned with commandGroups plus the
+		// implemented command dispatch switch above. Planned command surfaces
+		// are listed here only when KHS compatibility checks need to see them.
+		CommandGroups: []capabilityCommandGroup{
+			{Name: "project", Status: capabilityStatusSupported, Subcommands: []string{"init", "status", "doctor"}},
+			{Name: "run", Status: capabilityStatusSupported, Subcommands: []string{"create", "activate", "close", "abort", "list", "show"}},
+			{Name: "artifact", Status: capabilityStatusSupported, Subcommands: []string{"init", "list", "validate"}},
+			{Name: "gate", Status: capabilityStatusSupported, Subcommands: []string{"check", "final"}},
+			{Name: "event", Status: capabilityStatusSupported, Subcommands: []string{"append"}},
+			{Name: "schema", Status: capabilityStatusSupported, Subcommands: []string{"validate", "export", "migrate"}},
+			{Name: "lock", Status: capabilityStatusSupported, Subcommands: []string{"recover"}},
+			{Name: "diagnostics", Status: capabilityStatusSupported, Subcommands: []string{"export"}},
+			{Name: "phase-plan", Status: capabilityStatusPlanned, Subcommands: []string{}},
+			{Name: "approval", Status: capabilityStatusPlanned, Subcommands: []string{}},
+		},
+		CompatibilityFlags: compatibilityFlagsOutput{
+			ProjectInit:                 true,
+			ProjectStatus:               true,
+			ProjectDoctor:               true,
+			RunLifecycle:                true,
+			ArtifactInit:                true,
+			ArtifactList:                true,
+			ArtifactValidate:            true,
+			Gates:                       true,
+			BackendEvidenceRequirements: true,
+			DiagnosticsExport:           true,
+			PhasePlan:                   false,
+			ApprovalRecords:             false,
+			InstallCommand:              false,
+		},
+		DeprecatedSurfaces: []capabilitySurfaceOutput{},
+		OmittedSurfaces: []capabilitySurfaceOutput{
+			{Name: "install", Status: capabilityStatusOmitted, Reason: "KAH project bootstrap is handled by project init; Hermes/KHS skill installation belongs to Hermes native tooling."},
+		},
+	}
 }
 
 func writeProjectInitResult(w io.Writer, result project.InitResult, jsonMode bool) {
@@ -1677,7 +1805,7 @@ func writeHumanError(w io.Writer, err cliError) {
 }
 
 func usageHint() string {
-	return "Usage: kkachi-agent-helper [--json] <version|project|run|artifact|gate|event|schema|lock|diagnostics>"
+	return "Usage: kkachi-agent-helper [--json] <version|capabilities|project|run|artifact|gate|event|schema|lock|diagnostics>"
 }
 
 func redactCLIError(err cliError) cliError {

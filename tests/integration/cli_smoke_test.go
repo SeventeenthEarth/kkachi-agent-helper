@@ -24,6 +24,45 @@ func TestBinaryEntrypointSmoke(t *testing.T) {
 	}
 }
 
+func TestCapabilitiesJSONAtBinaryBoundary(t *testing.T) {
+	binary := buildHelperBinary(t)
+	output := runHelper(t, binary, t.TempDir(), "capabilities", "--json")
+	var payload struct {
+		Helper struct {
+			Version string `json:"version"`
+		} `json:"helper"`
+		ProjectSchemaVersion string `json:"project_schema_version"`
+		CompatibilityFlags   struct {
+			BackendEvidenceRequirements bool `json:"backend_evidence_requirements"`
+			PhasePlan                   bool `json:"phase_plan"`
+			ApprovalRecords             bool `json:"approval_records"`
+			InstallCommand              bool `json:"install_command"`
+		} `json:"compatibility_flags"`
+		OmittedSurfaces []struct {
+			Name   string `json:"name"`
+			Status string `json:"status"`
+		} `json:"omitted_surfaces"`
+	}
+	if err := json.Unmarshal(output, &payload); err != nil {
+		t.Fatalf("capabilities output is not JSON: %v\n%s", err, string(output))
+	}
+	if payload.Helper.Version != "0.1.0" || payload.ProjectSchemaVersion != "0.1" {
+		t.Fatalf("payload versions = %#v, want helper 0.1.0 and schema 0.1", payload)
+	}
+	if !payload.CompatibilityFlags.BackendEvidenceRequirements || payload.CompatibilityFlags.PhasePlan || payload.CompatibilityFlags.ApprovalRecords || payload.CompatibilityFlags.InstallCommand {
+		t.Fatalf("compatibility flags = %#v, want current align-003 support matrix", payload.CompatibilityFlags)
+	}
+	foundInstall := false
+	for _, surface := range payload.OmittedSurfaces {
+		if surface.Name == "install" && surface.Status == "omitted" {
+			foundInstall = true
+		}
+	}
+	if !foundInstall {
+		t.Fatalf("omitted surfaces = %#v, want install omitted", payload.OmittedSurfaces)
+	}
+}
+
 func TestInstallCommandRemovedAtBinaryBoundary(t *testing.T) {
 	binary := buildHelperBinary(t)
 	repo := t.TempDir()
