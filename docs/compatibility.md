@@ -15,4 +15,5 @@ This matrix records the local-only compatibility contract for `kkachi-agent-help
 - `project init` owns KAH project bootstrap files: `.kkachi/config.yaml`, `.kkachi/project-overlay.yaml`, `docs/kkachi-docs-map.yaml`, status, events, and schema copies.
 - `project init --force` reconfigures bootstrap files without deleting status, events, runs, artifacts, or gate history.
 - KAH does not install KHS/Hermes skill content. Use Hermes native skill installation for skill packages.
+- KHS owns normalized `checklist.md` generation. KAH's `plan` gate requires completed `acceptance-criteria.md`, `plan.md`, and `checklist.md`, but it does not parse or require KAB planner-only sections such as `KHS Checklist Seed`.
 - Examples and release artifacts must stay local and secret-free. Do not publish tokens, API keys, bearer headers, bridge session secrets, or production repository paths in docs, bundles, or release notes.

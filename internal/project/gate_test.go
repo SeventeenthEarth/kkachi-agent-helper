@@ -262,19 +262,11 @@ func TestCheckGateRoadmapPassesByCompletedUpdateAndRejectsMissingExceptionReason
 }
 
 func TestCheckGatePlanRequiresAcceptancePlanAndChecklist(t *testing.T) {
-	repo := initializedRepo(t)
-	root, _ := DiscoverRoot(repo)
-	created, err := CreateRun(root, deterministicCreateRunOptions())
-	if err != nil {
-		t.Fatalf("CreateRun() error = %v", err)
-	}
-	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
-		t.Fatalf("InitArtifacts() error = %v", err)
-	}
-	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "acceptance-criteria.md", "Status: complete\nCriteria: deterministic\n")
-	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "plan.md", "Status: complete\nPlan: validate gates\n")
+	repo, root, runID := initializedPlanGateRun(t)
+	writeMarkdownArtifact(t, repo, runID, "acceptance-criteria.md", "Status: complete\nCriteria: deterministic\n")
+	writeMarkdownArtifact(t, repo, runID, "plan.md", "Status: complete\nPlan: validate gates\n")
 
-	failed, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GatePlan, Now: testRunNow(5)})
+	failed, err := CheckGate(root, GateCheckOptions{RunID: runID, Gate: GatePlan, Now: testRunNow(5)})
 	if err != nil {
 		t.Fatalf("CheckGate(plan fail) error = %v", err)
 	}
@@ -282,8 +274,8 @@ func TestCheckGatePlanRequiresAcceptancePlanAndChecklist(t *testing.T) {
 		t.Fatalf("failed = %#v, want checklist failure", failed)
 	}
 
-	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "checklist.md", "Status: complete\n- [x] lock plan gate\n")
-	passed, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GatePlan, Now: testRunNow(6)})
+	writeMarkdownArtifact(t, repo, runID, "checklist.md", "Status: complete\n- [x] lock plan gate\n")
+	passed, err := CheckGate(root, GateCheckOptions{RunID: runID, Gate: GatePlan, Now: testRunNow(6)})
 	if err != nil {
 		t.Fatalf("CheckGate(plan pass) error = %v", err)
 	}
@@ -293,6 +285,132 @@ func TestCheckGatePlanRequiresAcceptancePlanAndChecklist(t *testing.T) {
 }
 
 func TestCheckGatePlanRejectsNotApplicableEvidence(t *testing.T) {
+	repo, root, runID := initializedPlanGateRun(t)
+	writeMarkdownArtifact(t, repo, runID, "acceptance-criteria.md", "Status: not_applicable\nReason: low risk\n")
+	writeMarkdownArtifact(t, repo, runID, "plan.md", "Status: complete\nPlan: validate gates\n")
+	writeMarkdownArtifact(t, repo, runID, "checklist.md", "Status: complete\n- [x] lock plan gate\n")
+
+	result, err := CheckGate(root, GateCheckOptions{RunID: runID, Gate: GatePlan, Now: testRunNow(5)})
+	if err != nil {
+		t.Fatalf("CheckGate(plan not_applicable) error = %v", err)
+	}
+	if result.Status != GateStatusFail || result.EventID != "evt-000004" || !gateCheckStatus(result.Checks, "acceptance_criteria", GateStatusFail) || !gateCheckActual(result.Checks, "acceptance_criteria", "not_applicable") {
+		t.Fatalf("result = %#v, want plan not_applicable rejection", result)
+	}
+}
+
+func TestCheckGatePlanIgnoresKABChecklistSeedSections(t *testing.T) {
+	tests := []struct {
+		name           string
+		planBody       string
+		writeChecklist bool
+		wantStatus     string
+		wantCheck      string
+	}{
+		{
+			name:           "complete without KHS Checklist Seed",
+			planBody:       "Status: complete\nPlan: implement from normalized KHS artifacts\n",
+			writeChecklist: true,
+			wantStatus:     GateStatusPass,
+		},
+		{
+			name:           "complete with KHS Checklist Seed",
+			planBody:       "Status: complete\nPlan: implement from normalized KHS artifacts\n\n## KHS Checklist Seed\n- seed item from KAB planner\n",
+			writeChecklist: true,
+			wantStatus:     GateStatusPass,
+		},
+		{
+			name:           "seed section does not replace checklist artifact",
+			planBody:       "Status: complete\nPlan: implement from normalized KHS artifacts\n\n## KHS Checklist Seed\n- seed item from KAB planner\n",
+			writeChecklist: false,
+			wantStatus:     GateStatusFail,
+			wantCheck:      "checklist_artifact",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, root, runID := initializedPlanGateRun(t)
+			writeMarkdownArtifact(t, repo, runID, "acceptance-criteria.md", "Status: complete\nCriteria: deterministic\n")
+			writeMarkdownArtifact(t, repo, runID, "plan.md", tt.planBody)
+			if tt.writeChecklist {
+				writeMarkdownArtifact(t, repo, runID, "checklist.md", "Status: complete\n- [x] normalized by KHS\n")
+			} else {
+				mustRemove(t, filepath.Join(repo, ".kkachi", "runs", runID, "checklist.md"))
+			}
+
+			result, err := CheckGate(root, GateCheckOptions{RunID: runID, Gate: GatePlan, Now: testRunNow(5)})
+			if err != nil {
+				t.Fatalf("CheckGate(plan) error = %v", err)
+			}
+			if result.Status != tt.wantStatus {
+				t.Fatalf("result = %#v, want status %s", result, tt.wantStatus)
+			}
+			if tt.wantCheck != "" && !gateCheckStatus(result.Checks, tt.wantCheck, tt.wantStatus) {
+				t.Fatalf("result = %#v, want %s %s", result, tt.wantCheck, tt.wantStatus)
+			}
+		})
+	}
+}
+
+func TestCheckGatePlanRejectsMissingEmptyAndPendingArtifacts(t *testing.T) {
+	tests := []struct {
+		name       string
+		artifact   string
+		check      string
+		setup      func(t *testing.T, path string)
+		wantActual string
+	}{
+		{
+			name:     "missing acceptance criteria",
+			artifact: "acceptance-criteria.md",
+			check:    "acceptance_criteria",
+			setup: func(t *testing.T, path string) {
+				t.Helper()
+				mustRemove(t, path)
+			},
+			wantActual: "missing",
+		},
+		{
+			name:     "empty plan",
+			artifact: "plan.md",
+			check:    "plan_artifact",
+			setup: func(t *testing.T, path string) {
+				t.Helper()
+				mustWriteFile(t, path, nil)
+			},
+			wantActual: "empty",
+		},
+		{
+			name:     "pending checklist",
+			artifact: "checklist.md",
+			check:    "checklist_artifact",
+			setup: func(t *testing.T, path string) {
+				t.Helper()
+				mustWriteFile(t, path, []byte("# checklist.md\n\nStatus: pending\n- [ ] unresolved\n"))
+			},
+			wantActual: "pending",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, root, runID := initializedPlanGateRun(t)
+			writeCompletedPlanArtifacts(t, repo, runID)
+			path := filepath.Join(repo, ".kkachi", "runs", runID, filepath.FromSlash(tt.artifact))
+			tt.setup(t, path)
+
+			result, err := CheckGate(root, GateCheckOptions{RunID: runID, Gate: GatePlan, Now: testRunNow(5)})
+			if err != nil {
+				t.Fatalf("CheckGate(plan) error = %v", err)
+			}
+			if result.Status != GateStatusFail || !gateCheckStatus(result.Checks, tt.check, GateStatusFail) || !gateCheckActual(result.Checks, tt.check, tt.wantActual) || len(result.MissingEvidence) == 0 {
+				t.Fatalf("result = %#v, want failed %s with actual %q and missing evidence", result, tt.check, tt.wantActual)
+			}
+		})
+	}
+}
+
+func initializedPlanGateRun(t *testing.T) (string, Root, string) {
+	t.Helper()
 	repo := initializedRepo(t)
 	root, _ := DiscoverRoot(repo)
 	created, err := CreateRun(root, deterministicCreateRunOptions())
@@ -302,17 +420,7 @@ func TestCheckGatePlanRejectsNotApplicableEvidence(t *testing.T) {
 	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
 		t.Fatalf("InitArtifacts() error = %v", err)
 	}
-	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "acceptance-criteria.md", "Status: not_applicable\nReason: low risk\n")
-	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "plan.md", "Status: complete\nPlan: validate gates\n")
-	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "checklist.md", "Status: complete\n- [x] lock plan gate\n")
-
-	result, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GatePlan, Now: testRunNow(5)})
-	if err != nil {
-		t.Fatalf("CheckGate(plan not_applicable) error = %v", err)
-	}
-	if result.Status != GateStatusFail || result.EventID != "evt-000004" || !gateCheckStatus(result.Checks, "acceptance_criteria", GateStatusFail) || !gateCheckActual(result.Checks, "acceptance_criteria", "not_applicable") {
-		t.Fatalf("result = %#v, want plan not_applicable rejection", result)
-	}
+	return repo, root, created.Metadata.RunID
 }
 
 func TestCheckGateMarkdownArtifactFailures(t *testing.T) {

@@ -21,6 +21,7 @@ Status values: `Planned`, `In Progress`, `Blocked`, `Completed`, `Deferred`.
 | 3 | `gates` | Deterministic workflow gates for Kkachi Path A / Path B readiness. |
 | 4 | `packg` | Versioned schemas, migration surface, and historical package/bootstrap contract. |
 | 5 | `pilot` | End-to-end evidence, diagnostics, docs, release, and MVP pilot proof. |
+| 6 | `align` | KHS can consume KAH `@latest` through stable capability checks, declared backend evidence, phase-plan validation, and compatibility diagnostics. |
 
 ## Active roadmap
 
@@ -81,6 +82,23 @@ Status values: `Planned`, `In Progress`, `Blocked`, `Completed`, `Deferred`.
 | pilot-003 | User docs, compatibility, and release packaging | Completed | Write README quickstart, command reference, specs links, helper/bridge/skills version matrix, release notes format, build artifacts, checksums, and local install command. Keep examples local and secret-free. | Implemented README quickstart/command reference, compatibility matrix, release notes template, `install-local`, release artifact/checksum packaging, and e2e packaging coverage. |
 | pilot-004 | MVP pilot acceptance run | Completed | Execute one real Kkachi pilot run and preserve evidence: status, events, artifacts, bridge evidence, verification, docs-update decision, gate report, diagnostics bundle, and final report. | Implemented a black-box E2E acceptance run that records adapter QA bridge evidence, passes all required gates, preserves run-local gate reports, exports a diagnostics bundle, and verifies status/events/final-report evidence. |
 | pilot-005 | Go-native E2E harness cleanup | Completed | Replace Python-assisted shell E2E helpers with Go-native test helpers or Go E2E tests. Remove `python3` as an E2E harness dependency while preserving black-box CLI coverage and golden workspace scenarios. | Implemented Go-native black-box E2E tests for lifecycle, locks, golden workspaces, diagnostics, release packaging, and MVP acceptance; `make test-e2e` now runs `go test ./tests/e2e` with no `python3` harness dependency. |
+
+### EPIC: align — KHS/KAH integration alignment
+
+> Goal: let KHS use KAH `@latest` safely while preserving the boundary that KHS owns workflow policy and KAH owns deterministic state, artifact, gate, event, and diagnostics validation.
+>
+> Source of truth: `docs/TODO-ALIGN.md` owns the detailed scope, acceptance criteria, and implementation notes for this epic; this roadmap tracks task ids, order, and status.
+
+| Task ID | Title | Status | Work guide | Notes |
+|---|---|---|---|---|
+| align-001 | Plan/checklist ownership contract | Completed | Document and test that the `plan` gate requires completed `acceptance-criteria.md`, `plan.md`, and `checklist.md`; state that KHS owns checklist normalization and KAH does not parse KAB-specific planner sections such as `KHS Checklist Seed`. | Implemented as docs/spec/compatibility contract hardening plus unit regressions for missing, empty, pending, complete, and seed-section plan cases. |
+| align-002 | Declared backend evidence requirement | Planned | Add an explicit run metadata/CLI contract for KHS to require backend evidence independently of `execution_mode`; when declared required, include `selected-cli.json`, `capability-check.md`, `bridge-session-snapshot.json`, and `bridge-events.md` in `required_artifacts` and make the backend gate fail closed until complete. | Highest real behavior gap; preserves KAH boundary by validating only KHS-declared requirements. |
+| align-003 | Command-surface capabilities report | Planned | Add `capabilities --json` with helper version, schema version, supported command groups, deprecated/omitted surfaces, and compatibility flags needed by KHS activation checks. | Enables KHS `@latest` compatibility checks without fragile patch-version pinning. |
+| align-004 | Standard help UX | Planned | Support stable `help` / `--help` output for top-level and command groups, including required arguments, options, and documented JSON behavior. | Human and automation discoverability; can ship separately from capabilities if parser changes grow. |
+| align-005 | Phase-plan validation and diagnostics | Planned | Add deterministic support for KHS-declared phase plans: initialize/show/validate/update phase state or an equivalent KAH-managed representation, require reasons for skipped/not-applicable phases, and include phase-plan evidence in diagnostics. | KAH must store/validate declared phase state only; it must not infer phase applicability or reorder phases. |
+| align-006 | Deterministic artifact mutation commands | Planned | Add safe `artifact write`, `artifact append`, and `artifact set-status` commands for canonical run artifacts with path safety, atomic writes, status updates, and event recording while keeping direct-file compatibility during migration. | Useful after phase/plan contracts stabilize; avoid making the first integration PR too large. |
+| align-007 | Approval record surface | Planned | Add approval request/record/show commands or a strict approval event schema so KHS can record high-risk phase approvals with phase, reason, decision, approver, timestamp, and evidence reference. | KAH records declarations only; KHS decides when approval is required. |
+| align-008 | KHS/KAH compatibility contract docs | Planned | Update README/specs/compatibility docs to state the KHS/KAH boundary, `project init` bootstrap contract, no Hermes skill installation, `@latest` plus capabilities policy, and tested-version recommendation model. | Final docs consolidation after command surfaces land. |
 
 ## Backlog and review points
 

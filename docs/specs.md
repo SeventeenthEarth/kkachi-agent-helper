@@ -385,6 +385,7 @@ Behavior in `gates-001` through `gates-005`:
 - `sot` is implemented by requiring completed `sot-basis.md` for Path A or completed `sot-update.md` for Path B.
 - `roadmap` is implemented by accepting a non-empty run metadata `task_id`, completed `roadmap-update.md`, or `roadmap-update.md` with `Status: not_applicable` plus a non-empty `Reason:`.
 - `plan` is implemented by requiring completed `acceptance-criteria.md`, `plan.md`, and `checklist.md`.
+  KHS owns any checklist normalization needed before writing `checklist.md`; KAH validates only the completed artifacts and does not parse or require KAB-specific planner sections such as `KHS Checklist Seed`.
 - `backend` is implemented as a manifest-driven gate. If `required_artifacts` includes backend evidence, it validates `selected-cli.json`, `capability-check.md`, `bridge-session-snapshot.json`, and `bridge-events.md`; if not, it passes as not applicable with a check tied to `run-metadata.json`.
 - `implementation` is implemented by requiring a non-empty `diff.patch`, completed `impl-log.md`, and `cli-output.md` only when the run manifest requires it.
 - `review` is implemented by requiring completed `review.md` and every `redteam/*` artifact listed in `required_artifacts`.
@@ -642,7 +643,7 @@ Initial gate names:
 | `intake` | `run-metadata.json`, `intake-classification.md`, path/mode eligibility. |
 | `sot` | `sot-basis.md` or Path B SOT update evidence. |
 | `roadmap` | `task_id` trace, `roadmap-update.md`, or explicit not-applicable reason. |
-| `plan` | `acceptance-criteria.md`, `plan.md`, `checklist.md`. |
+| `plan` | Completed `acceptance-criteria.md`, `plan.md`, and KHS-normalized `checklist.md`; KAH does not parse KAB planner seed sections. |
 | `backend` | bridge evidence artifacts when bridge is used. |
 | `implementation` | `diff.patch`, `impl-log.md`, optional `cli-output.md`. |
 | `review` | `review.md` and required red-team artifacts. |
