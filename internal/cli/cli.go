@@ -643,6 +643,8 @@ func parseRunCreateOptions(args []string, stderr io.Writer, jsonMode bool) (proj
 			options.SOTPolicy = value
 		case "--execution-mode":
 			options.ExecutionMode = value
+		case "--backend-evidence":
+			options.BackendEvidence = value
 		case "--commander":
 			options.Commander = value
 		case "--task-id":
@@ -1178,7 +1180,7 @@ func runUsageHint() string {
 }
 
 func runCreateUsageHint() string {
-	return "Use run create --title <title> --work-path <A_development_execution|B_discovery_shaping> --work-mode <standard|light> --urgency <normal|urgent|critical> --sot-policy <existing_sot_basis|minimal_sot_before_code|full_sot_before_code> --execution-mode <production_write|adapter_qa|readiness_hardening|research|verification|docs_only> --commander <profile> [--task-id <id>] [--redteam <profile>]."
+	return "Use run create --title <title> --work-path <A_development_execution|B_discovery_shaping> --work-mode <standard|light> --urgency <normal|urgent|critical> --sot-policy <existing_sot_basis|minimal_sot_before_code|full_sot_before_code> --execution-mode <production_write|adapter_qa|readiness_hardening|research|verification|docs_only> --commander <profile> [--backend-evidence <auto|required|not_applicable>] [--task-id <id>] [--redteam <profile>]."
 }
 
 func missingOptionValueError(option string, expected string, hint string) cliError {

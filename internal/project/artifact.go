@@ -232,6 +232,9 @@ func ArtifactManifest(metadata RunMetadata) []string {
 	case "verification":
 		required = append(required, "review.md")
 	}
+	if metadata.BackendEvidence == BackendEvidenceRequired {
+		required = append(required, backendGateArtifacts...)
+	}
 	if metadata.Redteam != nil {
 		required = append(required, "redteam/plan-review.md", "redteam/shaping-review.md", "redteam/final-gate-review.md")
 	}

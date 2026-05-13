@@ -20,14 +20,14 @@ type backendIdentity struct {
 }
 
 func checkBackendGate(root Root, metadata RunMetadata, metadataRelative string) (GateCheckResult, error) {
-	if !backendGateRequired(metadata.RequiredArtifacts) {
+	if !backendGateRequired(metadata) {
 		return gateResultFromChecks(metadata.RunID, GateBackend, []GateCheck{{
 			Name:    "backend_manifest",
 			Status:  GateStatusPass,
 			Path:    metadataRelative,
 			Message: "backend gate is not applicable because the run manifest does not require backend artifacts",
-			Field:   "required_artifacts",
-			Actual:  "backend artifacts not required",
+			Field:   "backend_evidence",
+			Actual:  metadata.BackendEvidence,
 		}}), nil
 	}
 
@@ -42,7 +42,14 @@ func checkBackendGate(root Root, metadata RunMetadata, metadataRelative string) 
 	return gateResultFromChecks(metadata.RunID, GateBackend, checks), nil
 }
 
-func backendGateRequired(required []string) bool {
+func backendGateRequired(metadata RunMetadata) bool {
+	if metadata.BackendEvidence == BackendEvidenceRequired {
+		return true
+	}
+	return backendArtifactsRequired(metadata.RequiredArtifacts)
+}
+
+func backendArtifactsRequired(required []string) bool {
 	requiredSet := stringSet(required)
 	for _, artifact := range backendGateArtifacts {
 		if requiredSet[artifact] {

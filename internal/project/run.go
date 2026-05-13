@@ -19,6 +19,10 @@ const (
 	RunStateActive  = "active"
 	RunStateClosed  = "closed"
 	RunStateAborted = "aborted"
+
+	BackendEvidenceRequired      = "required"
+	BackendEvidenceNotApplicable = "not_applicable"
+	BackendEvidenceAuto          = "auto"
 )
 
 var (
@@ -39,6 +43,7 @@ type RunMetadata struct {
 	Urgency           string         `json:"urgency"`
 	SOTPolicy         string         `json:"sot_policy"`
 	ExecutionMode     string         `json:"execution_mode"`
+	BackendEvidence   string         `json:"backend_evidence"`
 	Commander         string         `json:"commander"`
 	Redteam           *string        `json:"redteam"`
 	CreatedAt         string         `json:"created_at"`
@@ -56,17 +61,18 @@ type RunSummary struct {
 }
 
 type CreateRunOptions struct {
-	TaskID        string
-	Title         string
-	WorkPath      string
-	WorkMode      string
-	Urgency       string
-	SOTPolicy     string
-	ExecutionMode string
-	Commander     string
-	Redteam       string
-	Now           func() time.Time
-	RandomHex     func(int) (string, error)
+	TaskID          string
+	Title           string
+	WorkPath        string
+	WorkMode        string
+	Urgency         string
+	SOTPolicy       string
+	ExecutionMode   string
+	BackendEvidence string
+	Commander       string
+	Redteam         string
+	Now             func() time.Time
+	RandomHex       func(int) (string, error)
 }
 
 type RunLifecycleOptions struct {
@@ -162,6 +168,7 @@ func createRunUnlocked(root Root, options CreateRunOptions) (CreateRunResult, er
 		Urgency:           strings.TrimSpace(options.Urgency),
 		SOTPolicy:         strings.TrimSpace(options.SOTPolicy),
 		ExecutionMode:     strings.TrimSpace(options.ExecutionMode),
+		BackendEvidence:   ResolveBackendEvidence(options.ExecutionMode, options.BackendEvidence),
 		Commander:         strings.TrimSpace(options.Commander),
 		Redteam:           optionalTrimmedString(options.Redteam),
 		CreatedAt:         createdAt,
@@ -253,6 +260,7 @@ func ReadRunMetadata(root Root, query string) (RunMetadata, SafePath, error) {
 	if err := json.Unmarshal(data, &metadata); err != nil {
 		return RunMetadata{}, SafePath{}, &Problem{Code: "run_metadata_invalid_json", Message: "run metadata is not valid JSON", Hint: "Restore run-metadata.json from a coherent backup before mutating the run.", Path: path.Relative, Field: "json", Expected: "JSON object run metadata", Actual: err.Error()}
 	}
+	NormalizeRunMetadataCompatibility(&metadata)
 	if err := validateRunMetadata(metadata, path.Relative); err != nil {
 		return RunMetadata{}, SafePath{}, err
 	}
@@ -395,7 +403,7 @@ func preflightEventCoherence(root Root) error {
 }
 
 func runEventPayload(metadata RunMetadata) map[string]any {
-	payload := map[string]any{"run_id": metadata.RunID, "title": metadata.Title, "state": metadata.State, "work_path": metadata.WorkPath, "work_mode": metadata.WorkMode, "urgency": metadata.Urgency, "sot_policy": metadata.SOTPolicy, "execution_mode": metadata.ExecutionMode, "commander": metadata.Commander}
+	payload := map[string]any{"run_id": metadata.RunID, "title": metadata.Title, "state": metadata.State, "work_path": metadata.WorkPath, "work_mode": metadata.WorkMode, "urgency": metadata.Urgency, "sot_policy": metadata.SOTPolicy, "execution_mode": metadata.ExecutionMode, "backend_evidence": metadata.BackendEvidence, "commander": metadata.Commander}
 	if metadata.TaskID != nil {
 		payload["task_id"] = *metadata.TaskID
 	}
@@ -412,11 +420,15 @@ func validateCreateRunOptions(options CreateRunOptions) error {
 			return &Problem{Code: "run_field_required", Message: "run create is missing a required field", Hint: "Pass all required run create flags: --title, --work-path, --work-mode, --urgency, --sot-policy, --execution-mode, --commander.", Field: item.field, Expected: "non-empty value", Actual: "empty"}
 		}
 	}
+	backendEvidence := strings.TrimSpace(options.BackendEvidence)
+	if backendEvidence != "" && !allowed(backendEvidence, BackendEvidenceAuto, BackendEvidenceRequired, BackendEvidenceNotApplicable) {
+		return &Problem{Code: "run_metadata_invalid", Message: "run create contains an invalid backend evidence declaration", Hint: "Use --backend-evidence auto, required, or not_applicable.", Field: "backend_evidence", Expected: "auto, required, or not_applicable", Actual: backendEvidence}
+	}
 	return nil
 }
 
 func validateRunMetadata(metadata RunMetadata, relative string) error {
-	checks := []struct{ field, value string }{{"version", metadata.Version}, {"run_id", metadata.RunID}, {"title", metadata.Title}, {"work_path", metadata.WorkPath}, {"work_mode", metadata.WorkMode}, {"urgency", metadata.Urgency}, {"sot_policy", metadata.SOTPolicy}, {"execution_mode", metadata.ExecutionMode}, {"commander", metadata.Commander}, {"created_at", metadata.CreatedAt}, {"state", metadata.State}}
+	checks := []struct{ field, value string }{{"version", metadata.Version}, {"run_id", metadata.RunID}, {"title", metadata.Title}, {"work_path", metadata.WorkPath}, {"work_mode", metadata.WorkMode}, {"urgency", metadata.Urgency}, {"sot_policy", metadata.SOTPolicy}, {"execution_mode", metadata.ExecutionMode}, {"backend_evidence", metadata.BackendEvidence}, {"commander", metadata.Commander}, {"created_at", metadata.CreatedAt}, {"state", metadata.State}}
 	for _, c := range checks {
 		if strings.TrimSpace(c.value) == "" {
 			return &Problem{Code: "run_metadata_invalid", Message: "run metadata is missing a required field", Hint: "Restore run-metadata.json from a coherent backup before mutating the run.", Path: relative, Field: c.field, Expected: "non-empty value", Actual: "empty"}
@@ -446,6 +458,9 @@ func validateRunMetadata(metadata RunMetadata, relative string) error {
 	if !allowed(metadata.ExecutionMode, "production_write", "adapter_qa", "readiness_hardening", "research", "verification", "docs_only") {
 		return invalidRunField(relative, "execution_mode", "production_write, adapter_qa, readiness_hardening, research, verification, or docs_only", metadata.ExecutionMode)
 	}
+	if !allowed(metadata.BackendEvidence, BackendEvidenceRequired, BackendEvidenceNotApplicable) {
+		return invalidRunField(relative, "backend_evidence", "required or not_applicable", metadata.BackendEvidence)
+	}
 	if !allowed(metadata.State, RunStateCreated, RunStateActive, RunStateClosed, RunStateAborted) {
 		return invalidRunField(relative, "state", "created, active, closed, or aborted", metadata.State)
 	}
@@ -456,6 +471,28 @@ func validateRunMetadata(metadata RunMetadata, relative string) error {
 		return invalidRunField(relative, "gate_state", "object", "null")
 	}
 	return nil
+}
+
+func ResolveBackendEvidence(executionMode string, declaration string) string {
+	switch strings.TrimSpace(declaration) {
+	case BackendEvidenceRequired:
+		return BackendEvidenceRequired
+	case BackendEvidenceNotApplicable:
+		return BackendEvidenceNotApplicable
+	case BackendEvidenceAuto, "":
+		if strings.TrimSpace(executionMode) == "adapter_qa" {
+			return BackendEvidenceRequired
+		}
+		return BackendEvidenceNotApplicable
+	default:
+		return strings.TrimSpace(declaration)
+	}
+}
+
+func NormalizeRunMetadataCompatibility(metadata *RunMetadata) {
+	if strings.TrimSpace(metadata.BackendEvidence) == "" {
+		metadata.BackendEvidence = BackendEvidenceNotApplicable
+	}
 }
 
 func invalidRunField(relative, field, expected, actual string) *Problem {

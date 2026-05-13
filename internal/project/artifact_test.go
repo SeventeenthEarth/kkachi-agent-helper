@@ -182,11 +182,13 @@ func TestInitArtifactsRejectsSymlinkArtifactPath(t *testing.T) {
 
 func TestArtifactManifestExecutionModes(t *testing.T) {
 	tests := []struct {
-		name          string
-		executionMode string
-		want          []string
+		name            string
+		executionMode   string
+		backendEvidence string
+		want            []string
 	}{
 		{name: "production write", executionMode: "production_write", want: []string{"diff.patch", "impl-log.md", "review.md", "redteam/impl-review.md", "redteam/test-review.md", "redteam/final-gate-review.md"}},
+		{name: "production write with backend evidence", executionMode: "production_write", backendEvidence: BackendEvidenceRequired, want: []string{"diff.patch", "impl-log.md", "review.md", "redteam/impl-review.md", "redteam/test-review.md", "redteam/final-gate-review.md", "selected-cli.json", "capability-check.md", "bridge-session-snapshot.json", "bridge-events.md"}},
 		{name: "readiness hardening", executionMode: "readiness_hardening", want: []string{"diff.patch", "impl-log.md", "review.md", "redteam/impl-review.md", "redteam/test-review.md", "redteam/final-gate-review.md"}},
 		{name: "adapter qa", executionMode: "adapter_qa", want: []string{"selected-cli.json", "capability-check.md", "bridge-session-snapshot.json", "bridge-events.md", "cli-output.md", "redteam/qa-review.md"}},
 		{name: "research", executionMode: "research", want: []string{"discovery/research-notes.md", "discovery/strategy-options.md", "discovery/selected-strategy.md"}},
@@ -196,9 +198,10 @@ func TestArtifactManifestExecutionModes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			metadata := RunMetadata{
-				WorkPath:      "A_development_execution",
-				WorkMode:      "standard",
-				ExecutionMode: tt.executionMode,
+				WorkPath:        "A_development_execution",
+				WorkMode:        "standard",
+				ExecutionMode:   tt.executionMode,
+				BackendEvidence: tt.backendEvidence,
 			}
 			got := ArtifactManifest(metadata)
 			for _, want := range tt.want {

@@ -83,7 +83,7 @@ KAH should validate the artifacts KHS writes, not the original KAB planner forma
 
 ### align-002 — Declared backend evidence requirement
 
-Status: Planned
+Status: Completed
 
 #### Problem
 
@@ -109,6 +109,13 @@ Execution mode and KAB usage must be separate concepts.
 - `artifact init` records required backend artifacts when the run requires them.
 - `gate check <run_id> backend` fails closed when required backend evidence is missing or incomplete.
 - KAH does not choose or override the backend; it validates declared artifact shape and completion only.
+
+#### Implementation notes
+
+- `run create --backend-evidence auto|required|not_applicable` now records resolved `run-metadata.json.backend_evidence`.
+- `auto` keeps adapter QA backend evidence required and direct/non-KAB production writes not applicable.
+- `backend_evidence=required` adds canonical backend artifacts to `required_artifacts` and makes the backend/final gates fail closed until evidence passes.
+- Unit, CLI, and integration regressions cover production-write backend declarations, direct defaults, adapter QA compatibility, invalid declarations, and legacy metadata without the field.
 
 ### align-003 — Command-surface capabilities report
 

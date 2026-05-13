@@ -100,7 +100,7 @@ func checkFinalGate(root Root, metadata RunMetadata, _ string) (GateCheckResult,
 	checks := []GateCheck{checkFinalReportArtifact(root, metadata.RunID)}
 
 	requiredGates := []string{GateIntake, GateSOT, GateRoadmap, GatePlan, GateImplementation, GateReview, GateVerification, GateDocs}
-	if backendGateRequired(metadata.RequiredArtifacts) {
+	if backendGateRequired(metadata) {
 		requiredGates = append(requiredGates, GateBackend)
 	}
 

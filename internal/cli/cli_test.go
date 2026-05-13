@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1722,6 +1723,81 @@ func TestGateCheckBackendCLIJSONHumanAndStateUpdates(t *testing.T) {
 	if output := stdout.String(); !strings.Contains(output, "gate: backend") || !strings.Contains(output, "status: pass") || !strings.Contains(output, "selected_cli pass") {
 		t.Fatalf("human backend output = %q, want summary and checks", output)
 	}
+}
+
+func TestRunCreateBackendEvidenceRequiredProductionWrite(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions(runCreateArgs("KAB production", "--backend-evidence", "required", "--task-id", "align-002", "--json"), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("run create exit = %d stderr=%s", code, stderr.String())
+	}
+	var created runCreateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
+		t.Fatalf("decode create: %v\n%s", err, stdout.String())
+	}
+	if created.Metadata.ExecutionMode != "production_write" || created.Metadata.BackendEvidence != project.BackendEvidenceRequired {
+		t.Fatalf("metadata = %#v, want production_write with required backend evidence", created.Metadata)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"artifact", "init", created.RunID, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("artifact init exit = %d stderr=%s", code, stderr.String())
+	}
+	var initialized artifactInitOutput
+	if err := json.Unmarshal(stdout.Bytes(), &initialized); err != nil {
+		t.Fatalf("decode artifact init: %v\n%s", err, stdout.String())
+	}
+	for _, artifact := range []string{"selected-cli.json", "capability-check.md", "bridge-session-snapshot.json", "bridge-events.md", "diff.patch", "impl-log.md"} {
+		if !slices.Contains(initialized.RequiredArtifacts, artifact) {
+			t.Fatalf("required_artifacts = %#v, missing %s", initialized.RequiredArtifacts, artifact)
+		}
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"gate", "check", created.RunID, "backend", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitSafety {
+		t.Fatalf("pending backend exit = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var failed gateCheckOutput
+	if err := json.Unmarshal(stdout.Bytes(), &failed); err != nil {
+		t.Fatalf("decode failed backend: %v\n%s", err, stdout.String())
+	}
+	if failed.Status != project.GateStatusFail || !cliGateCheckStatus(failed.Checks, "selected_cli", project.GateStatusFail) {
+		t.Fatalf("failed = %#v, want missing backend evidence failure", failed)
+	}
+
+	writeCLIBackendEvidence(t, repo, created.RunID)
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"gate", "check", created.RunID, "backend", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("backend pass exit = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var passed gateCheckOutput
+	if err := json.Unmarshal(stdout.Bytes(), &passed); err != nil {
+		t.Fatalf("decode passed backend: %v\n%s", err, stdout.String())
+	}
+	if passed.Status != project.GateStatusPass || !cliGateCheckStatus(passed.Checks, "bridge_events", project.GateStatusPass) {
+		t.Fatalf("passed = %#v, want backend pass", passed)
+	}
+}
+
+func TestRunCreateRejectsInvalidBackendEvidence(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	assertCLIErrorCode(t, runWithOptions(runCreateArgs("Bad backend evidence", "--backend-evidence", "maybe", "--json"), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitSafety, "run_metadata_invalid")
 }
 
 func writeCLIBackendEvidence(t *testing.T, repo string, runID string) {

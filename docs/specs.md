@@ -204,6 +204,7 @@ Minimum fields:
 | `urgency` | `normal`, `urgent`, or `critical` |
 | `sot_policy` | `existing_sot_basis`, `minimal_sot_before_code`, or `full_sot_before_code` |
 | `execution_mode` | `production_write`, `adapter_qa`, `readiness_hardening`, `research`, `verification`, or `docs_only` |
+| `backend_evidence` | `required` or `not_applicable`; created from `--backend-evidence auto|required|not_applicable` |
 | `commander` | assigned team-member profile name |
 | `redteam` | assigned red-team profile name or null |
 | `created_at` | ISO timestamp |
@@ -211,11 +212,11 @@ Minimum fields:
 | `required_artifacts` | list of artifact paths required by gates |
 | `gate_state` | per-gate pass/fail/block summary |
 
-Run id lookup accepts an exact run id, or a prefix only when it resolves to exactly one run. Missing and ambiguous prefixes fail closed.
+Run id lookup accepts an exact run id, or a prefix only when it resolves to exactly one run. Missing and ambiguous prefixes fail closed. Existing `0.1` run metadata without `backend_evidence` is read as `not_applicable` for backward compatibility.
 
 Run lifecycle commands in `runwf-001` use these state transitions. In `runwf-002`, mutating run lifecycle commands are additionally serialized by the lock policy in [Locking](#11-locking).
 
-- `run create` records `.kkachi/runs/<run_id>/run-metadata.json` with `state: "created"`, `required_artifacts: []`, and `gate_state: {}` as part of the `run.created` lifecycle event. If metadata recording fails after the event line is appended, `status.last_event_id` is not advanced, leaving an explicit status/event mismatch for fail-closed recovery.
+- `run create` records `.kkachi/runs/<run_id>/run-metadata.json` with `state: "created"`, resolved `backend_evidence`, `required_artifacts: []`, and `gate_state: {}` as part of the `run.created` lifecycle event. If metadata recording fails after the event line is appended, `status.last_event_id` is not advanced, leaving an explicit status/event mismatch for fail-closed recovery.
 - `run activate <run_id>` only accepts `created` runs and records metadata `state: "active"`, `status.active_run_id`, and `status.active_run_state` as part of the `run.activated` lifecycle event. If another run is already active, it fails closed.
 - `run close <run_id>` and `run abort <run_id>` only accept `created` or `active` runs and record metadata `state: "closed"` / `"aborted"` as part of the `run.closed` or `run.aborted` lifecycle event. If the target is active, they clear the status active-run fields in the same status update.
 - Before run lookup or mutation, the helper verifies that `status.last_event_id` matches the event log tail. Mismatch fails closed without starting another run transition. Lifecycle commands append the event before advancing status so any post-event metadata/status write failure is surfaced as a status/event mismatch rather than silently disappearing.
@@ -228,7 +229,7 @@ Run lifecycle commands in `runwf-001` use these state transitions. In `runwf-002
 - `artifact init` is a mutating helper-state command and is serialized by `.kkachi/project_write.lock`.
 - Before writing artifacts, `artifact init` verifies status/event-log coherence and refuses to mutate when `status.last_event_id` does not match the event tail.
 - `artifact init` only accepts runs in `created` or `active` state. Closed and aborted runs are preserved read-only.
-- The command derives `required_artifacts` from `work_path`, `work_mode`, `execution_mode`, and `redteam`, ordered by the canonical artifact list in [Canonical project layout](#5-canonical-project-layout).
+- The command derives `required_artifacts` from `work_path`, `work_mode`, `execution_mode`, resolved `backend_evidence`, and `redteam`, ordered by the canonical artifact list in [Canonical project layout](#5-canonical-project-layout).
 - The command creates baseline non-empty files for every canonical run artifact listed in the layout, including nested `redteam/` and `discovery/` artifacts.
 - Existing non-empty artifact files are preserved exactly. Existing empty artifact files are reinitialized with baseline content.
 - On success, the command updates `run-metadata.json.required_artifacts`, appends one `artifact.written` event, and advances `status.last_event_id`.
@@ -254,6 +255,7 @@ Initial required-artifact derivation:
 | `work_mode=standard` | `task-brief.md`, `prompt.md`, `context-pack.md` |
 | `execution_mode=production_write` or `readiness_hardening` | `diff.patch`, `impl-log.md`, `review.md`, `redteam/impl-review.md`, `redteam/test-review.md`, `redteam/final-gate-review.md` |
 | `execution_mode=adapter_qa` | `selected-cli.json`, `capability-check.md`, `bridge-session-snapshot.json`, `bridge-events.md`, `cli-output.md`, `redteam/qa-review.md` |
+| `backend_evidence=required` | `selected-cli.json`, `capability-check.md`, `bridge-session-snapshot.json`, `bridge-events.md` |
 | `execution_mode=research` | `discovery/research-notes.md`, `discovery/strategy-options.md`, `discovery/selected-strategy.md` |
 | `execution_mode=verification` | `review.md` |
 | `execution_mode=docs_only` | `sot-update.md`, `roadmap-update.md` |
@@ -296,7 +298,7 @@ Light mode reduces depth, not safety. Helper validation must still require:
 
 ## 9. Backend evidence validation
 
-When a run uses `kkachi-agent-bridge`, helper validation covers artifact shape only. The commander owns the reasoning. The `backend` gate is activated only from `run-metadata.json.required_artifacts`: if the backend artifacts are not required by the run manifest, the gate records a deterministic not-applicable pass instead of inferring backend use from baseline files.
+When a run uses `kkachi-agent-bridge`, helper validation covers artifact shape only. The commander owns the reasoning. KHS declares the requirement with `run-metadata.json.backend_evidence` (created by `run create --backend-evidence auto|required|not_applicable`), independently of `execution_mode`. `auto` resolves to `required` for `adapter_qa` and `not_applicable` for other modes. The `backend` gate is activated when `backend_evidence` is `required` or when existing `required_artifacts` already contain backend artifacts; otherwise it records a deterministic not-applicable pass instead of inferring backend use from baseline files.
 
 Required files:
 
@@ -307,7 +309,7 @@ Required files:
 | `bridge-session-snapshot.json` | Validate session identity fields such as `session_id`, `backend_type`, `adapter_type`, state, lifecycle class, and open pendings. |
 | `bridge-events.md` | Validate presence when backend behavior matters. |
 
-The helper must not override the commander's backend choice. It may fail a gate if the selected backend record is missing, malformed, stale, or marked unsupported for the declared execution mode. `selected-cli.json` passes only with an object containing non-empty `version`, `status`, `backend_type`, `adapter_type`, and `source_ledger_ref`, plus a declared `caveats` array of strings; `status` must be `supported` or `degraded`. `capability-check.md` and `bridge-events.md` require `Status: complete`; the capability check must mention the selected backend and adapter, and bridge events must include non-empty behavior evidence. `bridge-session-snapshot.json` must match the selected backend/adapter, declare a non-empty `session_id`, `state`, and `lifecycle_class`, and have `open_pendings: 0`.
+The helper must not override the commander's backend choice. It may fail a gate if backend evidence was declared required but canonical backend artifacts are missing from `required_artifacts`, or if the selected backend record is missing, malformed, stale, or marked unsupported for the declared execution mode. `selected-cli.json` passes only with an object containing non-empty `version`, `status`, `backend_type`, `adapter_type`, and `source_ledger_ref`, plus a declared `caveats` array of strings; `status` must be `supported` or `degraded`. `capability-check.md` and `bridge-events.md` require `Status: complete`; the capability check must mention the selected backend and adapter, and bridge events must include non-empty behavior evidence. `bridge-session-snapshot.json` must match the selected backend/adapter, declare a non-empty `session_id`, `state`, and `lifecycle_class`, and have `open_pendings: 0`.
 
 ## 10. CLI surface
 
@@ -332,7 +334,7 @@ kkachi-agent-helper project init \
   --sot-policy existing_sot_basis [--force]
 kkachi-agent-helper project doctor
 kkachi-agent-helper project status [--json]
-kkachi-agent-helper run create --title <title> --work-path <A_development_execution|B_discovery_shaping> --work-mode <standard|light> --urgency <normal|urgent|critical> --sot-policy <existing_sot_basis|minimal_sot_before_code|full_sot_before_code> --execution-mode <production_write|adapter_qa|readiness_hardening|research|verification|docs_only> --commander <profile> [--task-id <id>] [--redteam <profile>]
+kkachi-agent-helper run create --title <title> --work-path <A_development_execution|B_discovery_shaping> --work-mode <standard|light> --urgency <normal|urgent|critical> --sot-policy <existing_sot_basis|minimal_sot_before_code|full_sot_before_code> --execution-mode <production_write|adapter_qa|readiness_hardening|research|verification|docs_only> --commander <profile> [--backend-evidence <auto|required|not_applicable>] [--task-id <id>] [--redteam <profile>]
 kkachi-agent-helper run list [--json]
 kkachi-agent-helper run show <run_id-or-prefix> [--json]
 kkachi-agent-helper run activate <run_id-or-prefix>
@@ -386,12 +388,12 @@ Behavior in `gates-001` through `gates-005`:
 - `roadmap` is implemented by accepting a non-empty run metadata `task_id`, completed `roadmap-update.md`, or `roadmap-update.md` with `Status: not_applicable` plus a non-empty `Reason:`.
 - `plan` is implemented by requiring completed `acceptance-criteria.md`, `plan.md`, and `checklist.md`.
   KHS owns any checklist normalization needed before writing `checklist.md`; KAH validates only the completed artifacts and does not parse or require KAB-specific planner sections such as `KHS Checklist Seed`.
-- `backend` is implemented as a manifest-driven gate. If `required_artifacts` includes backend evidence, it validates `selected-cli.json`, `capability-check.md`, `bridge-session-snapshot.json`, and `bridge-events.md`; if not, it passes as not applicable with a check tied to `run-metadata.json`.
+- `backend` is implemented as a declared/manifest-driven gate. If `backend_evidence` is `required` or `required_artifacts` includes backend evidence, it validates `selected-cli.json`, `capability-check.md`, `bridge-session-snapshot.json`, and `bridge-events.md`; if not, it passes as not applicable with a check tied to `run-metadata.json`.
 - `implementation` is implemented by requiring a non-empty `diff.patch`, completed `impl-log.md`, and `cli-output.md` only when the run manifest requires it.
 - `review` is implemented by requiring completed `review.md` and every `redteam/*` artifact listed in `required_artifacts`.
 - `verification` is implemented by requiring completed `test-log.md` and completed `verification.md` that declares `Verdict: pass` or `Verdict: fail`.
 - `docs` is implemented by requiring completed `docs-update.md` that records either `Changed Docs` or `No Change Reason`.
-- `final` is implemented by requiring completed `final-report.md` and `pass` status in `metadata.GateState` for `intake`, `sot`, `roadmap`, `plan`, `implementation`, `review`, `verification`, and `docs`. The `backend` gate is also required when the run manifest includes backend evidence artifacts.
+- `final` is implemented by requiring completed `final-report.md` and `pass` status in `metadata.GateState` for `intake`, `sot`, `roadmap`, `plan`, `implementation`, `review`, `verification`, and `docs`. The `backend` gate is also required when `backend_evidence` is `required` or the run manifest includes backend evidence artifacts.
 - `gate final <run_id>` is implemented with the same lock, event, and status-update contract as `gate check`. It exits `0` on pass and `3` on fail.
 - Unknown gate names are usage errors.
 - Passing checks append `gate.passed`; failing checks append `gate.failed`; blocked checks append `gate.checked`.
@@ -644,7 +646,7 @@ Initial gate names:
 | `sot` | `sot-basis.md` or Path B SOT update evidence. |
 | `roadmap` | `task_id` trace, `roadmap-update.md`, or explicit not-applicable reason. |
 | `plan` | Completed `acceptance-criteria.md`, `plan.md`, and KHS-normalized `checklist.md`; KAH does not parse KAB planner seed sections. |
-| `backend` | bridge evidence artifacts when bridge is used. |
+| `backend` | bridge evidence artifacts when `backend_evidence=required` or bridge artifacts are already required. |
 | `implementation` | `diff.patch`, `impl-log.md`, optional `cli-output.md`. |
 | `review` | `review.md` and required red-team artifacts. |
 | `verification` | `test-log.md`, `verification.md`, pass/fail verdict. |

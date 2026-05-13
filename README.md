@@ -50,6 +50,7 @@ kkachi-agent-helper run create \
   --urgency normal \
   --sot-policy existing_sot_basis \
   --execution-mode production_write \
+  --backend-evidence not_applicable \
   --commander Gongmyeong \
   --task-id pilot-003 \
   --json
@@ -136,13 +137,15 @@ kkachi-agent-helper event append <event_type> --run <run_id> --payload '<json-ob
 Runs:
 
 ```sh
-kkachi-agent-helper run create --title <title> --work-path <A_development_execution|B_discovery_shaping> --work-mode <standard|light> --urgency <normal|urgent|critical> --sot-policy <existing_sot_basis|minimal_sot_before_code|full_sot_before_code> --execution-mode <production_write|adapter_qa|readiness_hardening|research|verification|docs_only> --commander <profile> [--task-id <id>] [--redteam <profile>] [--json]
+kkachi-agent-helper run create --title <title> --work-path <A_development_execution|B_discovery_shaping> --work-mode <standard|light> --urgency <normal|urgent|critical> --sot-policy <existing_sot_basis|minimal_sot_before_code|full_sot_before_code> --execution-mode <production_write|adapter_qa|readiness_hardening|research|verification|docs_only> --commander <profile> [--backend-evidence <auto|required|not_applicable>] [--task-id <id>] [--redteam <profile>] [--json]
 kkachi-agent-helper run list [--json]
 kkachi-agent-helper run show <run_id> [--json]
 kkachi-agent-helper run activate <run_id> [--json]
 kkachi-agent-helper run close <run_id> [--json]
 kkachi-agent-helper run abort <run_id> [--json]
 ```
+
+`--backend-evidence` lets KHS declare backend evidence independently of `execution_mode`: `auto` requires backend evidence for `adapter_qa` and treats other modes as not applicable; `required` makes canonical bridge evidence mandatory even for `production_write`; `not_applicable` preserves direct/non-KAB runs.
 
 Artifacts and gates:
 

@@ -34,11 +34,17 @@ func TestCreateRunWritesMetadataAndEvent(t *testing.T) {
 	if result.Metadata.State != RunStateCreated || result.Metadata.TaskID == nil || *result.Metadata.TaskID != "runwf-001" {
 		t.Fatalf("metadata = %#v, want created runwf metadata", result.Metadata)
 	}
+	if result.Metadata.BackendEvidence != BackendEvidenceNotApplicable {
+		t.Fatalf("backend_evidence = %q, want not_applicable", result.Metadata.BackendEvidence)
+	}
 	metadataPath := filepath.Join(repo, ".kkachi", "runs", result.Metadata.RunID, "run-metadata.json")
 	var onDisk RunMetadata
 	readJSONFile(t, metadataPath, &onDisk)
 	if onDisk.RunID != result.Metadata.RunID || len(onDisk.RequiredArtifacts) != 0 || len(onDisk.GateState) != 0 {
 		t.Fatalf("on disk metadata = %#v, want empty artifact/gate state", onDisk)
+	}
+	if onDisk.BackendEvidence != BackendEvidenceNotApplicable {
+		t.Fatalf("on disk backend_evidence = %q, want not_applicable", onDisk.BackendEvidence)
 	}
 	lines := runEventLines(t, repo)
 	if len(lines) != 2 || !strings.Contains(lines[1], `"type":"run.created"`) || !strings.Contains(lines[1], result.Metadata.RunID) {
@@ -48,6 +54,73 @@ func TestCreateRunWritesMetadataAndEvent(t *testing.T) {
 	readJSONFile(t, filepath.Join(repo, ".kkachi", "status.json"), &status)
 	if status["last_event_id"] != "evt-000002" || status["active_run_id"] != nil {
 		t.Fatalf("status = %#v, want event advanced and no active run", status)
+	}
+}
+
+func TestCreateRunResolvesBackendEvidenceAutoForAdapterQA(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.ExecutionMode = "adapter_qa"
+	options.BackendEvidence = BackendEvidenceAuto
+
+	result, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun(adapter qa auto) error = %v", err)
+	}
+	if result.Metadata.BackendEvidence != BackendEvidenceRequired {
+		t.Fatalf("backend_evidence = %q, want required", result.Metadata.BackendEvidence)
+	}
+}
+
+func TestResolveBackendEvidenceMatrix(t *testing.T) {
+	tests := []struct {
+		name          string
+		executionMode string
+		declaration   string
+		want          string
+	}{
+		{name: "adapter qa auto", executionMode: "adapter_qa", declaration: BackendEvidenceAuto, want: BackendEvidenceRequired},
+		{name: "adapter qa empty", executionMode: "adapter_qa", declaration: "", want: BackendEvidenceRequired},
+		{name: "production write auto", executionMode: "production_write", declaration: BackendEvidenceAuto, want: BackendEvidenceNotApplicable},
+		{name: "production write empty", executionMode: "production_write", declaration: "", want: BackendEvidenceNotApplicable},
+		{name: "production write required", executionMode: "production_write", declaration: BackendEvidenceRequired, want: BackendEvidenceRequired},
+		{name: "invalid preserved for validation", executionMode: "production_write", declaration: " maybe ", want: "maybe"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ResolveBackendEvidence(tt.executionMode, tt.declaration); got != tt.want {
+				t.Fatalf("ResolveBackendEvidence(%q, %q) = %q, want %q", tt.executionMode, tt.declaration, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestReadRunMetadataDefaultsLegacyMissingBackendEvidence(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	path := filepath.Join(repo, ".kkachi", "runs", created.Metadata.RunID, "run-metadata.json")
+	var raw map[string]any
+	readJSONFile(t, path, &raw)
+	delete(raw, "backend_evidence")
+	data, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal legacy metadata: %v", err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		t.Fatalf("write legacy metadata: %v", err)
+	}
+
+	metadata, _, err := ReadRunMetadata(root, created.Metadata.RunID)
+	if err != nil {
+		t.Fatalf("ReadRunMetadata(legacy) error = %v", err)
+	}
+	if metadata.BackendEvidence != BackendEvidenceNotApplicable {
+		t.Fatalf("backend_evidence = %q, want legacy default not_applicable", metadata.BackendEvidence)
 	}
 }
 

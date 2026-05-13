@@ -437,6 +437,9 @@ func validateRunMetadataObject(relative string, object map[string]any) []SchemaC
 	checks = append(checks, requireEnumField(relative, object, "urgency", []string{"normal", "urgent", "critical"}))
 	checks = append(checks, requireEnumField(relative, object, "sot_policy", []string{"existing_sot_basis", "minimal_sot_before_code", "full_sot_before_code"}))
 	checks = append(checks, requireEnumField(relative, object, "execution_mode", []string{"production_write", "adapter_qa", "readiness_hardening", "research", "verification", "docs_only"}))
+	if _, ok := object["backend_evidence"]; ok {
+		checks = append(checks, requireEnumField(relative, object, "backend_evidence", []string{BackendEvidenceRequired, BackendEvidenceNotApplicable}))
+	}
 	checks = append(checks, requireStringField(relative, object, "commander", "non-empty string", false))
 	checks = append(checks, requireNullableStringField(relative, object, "redteam"))
 	checks = append(checks, requireRFC3339Field(relative, object, "created_at"))
@@ -654,6 +657,7 @@ func schemaObject(name string) map[string]any {
 			"urgency":            map[string]any{"enum": []string{"normal", "urgent", "critical"}},
 			"sot_policy":         map[string]any{"enum": []string{"existing_sot_basis", "minimal_sot_before_code", "full_sot_before_code"}},
 			"execution_mode":     map[string]any{"enum": []string{"production_write", "adapter_qa", "readiness_hardening", "research", "verification", "docs_only"}},
+			"backend_evidence":   map[string]any{"enum": []string{BackendEvidenceRequired, BackendEvidenceNotApplicable}},
 			"commander":          map[string]any{"type": "string", "minLength": 1},
 			"redteam":            map[string]any{"type": []string{"string", "null"}},
 			"created_at":         map[string]any{"type": "string", "format": "date-time"},

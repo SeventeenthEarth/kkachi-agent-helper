@@ -1097,7 +1097,7 @@ func passAllPriorGates(t *testing.T, root Root, repo string, runID string, skip 
 	}
 
 	gates := []string{GateIntake, GateSOT, GateRoadmap, GatePlan, GateImplementation, GateReview, GateVerification, GateDocs}
-	if backendGateRequired(required) && !skipSet[GateBackend] {
+	if backendArtifactsRequired(required) && !skipSet[GateBackend] {
 		gates = append(gates, GateBackend)
 	}
 	for i, gate := range gates {

@@ -512,9 +512,7 @@ func TestGates003BackendGateIntegrationWorkflow(t *testing.T) {
 	assertOutputContains(t, initOutput, `"event_id":"evt-000003"`, "adapter artifact init")
 	metadataPath := filepath.Join(repo, ".kkachi", "runs", created.RunID, "run-metadata.json")
 	metadata := readFile(t, metadataPath)
-	for _, artifact := range []string{"selected-cli.json", "capability-check.md", "bridge-session-snapshot.json", "bridge-events.md"} {
-		assertOutputContains(t, metadata, `"`+artifact+`"`, "adapter metadata required artifacts")
-	}
+	assertOutputContainsArtifacts(t, metadata, integrationBackendArtifacts(), "adapter metadata required artifacts")
 
 	pendingOutput, err := runHelperAllowError(binary, repo, "gate", "check", created.RunID, "backend", "--json")
 	if err == nil {
@@ -548,6 +546,71 @@ func TestGates003BackendGateIntegrationWorkflow(t *testing.T) {
 	assertOutputContains(t, readFile(t, filepath.Join(repo, ".kkachi", "events.jsonl")), `"type":"gate.passed"`, "events after passing backend gate")
 	assertOutputContains(t, readFile(t, filepath.Join(repo, ".kkachi", "status.json")), `"event_id": "evt-000005"`, "status after passing backend gate")
 	assertOutputContains(t, readFile(t, metadataPath), `"event_id": "evt-000005"`, "metadata after passing backend gate")
+}
+
+func TestAlign002ProductionWriteDeclaredBackendEvidenceIntegration(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	binary := buildHelperBinary(t)
+
+	runHelper(t, binary, repo, "project", "init", "--json")
+	createdOutput := runHelper(t, binary, repo,
+		"run", "create",
+		"--title", "Declared backend production write",
+		"--work-path", "A_development_execution",
+		"--work-mode", "standard",
+		"--urgency", "normal",
+		"--sot-policy", "existing_sot_basis",
+		"--execution-mode", "production_write",
+		"--backend-evidence", "required",
+		"--commander", "Gongmyeong",
+		"--task-id", "align-002",
+		"--json",
+	)
+	var created struct {
+		RunID    string `json:"run_id"`
+		Metadata struct {
+			ExecutionMode   string `json:"execution_mode"`
+			BackendEvidence string `json:"backend_evidence"`
+		} `json:"metadata"`
+	}
+	if err := json.Unmarshal(createdOutput, &created); err != nil {
+		t.Fatalf("run create output is not JSON: %v\n%s", err, string(createdOutput))
+	}
+	if created.Metadata.ExecutionMode != "production_write" || created.Metadata.BackendEvidence != "required" {
+		t.Fatalf("metadata = %#v, want production_write with required backend evidence", created.Metadata)
+	}
+
+	initOutput := runHelper(t, binary, repo, "artifact", "init", created.RunID, "--json")
+	assertOutputContainsArtifacts(t, initOutput, integrationProductionWriteBackendArtifacts(), "declared backend artifact init")
+	metadataPath := filepath.Join(repo, ".kkachi", "runs", created.RunID, "run-metadata.json")
+	metadata := readFile(t, metadataPath)
+	assertOutputContains(t, metadata, `"backend_evidence": "required"`, "declared backend metadata")
+	assertOutputContainsArtifacts(t, metadata, integrationBackendArtifacts(), "declared backend metadata required artifacts")
+
+	pendingOutput, err := runHelperAllowError(binary, repo, "gate", "check", created.RunID, "backend", "--json")
+	if err == nil {
+		t.Fatalf("backend gate succeeded with pending declared evidence\n%s", string(pendingOutput))
+	}
+	var pending gateCheckOutput
+	if err := json.Unmarshal(pendingOutput, &pending); err != nil {
+		t.Fatalf("pending backend output is not JSON: %v\n%s", err, string(pendingOutput))
+	}
+	if pending.Status != "fail" || !gateCheckListed(pending.Checks, "selected_cli", "fail") {
+		t.Fatalf("pending backend = %#v, want selected_cli fail", pending)
+	}
+
+	writeIntegrationBackendEvidence(t, repo, created.RunID)
+	passOutput := runHelper(t, binary, repo, "gate", "check", created.RunID, "backend", "--json")
+	var passed gateCheckOutput
+	if err := json.Unmarshal(passOutput, &passed); err != nil {
+		t.Fatalf("passing backend output is not JSON: %v\n%s", err, string(passOutput))
+	}
+	if passed.Status != "pass" || len(passed.MissingEvidence) != 0 || !gateCheckListed(passed.Checks, "bridge_events", "pass") {
+		t.Fatalf("passed backend = %#v, want declared backend pass", passed)
+	}
 }
 
 func TestRunwf002LockWorkflow(t *testing.T) {
@@ -1132,6 +1195,21 @@ func assertOutputContains(t *testing.T, output []byte, pattern string, label str
 	if !strings.Contains(string(output), pattern) {
 		t.Fatalf("%s output = %s, want %q", label, string(output), pattern)
 	}
+}
+
+func assertOutputContainsArtifacts(t *testing.T, output []byte, artifacts []string, label string) {
+	t.Helper()
+	for _, artifact := range artifacts {
+		assertOutputContains(t, output, `"`+artifact+`"`, label)
+	}
+}
+
+func integrationBackendArtifacts() []string {
+	return []string{"selected-cli.json", "capability-check.md", "bridge-session-snapshot.json", "bridge-events.md"}
+}
+
+func integrationProductionWriteBackendArtifacts() []string {
+	return append(integrationBackendArtifacts(), "diff.patch", "impl-log.md")
 }
 
 func writeIntegrationTarget(t *testing.T, repo string, relative string, content string) {
