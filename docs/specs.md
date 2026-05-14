@@ -8,7 +8,7 @@ Status: initial source of truth
 
 `kkachi-agent-helper` is the deterministic command-line helper for the Kkachi software delivery harness. It owns local project state, run artifacts, locks, schema validation, event logging, and initialization of Kkachi project scaffolding. It does not plan work, choose a coding backend, review code, or act as an intelligence layer.
 
-The helper exists so Hermes team members and external coding CLIs can operate through a repeatable, auditable workflow without relying on chat memory or prompt claims as the source of truth.
+The helper exists so Hermes team members and external coding CLIs can operate through a repeatable, auditable workflow without relying on chat memory or prompt claims as the source of truth. KAH owns deterministic state only after KHS or a user chooses to apply the Kkachi workflow; it does not decide whether KHS should trigger.
 
 ## 2. Repository role
 
@@ -20,15 +20,18 @@ Kkachi is split into three independently versioned repositories:
 | `kkachi-agent-helper` | Deterministic state, artifact, schema, lock, and bootstrap tooling. |
 | `kkachi-hermes-skills` | Hermes phase skills, orchestration skills, templates, registries, and evaluation assets. |
 
-`kkachi-agent-helper` must stay small, local-first, scriptable, and safe to call from agents, shell scripts, and future UI surfaces.
+`kkachi-agent-helper` must stay small, local-first, scriptable, and safe to call from agents, shell scripts, and future UI surfaces. KHS owns workflow policy, phase applicability, checklist normalization, and release recommendations; KAH owns deterministic helper state, artifacts, schemas, gates, events, locks, diagnostics, and command-surface validation.
 
 ## 3. Non-goals
 
 The helper must not:
 
+- decide whether KHS should trigger for a user request;
 - decide which external backend is best for a task;
 - generate implementation plans using model reasoning;
+- decide KHS phase applicability, phase ordering, or checklist normalization policy;
 - replace Hermes skills or project overlays;
+- install Hermes/KHS skill content;
 - replace `kkachi-agent-bridge` session control;
 - mutate user source files except explicitly managed Kkachi scaffold files;
 - hide failed checks behind best-effort warnings when a gate requires fail-closed behavior;
@@ -379,7 +382,7 @@ kkachi-agent-helper run create --help
 
 `align-003` introduces a project-independent capabilities report for KHS activation checks. The command exits `0` on a healthy binary and does not require `.kkachi/` project state. JSON output is the compatibility contract; human output is informational only.
 
-Stable JSON output includes helper build info, `capabilities_schema_version`, embedded `project_schema_version`, supported command groups/subcommands, compatibility booleans, deprecated surfaces, and omitted surfaces. Current compatibility flags report project init/status/doctor, run lifecycle, artifact init/list/validate/mutation, gates, declared backend evidence requirements, diagnostics export, phase-plan support, and approval records as supported. The removed `install` command is reported as an omitted surface because Hermes/KHS skill installation belongs to Hermes native tooling.
+Stable JSON output includes helper build info, `capabilities_schema_version`, embedded `project_schema_version`, supported command groups/subcommands, compatibility booleans, deprecated surfaces, and omitted surfaces. Current compatibility flags report project init/status/doctor, run lifecycle, artifact init/list/validate/mutation, gates, declared backend evidence requirements, diagnostics export, phase-plan support, and approval records as supported. The removed `install` command is reported as an omitted surface because Hermes/KHS skill installation belongs to Hermes native tooling. KHS `main` may use KAH `@latest` when this report advertises all required surfaces, while KHS release tags should publish tested/recommended KAH versions for reproducible historical runs.
 
 ### Help UX
 
@@ -542,7 +545,7 @@ The Go E2E package preserves coverage for project lifecycle, lock recovery, gold
 
 ### Project bootstrap via `project init`
 
-KAH no longer exposes an `install` command. Hermes skill installation is handled by Hermes native skill tooling, while KAH initializes the project-local files that KHS/Hermes skills use as their deterministic working contract.
+KAH no longer exposes an `install` command. Hermes skill installation is handled by Hermes native skill tooling, while KAH initializes the project-local files that KHS/Hermes skills use as their deterministic working contract. KAH bootstrap must not install, update, or vendor Hermes skill content, templates, registries, or evaluation assets.
 
 `project init` is a one-shot bootstrap command that requires explicit project parameters. It creates existing helper state plus:
 
@@ -568,7 +571,7 @@ Command UX rules:
 
 ### `phase-plan`
 
-`align-005` introduces `.kkachi/runs/<run_id>/phase-plan.yaml` as the KAH-managed storage surface for KHS-declared phase state. KHS owns workflow policy, phase applicability, and the decision to mark a phase skipped or not applicable. KAH stores and validates declared rows only; it must not infer phases from `work_path`, `work_mode`, `execution_mode`, task semantics, backend choice, or user intent, and it must not intelligently reorder phases.
+`align-005` introduces `.kkachi/runs/<run_id>/phase-plan.yaml` as the KAH-managed storage surface for KHS-declared phase state. KHS owns workflow policy, phase applicability, phase ordering, and the decision to mark a phase skipped or not applicable. KAH stores and validates declared rows only; it must not infer phases from `work_path`, `work_mode`, `execution_mode`, task semantics, backend choice, or user intent, and it must not intelligently reorder phases.
 
 The supported commands are:
 
@@ -768,7 +771,17 @@ Minimum implementation test layers:
 - Use conservative file permissions for lock and state files.
 - Prefer explicit operator confirmation for destructive reset or migration commands.
 
-## 17. Open decisions
+## 17. Compatibility contract
+
+KHS/KAH integration follows a capability-first model:
+
+- KHS `main` may install KAH with `go install github.com/SeventeenthEarth/kkachi-agent-helper@latest`, then run `kkachi-agent-helper capabilities --json` and fail closed if required surfaces or compatibility flags are absent.
+- KHS release tags should record tested/recommended KAH versions for reproducible release use, even when `@latest` remains acceptable for compatible `main` activation.
+- `project init` and `project init --force` are the KAH bootstrap/reconfiguration contract; KAH does not provide a Hermes skill installer.
+- KHS decides whether to trigger, which backend path to use, what phases apply, and how to normalize workflow artifacts. KAH validates declared state and evidence after those decisions are made.
+- `docs/compatibility.md` is the release-facing matrix for helper/schema/bridge/skills expectations and must stay consistent with this spec.
+
+## 18. Open decisions
 
 The following items remain open until roadmap tasks close them:
 

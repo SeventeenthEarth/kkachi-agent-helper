@@ -2,7 +2,7 @@
 
 `kkachi-agent-helper` is the deterministic local CLI helper for Kkachi project state, run artifacts, locks, schemas, events, diagnostics, and project bootstrap scaffolding. It stays local-first and scriptable: it does not choose a backend, plan work, review code, call network services, or store secrets.
 
-The current implementation covers `corex-001` through `corex-005`, `runwf-001` through `runwf-004`, `gates-001` through `gates-005`, `packg-001` through `packg-004`, `pilot-001` through `pilot-005`, and `align-001` through `align-006`.
+The current implementation covers `corex-001` through `corex-005`, `runwf-001` through `runwf-004`, `gates-001` through `gates-005`, `packg-001` through `packg-004`, `pilot-001` through `pilot-005`, and `align-001` through `align-008`.
 
 ## Source of truth
 
@@ -205,6 +205,14 @@ Diagnostics:
 ```sh
 kkachi-agent-helper diagnostics export [--run <run_id>] [--output <repo-relative-path>] [--json]
 ```
+
+## KHS/KAH compatibility contract
+
+KAH owns deterministic helper state after KHS or a user chooses to apply the Kkachi workflow. It validates declared state, artifacts, schemas, gates, events, locks, diagnostics, command surfaces, phase plans, backend evidence, and approval records. KHS owns workflow policy: whether to trigger the workflow, phase applicability and ordering, checklist normalization, backend-use decisions, and any commander reasoning. KAH must not promote itself into planner, backend selector, reviewer, Hermes skill installer, or workflow-policy owner.
+
+KHS `main` may install KAH with `go install github.com/SeventeenthEarth/kkachi-agent-helper@latest`, but activation should fail closed against `kkachi-agent-helper capabilities --json` rather than relying on patch-version guesses. KHS release tags should publish the tested/recommended KAH versions used for reproducible releases, while still allowing `@latest` when the required command-surface capabilities are present.
+
+Project bootstrap remains `project init` / `project init --force`: KAH creates or reconfigures helper-managed project state, schemas, overlays, and docs maps, but never installs Hermes/KHS skill content. Hermes skill installation belongs to Hermes native tooling.
 
 ## Operational notes
 

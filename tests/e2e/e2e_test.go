@@ -179,6 +179,87 @@ func requireFileContains(t *testing.T, path, want, label string) {
 	requireContains(t, string(data), want, label)
 }
 
+func TestAlign008DocsCompatibilityContract(t *testing.T) {
+	type docContractCase struct {
+		rel   string
+		wants []string
+	}
+
+	assertDocContains := func(t *testing.T, tc docContractCase) {
+		t.Helper()
+		text := mustRead(t, filepath.Join(projectRoot, filepath.FromSlash(tc.rel)))
+		for _, want := range tc.wants {
+			requireContains(t, text, want, tc.rel)
+		}
+	}
+
+	for _, tc := range []docContractCase{
+		{
+			rel: "README.md",
+			wants: []string{
+				"`align-001` through `align-008`",
+				"## KHS/KAH compatibility contract",
+				"KHS owns workflow policy",
+				"kkachi-agent-helper capabilities --json",
+				"go install github.com/SeventeenthEarth/kkachi-agent-helper@latest",
+				"tested/recommended KAH versions",
+				"`project init` / `project init --force`",
+				"never installs Hermes/KHS skill content",
+			},
+		},
+		{
+			rel: "docs/specs.md",
+			wants: []string{
+				"KAH owns deterministic state only after KHS or a user chooses to apply the Kkachi workflow",
+				"does not decide whether KHS should trigger",
+				"install Hermes/KHS skill content",
+				"KHS `main` may use KAH `@latest`",
+				"tested/recommended KAH versions",
+				"KAH bootstrap must not install, update, or vendor Hermes skill content",
+				"KHS owns workflow policy, phase applicability, phase ordering",
+				"## 17. Compatibility contract",
+				"`project init` and `project init --force` are the KAH bootstrap/reconfiguration contract",
+			},
+		},
+		{
+			rel: "docs/compatibility.md",
+			wants: []string{
+				"KHS/KAH integration",
+				"KHS may consume KAH `@latest`",
+				"kkachi-agent-helper capabilities --json",
+				"tested/recommended KAH versions",
+				"`project init --force` reconfigures bootstrap files without deleting status",
+				"KAH does not install KHS/Hermes skill content, templates, registries, or evaluation assets",
+				"KHS owns workflow policy",
+				"KAH must not become the workflow-policy owner, planner, backend selector, code reviewer, KAB session controller, or Hermes skill installer",
+			},
+		},
+		{
+			rel: "docs/roadmap.md",
+			wants: []string{
+				"| align-008 | KHS/KAH compatibility contract docs | Completed |",
+				"`capabilities --json` activation checks",
+				"tested/recommended release versions",
+				"no Hermes skill installation by KAH",
+			},
+		},
+		{
+			rel: "docs/TODO-ALIGN.md",
+			wants: []string{
+				"### align-008 — KHS/KAH compatibility contract docs",
+				"Status: Completed",
+				"README, specs, and compatibility docs now state the KHS/KAH ownership boundary consistently",
+				"`capabilities --json` as the preferred KHS `@latest` activation check",
+				"`project init` / `project init --force` as the bootstrap/reconfiguration contract",
+			},
+		},
+	} {
+		t.Run(tc.rel, func(t *testing.T) {
+			assertDocContains(t, tc)
+		})
+	}
+}
+
 func jsonFieldString(t *testing.T, raw []byte, field string) string {
 	t.Helper()
 	var value any

@@ -295,7 +295,7 @@ A strict wrapper around `event append` is acceptable if KAH should avoid a large
 
 ### align-008 — KHS/KAH compatibility contract docs
 
-Status: Planned
+Status: Completed
 
 #### Problem
 
@@ -319,6 +319,13 @@ Document that:
 - Docs reference `capabilities --json` as the preferred KHS compatibility check once implemented.
 - Docs preserve the `project init` bootstrap contract and no-install-command boundary.
 - Docs do not promote KAH into workflow-policy, planner, backend-selection, or Hermes-skill-install ownership.
+
+#### Completion notes
+
+- README, specs, and compatibility docs now state the KHS/KAH ownership boundary consistently: KHS owns workflow policy, trigger decisions, phase applicability/order, checklist normalization, backend-use decisions, and release recommendations; KAH owns deterministic state, artifact, schema, gate, event, lock, diagnostics, command-surface, phase-plan, backend-evidence, and approval validation after the workflow is chosen.
+- Docs now describe `capabilities --json` as the preferred KHS `@latest` activation check and distinguish it from release-tag tested/recommended KAH versions for reproducibility.
+- Docs preserve `project init` / `project init --force` as the bootstrap/reconfiguration contract and explicitly keep Hermes/KHS skill installation in Hermes native tooling, not KAH.
+- E2E docs-contract regression coverage now locks the README/specs/compatibility/roadmap/TODO-ALIGN wording required by this task.
 
 ## Verification expectations
 
