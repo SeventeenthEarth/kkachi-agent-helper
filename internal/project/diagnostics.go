@@ -15,6 +15,7 @@ const DiagnosticsVersion = "0.1"
 
 var diagnosticArtifactPaths = []string{
 	"run-metadata.json",
+	"phase-plan.yaml",
 	"intake-classification.md",
 	"selected-cli.json",
 	"capability-check.md",

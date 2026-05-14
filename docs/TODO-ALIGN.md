@@ -142,7 +142,7 @@ KHS `main` should use KAH `@latest` where possible, but it needs capability-base
 #### Completion notes
 
 - Added project-independent `capabilities --json` with helper build info, capabilities schema version, embedded project schema version, command-group inventory, compatibility flags, and explicit omitted `install` surface.
-- Current flags expose supported project/run/artifact/gate/backend-evidence/diagnostics surfaces and report phase-plan plus approval records as unavailable until later align tasks.
+- Initial flags exposed supported project/run/artifact/gate/backend-evidence/diagnostics surfaces and reported phase-plan plus approval records as unavailable until later align tasks; align-005 now promotes phase-plan to supported while approval records remain planned.
 - Unit, integration, and e2e release packaging coverage verify the JSON shape and version propagation.
 
 ### align-004 — Standard help UX
@@ -179,13 +179,13 @@ kkachi-agent-helper phase-plan --help
 
 #### Completion notes
 
-- Added project-independent help for `help`, `help help`, `--help`, implemented command groups, key subcommands, and the planned `phase-plan` surface.
+- Added project-independent help for `help`, `help help`, `--help`, implemented command groups, key subcommands, and the then-planned `phase-plan` surface; align-005 now implements that command group.
 - Help exits `0`, writes to stdout, documents required arguments/options and JSON behavior, and supports structured help JSON with global `--json`.
 - Unit, integration, and E2E regressions cover help outside initialized helper state, release artifact help behavior, and preserved non-help usage errors.
 
 ### align-005 — Phase-plan validation and diagnostics
 
-Status: Planned
+Status: Completed
 
 #### Problem
 
@@ -215,6 +215,13 @@ KHS can write `phase-plan.yaml` directly today, but KAH lacks a deterministic co
 - KAH validates declared phase-plan structure and completeness deterministically.
 - KAH does not choose phases, reorder phases intelligently, choose backends, or infer user intent.
 - Diagnostics export includes `phase-plan.yaml` or its KAH-managed equivalent.
+
+#### Completion notes
+
+- Implemented `.kkachi/runs/<run_id>/phase-plan.yaml` plus `phase-plan init/show/set/validate`.
+- Mutating phase-plan commands take the project write lock, refuse event incoherence, write atomically, and append `phase_plan.*` events.
+- Validation covers required rows, skipped/not-applicable reasons, feedback round bounds/pairs, and final terminal/evidence checks without inferring phase applicability.
+- Diagnostics exports now include `phase-plan.yaml`; capabilities/help report phase-plan support.
 
 ### align-006 — Deterministic artifact mutation commands
 

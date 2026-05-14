@@ -49,8 +49,8 @@ func TestCapabilitiesJSONAtBinaryBoundary(t *testing.T) {
 	if payload.Helper.Version != "0.1.0" || payload.ProjectSchemaVersion != "0.1" {
 		t.Fatalf("payload versions = %#v, want helper 0.1.0 and schema 0.1", payload)
 	}
-	if !payload.CompatibilityFlags.BackendEvidenceRequirements || payload.CompatibilityFlags.PhasePlan || payload.CompatibilityFlags.ApprovalRecords || payload.CompatibilityFlags.InstallCommand {
-		t.Fatalf("compatibility flags = %#v, want current align-003 support matrix", payload.CompatibilityFlags)
+	if !payload.CompatibilityFlags.BackendEvidenceRequirements || !payload.CompatibilityFlags.PhasePlan || payload.CompatibilityFlags.ApprovalRecords || payload.CompatibilityFlags.InstallCommand {
+		t.Fatalf("compatibility flags = %#v, want current align support matrix", payload.CompatibilityFlags)
 	}
 	foundInstall := false
 	for _, surface := range payload.OmittedSurfaces {
@@ -85,9 +85,112 @@ func TestHelpAtBinaryBoundaryDoesNotRequireProjectState(t *testing.T) {
 	if err := json.Unmarshal(output, &payload); err != nil {
 		t.Fatalf("phase-plan help output is not JSON: %v\n%s", err, string(output))
 	}
-	if payload.Command != "kkachi-agent-helper phase-plan" || payload.Status != "planned" || !strings.Contains(payload.JSONBehavior, "phase_plan=false") {
-		t.Fatalf("payload = %#v, want planned phase-plan help", payload)
+	if payload.Command != "kkachi-agent-helper phase-plan" || payload.Status != "supported" || !strings.Contains(payload.JSONBehavior, "Failing validation exits 3") {
+		t.Fatalf("payload = %#v, want supported phase-plan help", payload)
 	}
+}
+
+func TestPhasePlanBinaryFlowAndDiagnostics(t *testing.T) {
+	binary := buildHelperBinary(t)
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+
+	runHelper(t, binary, repo, "project", "init", "--json")
+	createdOutput := runHelper(t, binary, repo,
+		"run", "create",
+		"--title", "Phase plan integration",
+		"--work-path", "A_development_execution",
+		"--work-mode", "standard",
+		"--urgency", "normal",
+		"--sot-policy", "existing_sot_basis",
+		"--execution-mode", "production_write",
+		"--commander", "Gongmyeong",
+		"--task-id", "align-005",
+		"--json",
+	)
+	var created struct {
+		RunID   string `json:"run_id"`
+		EventID string `json:"event_id"`
+	}
+	if err := json.Unmarshal(createdOutput, &created); err != nil {
+		t.Fatalf("run create output is not JSON: %v\n%s", err, string(createdOutput))
+	}
+	if created.RunID == "" || created.EventID != "evt-000002" {
+		t.Fatalf("created = %#v, want run id and evt-000002", created)
+	}
+
+	initOutput := runHelper(t, binary, repo, "phase-plan", "init", created.RunID, "--json")
+	var initialized struct {
+		PhasePlan struct {
+			RunID  string `json:"run_id"`
+			Path   string `json:"path"`
+			Phases []struct {
+				ID     string `json:"id"`
+				Status string `json:"status"`
+			} `json:"phases"`
+		} `json:"phase_plan"`
+		EventID string `json:"event_id"`
+	}
+	if err := json.Unmarshal(initOutput, &initialized); err != nil {
+		t.Fatalf("phase-plan init output is not JSON: %v\n%s", err, string(initOutput))
+	}
+	if initialized.EventID != "evt-000003" || initialized.PhasePlan.RunID != created.RunID || initialized.PhasePlan.Path != ".kkachi/runs/"+created.RunID+"/phase-plan.yaml" || len(initialized.PhasePlan.Phases) == 0 {
+		t.Fatalf("initialized = %#v, want phase plan path and evt-000003", initialized)
+	}
+	assertFileContains(t, filepath.Join(repo, ".kkachi", "runs", created.RunID, "phase-plan.yaml"), "request-feedback-1", "phase plan file")
+	assertFileContains(t, filepath.Join(repo, ".kkachi", "events.jsonl"), `"type":"phase_plan.initialized"`, "phase init event")
+
+	setOutput := runHelper(t, binary, repo, "phase-plan", "set", created.RunID, "ask", "--status", "not_applicable", "--reason", "No actionable question.", "--json")
+	var updated struct {
+		Phase struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+			Reason string `json:"reason"`
+		} `json:"phase"`
+		EventID string `json:"event_id"`
+	}
+	if err := json.Unmarshal(setOutput, &updated); err != nil {
+		t.Fatalf("phase-plan set output is not JSON: %v\n%s", err, string(setOutput))
+	}
+	if updated.EventID != "evt-000004" || updated.Phase.ID != "ask" || updated.Phase.Status != "not_applicable" || updated.Phase.Reason == "" {
+		t.Fatalf("updated = %#v, want ask not_applicable with reason", updated)
+	}
+	assertFileContains(t, filepath.Join(repo, ".kkachi", "events.jsonl"), `"type":"phase_plan.updated"`, "phase update event")
+
+	validateOutput := runHelper(t, binary, repo, "phase-plan", "validate", created.RunID[:24], "--json")
+	var validation struct {
+		RunID  string `json:"run_id"`
+		Status string `json:"status"`
+		Checks []struct {
+			Name   string `json:"name"`
+			Status string `json:"status"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal(validateOutput, &validation); err != nil {
+		t.Fatalf("phase-plan validate output is not JSON: %v\n%s", err, string(validateOutput))
+	}
+	requiredPhasesPassed := false
+	for _, check := range validation.Checks {
+		if check.Name == "required_phases" && check.Status == "pass" {
+			requiredPhasesPassed = true
+			break
+		}
+	}
+	if validation.RunID != created.RunID || validation.Status != "pass" || !requiredPhasesPassed {
+		t.Fatalf("validation = %#v, want required phase validation pass", validation)
+	}
+
+	finalOutput, err := runHelperAllowError(binary, repo, "phase-plan", "validate", created.RunID, "--final", "--json")
+	if err == nil {
+		t.Fatalf("phase-plan final unexpectedly passed: %s", string(finalOutput))
+	}
+	assertOutputContains(t, finalOutput, `"status":"fail"`, "phase final validation")
+	assertOutputContains(t, finalOutput, `"final_terminal_states"`, "phase final validation")
+
+	diagnostics := runHelper(t, binary, repo, "diagnostics", "export", "--run", created.RunID, "--json")
+	assertOutputContains(t, diagnostics, `"path":".kkachi/runs/`+created.RunID+`/phase-plan.yaml"`, "phase diagnostics")
 }
 
 func TestInstallCommandRemovedAtBinaryBoundary(t *testing.T) {

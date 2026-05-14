@@ -31,6 +31,7 @@ var commandGroups = map[string]struct{}{
 	"schema":      {},
 	"lock":        {},
 	"diagnostics": {},
+	"phase-plan":  {},
 }
 
 const (
@@ -260,6 +261,17 @@ type diagnosticsExportOutput struct {
 	OutputPath        string                       `json:"output_path,omitempty"`
 }
 
+type phasePlanInitOutput struct {
+	PhasePlan project.PhasePlan `json:"phase_plan"`
+	EventID   string            `json:"event_id"`
+}
+
+type phasePlanSetOutput struct {
+	PhasePlan project.PhasePlan `json:"phase_plan"`
+	Phase     project.PhaseRow  `json:"phase"`
+	EventID   string            `json:"event_id"`
+}
+
 type helpOutput struct {
 	Command      string     `json:"command"`
 	Status       string     `json:"status"`
@@ -386,6 +398,9 @@ func runWithOptions(args []string, stdout io.Writer, stderr io.Writer, info Buil
 			if command == "diagnostics" {
 				return runDiagnosticsCommand(opts.args[1:], root, stdout, stderr, opts.json)
 			}
+			if command == "phase-plan" {
+				return runPhasePlanCommand(opts.args[1:], root, stdout, stderr, opts.json)
+			}
 			writeError(stderr, opts.json, cliError{
 				Code:     "not_implemented",
 				Message:  fmt.Sprintf("command group %q is not implemented yet", command),
@@ -504,6 +519,155 @@ func parseDiagnosticsArgs(args []string) (project.DiagnosticsExportOptions, *cli
 			i++
 		default:
 			return options, &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown diagnostics export option %q", args[i]), Hint: diagnosticsUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "--run or --output", Actual: args[i]}
+		}
+	}
+	return options, nil
+}
+
+func runPhasePlanCommand(args []string, root project.Root, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
+	if len(args) == 0 {
+		writeError(stderr, jsonMode, cliError{Code: "phase_plan_subcommand_required", Message: "phase-plan subcommand is required", Hint: phasePlanUsageHint(), ExitCode: ExitUsage})
+		return ExitUsage
+	}
+	switch args[0] {
+	case "init":
+		if err := requireOnePhasePlanRunID(args); err != nil {
+			writeError(stderr, jsonMode, *err)
+			return ExitUsage
+		}
+		result, err := project.InitPhasePlan(root, project.PhasePlanInitOptions{RunID: args[1]})
+		if err != nil {
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writePhasePlanInitResult(stdout, result, jsonMode)
+		return ExitOK
+	case "show":
+		if err := requireOnePhasePlanRunID(args); err != nil {
+			writeError(stderr, jsonMode, *err)
+			return ExitUsage
+		}
+		result, err := project.ShowPhasePlan(root, args[1])
+		if err != nil {
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writePhasePlanShowResult(stdout, result, jsonMode)
+		return ExitOK
+	case "set":
+		options, cliErr := parsePhasePlanSetArgs(args)
+		if cliErr != nil {
+			writeError(stderr, jsonMode, *cliErr)
+			return cliErr.ExitCode
+		}
+		result, err := project.SetPhasePlanPhase(root, options)
+		if err != nil {
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writePhasePlanSetResult(stdout, result, jsonMode)
+		return ExitOK
+	case "validate":
+		options, cliErr := parsePhasePlanValidateArgs(args)
+		if cliErr != nil {
+			writeError(stderr, jsonMode, *cliErr)
+			return cliErr.ExitCode
+		}
+		result, err := project.ValidatePhasePlan(root, options)
+		if err != nil {
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writePhasePlanValidationResult(stdout, result, jsonMode)
+		if result.Status == project.PhasePlanStatusPass {
+			return ExitOK
+		}
+		return ExitSafety
+	default:
+		writeError(stderr, jsonMode, cliError{Code: "phase_plan_subcommand_unknown", Message: "phase-plan subcommand is not supported", Hint: phasePlanUsageHint(), ExitCode: ExitUsage, Field: "subcommand", Expected: "init, show, set, or validate", Actual: args[0]})
+		return ExitUsage
+	}
+}
+
+func requireOnePhasePlanRunID(args []string) *cliError {
+	command := args[0]
+	if len(args) == 2 {
+		return nil
+	}
+	if len(args) > 2 && strings.HasPrefix(args[2], "--") {
+		return &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown phase-plan %s option %q", command, args[2]), Hint: phasePlanUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "no phase-plan " + command + " options", Actual: args[2]}
+	}
+	return &cliError{Code: "run_id_required", Message: fmt.Sprintf("phase-plan %s requires exactly one run id", command), Hint: phasePlanUsageHint(), ExitCode: ExitUsage, Field: "run_id", Expected: "one run id or unique prefix", Actual: fmt.Sprintf("%d arguments", len(args)-1)}
+}
+
+func parsePhasePlanSetArgs(args []string) (project.PhasePlanSetOptions, *cliError) {
+	options := project.PhasePlanSetOptions{}
+	if len(args) < 3 || strings.HasPrefix(args[1], "--") || strings.HasPrefix(args[2], "--") {
+		return options, &cliError{Code: "phase_plan_set_arguments_required", Message: "phase-plan set requires run id and phase id", Hint: phasePlanUsageHint(), ExitCode: ExitUsage, Field: "arguments", Expected: "phase-plan set <run_id> <phase-id>", Actual: fmt.Sprintf("%d arguments", len(args)-1)}
+	}
+	options.RunID = args[1]
+	options.PhaseID = args[2]
+	seenStatus := false
+	seenEvidence := false
+	seenReason := false
+	for i := 3; i < len(args); i++ {
+		switch args[i] {
+		case "--status":
+			if i+1 >= len(args) {
+				return options, &cliError{Code: "missing_option_value", Message: "--status requires a value", Hint: phasePlanUsageHint(), ExitCode: ExitUsage, Field: "--status", Expected: "phase status", Actual: "missing"}
+			}
+			if seenStatus {
+				return options, &cliError{Code: "duplicate_option", Message: "duplicate phase-plan set option \"--status\"", Hint: phasePlanUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: "--status"}
+			}
+			seenStatus = true
+			options.Status = args[i+1]
+			i++
+		case "--evidence":
+			if i+1 >= len(args) {
+				return options, &cliError{Code: "missing_option_value", Message: "--evidence requires a value", Hint: phasePlanUsageHint(), ExitCode: ExitUsage, Field: "--evidence", Expected: "evidence reference", Actual: "missing"}
+			}
+			if seenEvidence {
+				return options, &cliError{Code: "duplicate_option", Message: "duplicate phase-plan set option \"--evidence\"", Hint: phasePlanUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: "--evidence"}
+			}
+			seenEvidence = true
+			options.Evidence = args[i+1]
+			i++
+		case "--reason":
+			if i+1 >= len(args) {
+				return options, &cliError{Code: "missing_option_value", Message: "--reason requires a value", Hint: phasePlanUsageHint(), ExitCode: ExitUsage, Field: "--reason", Expected: "reason text", Actual: "missing"}
+			}
+			if seenReason {
+				return options, &cliError{Code: "duplicate_option", Message: "duplicate phase-plan set option \"--reason\"", Hint: phasePlanUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: "--reason"}
+			}
+			seenReason = true
+			options.Reason = args[i+1]
+			i++
+		default:
+			return options, &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown phase-plan set option %q", args[i]), Hint: phasePlanUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "--status, --evidence, or --reason", Actual: args[i]}
+		}
+	}
+	if !seenStatus {
+		return options, &cliError{Code: "missing_required_option", Message: "phase-plan set requires --status", Hint: phasePlanUsageHint(), ExitCode: ExitUsage, Field: "--status", Expected: "required option", Actual: "missing"}
+	}
+	return options, nil
+}
+
+func parsePhasePlanValidateArgs(args []string) (project.PhasePlanValidationOptions, *cliError) {
+	options := project.PhasePlanValidationOptions{}
+	if len(args) < 2 || strings.HasPrefix(args[1], "--") {
+		return options, &cliError{Code: "run_id_required", Message: "phase-plan validate requires exactly one run id", Hint: phasePlanUsageHint(), ExitCode: ExitUsage, Field: "run_id", Expected: "one run id or unique prefix", Actual: fmt.Sprintf("%d arguments", len(args)-1)}
+	}
+	options.RunID = args[1]
+	for i := 2; i < len(args); i++ {
+		switch args[i] {
+		case "--final":
+			options.Final = true
+		default:
+			return options, &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown phase-plan validate option %q", args[i]), Hint: phasePlanUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "--final", Actual: args[i]}
 		}
 	}
 	return options, nil
@@ -1300,6 +1464,10 @@ func diagnosticsUsageHint() string {
 	return "Use diagnostics export [--run <run_id>] [--output <repo-relative-path>] with optional global --json."
 }
 
+func phasePlanUsageHint() string {
+	return "Use phase-plan init <run_id>, phase-plan show <run_id>, phase-plan set <run_id> <phase-id> --status <pending|in_progress|complete|skipped|not_applicable|blocked> [--evidence <path>] [--reason <text>], or phase-plan validate <run_id> [--final] with optional global --json."
+}
+
 func lockRecoverUsageHint() string {
 	return "Use lock recover <active-run|project-write|all> --reason <text> [--run <run_id>] with optional global --json."
 }
@@ -1444,7 +1612,7 @@ func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
 			{Name: "schema", Status: capabilityStatusSupported, Subcommands: []string{"validate", "export", "migrate"}},
 			{Name: "lock", Status: capabilityStatusSupported, Subcommands: []string{"recover"}},
 			{Name: "diagnostics", Status: capabilityStatusSupported, Subcommands: []string{"export"}},
-			{Name: "phase-plan", Status: capabilityStatusPlanned, Subcommands: []string{}},
+			{Name: "phase-plan", Status: capabilityStatusSupported, Subcommands: []string{"init", "show", "set", "validate"}},
 			{Name: "approval", Status: capabilityStatusPlanned, Subcommands: []string{}},
 		},
 		CompatibilityFlags: compatibilityFlagsOutput{
@@ -1458,7 +1626,7 @@ func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
 			Gates:                       true,
 			BackendEvidenceRequirements: true,
 			DiagnosticsExport:           true,
-			PhasePlan:                   false,
+			PhasePlan:                   true,
 			ApprovalRecords:             false,
 			InstallCommand:              false,
 		},
@@ -1475,7 +1643,7 @@ var helpPages = map[string]helpOutput{
 		Status:       capabilityStatusSupported,
 		Usage:        "kkachi-agent-helper [--json] <command> [subcommand] [options]",
 		Summary:      "Deterministic local helper for Kkachi project state, run artifacts, gates, events, schemas, locks, diagnostics, and compatibility discovery.",
-		Subcommands:  []helpItem{{Name: "version", Description: "Print helper build version."}, {Name: "capabilities", Description: "Print the command-surface compatibility report."}, {Name: "project", Description: "Initialize and inspect helper project state."}, {Name: "run", Description: "Create, list, show, activate, close, or abort helper runs."}, {Name: "artifact", Description: "Initialize, list, and validate canonical run artifacts."}, {Name: "gate", Description: "Run deterministic gate checks."}, {Name: "event", Description: "Append attributed helper events."}, {Name: "schema", Description: "Validate, export, or migrate helper schemas/state."}, {Name: "lock", Description: "Recover stale helper write locks explicitly."}, {Name: "diagnostics", Description: "Export redacted diagnostics bundles."}, {Name: "phase-plan", Description: "Planned KHS-declared phase-plan validation surface."}, {Name: "help", Description: "Show help for the top level or a command topic."}},
+		Subcommands:  []helpItem{{Name: "version", Description: "Print helper build version."}, {Name: "capabilities", Description: "Print the command-surface compatibility report."}, {Name: "project", Description: "Initialize and inspect helper project state."}, {Name: "run", Description: "Create, list, show, activate, close, or abort helper runs."}, {Name: "artifact", Description: "Initialize, list, and validate canonical run artifacts."}, {Name: "gate", Description: "Run deterministic gate checks."}, {Name: "event", Description: "Append attributed helper events."}, {Name: "schema", Description: "Validate, export, or migrate helper schemas/state."}, {Name: "lock", Description: "Recover stale helper write locks explicitly."}, {Name: "diagnostics", Description: "Export redacted diagnostics bundles."}, {Name: "phase-plan", Description: "Manage KHS-declared phase-plan state."}, {Name: "help", Description: "Show help for the top level or a command topic."}},
 		Options:      []helpItem{{Name: "--json", Description: "Emit machine-readable JSON for commands that support JSON output."}, {Name: "--help", Description: "Show help and exit 0 without requiring helper project state."}, {Name: "--version", Description: "Print helper build version."}},
 		JSONBehavior: "Use --json with help for structured help. Use capabilities --json for stable machine compatibility checks; command help is supplemental documentation.",
 	},
@@ -1582,11 +1750,13 @@ var helpPages = map[string]helpOutput{
 	},
 	"phase-plan": {
 		Command:      "kkachi-agent-helper phase-plan",
-		Status:       capabilityStatusPlanned,
-		Usage:        "kkachi-agent-helper phase-plan --help",
-		Summary:      "Planned KHS-declared phase-plan validation and diagnostics surface for align-005.",
-		JSONBehavior: "Only help is available now. capabilities --json reports phase_plan=false until align-005 implements this surface.",
-		Notes:        []string{"KAH will store and validate declared phase state only; KHS remains responsible for phase applicability and workflow policy."},
+		Status:       capabilityStatusSupported,
+		Usage:        "kkachi-agent-helper phase-plan init <run_id> [--json]\n  kkachi-agent-helper phase-plan show <run_id> [--json]\n  kkachi-agent-helper phase-plan set <run_id> <phase-id> --status <status> [--evidence <path>] [--reason <text>] [--json]\n  kkachi-agent-helper phase-plan validate <run_id> [--final] [--json]",
+		Summary:      "Store, update, show, and deterministically validate KHS-declared phase-plan.yaml state.",
+		Subcommands:  []helpItem{{Name: "init <run_id>", Description: "Initialize .kkachi/runs/<run_id>/phase-plan.yaml with required declared phase rows."}, {Name: "show <run_id>", Description: "Show the declared phase plan."}, {Name: "set <run_id> <phase-id>", Description: "Update one declared phase row."}, {Name: "validate <run_id>", Description: "Validate phase-plan structure and optional final completeness."}},
+		Options:      []helpItem{{Name: "--status <pending|in_progress|complete|skipped|not_applicable|blocked>", Required: true, Description: "Phase status for phase-plan set."}, {Name: "--evidence <path>", Description: "Evidence link for a completed phase."}, {Name: "--reason <text>", Description: "Required reason for skipped or not-applicable phases."}, {Name: "--final", Description: "Require terminal states and evidence for completed phases."}, {Name: "--json", Description: "Emit structured phase-plan output."}, {Name: "--help", Description: "Show phase-plan help and exit 0."}},
+		JSONBehavior: "Phase-plan commands support global --json for structured output and structured errors. Failing validation exits 3 with structured checks.",
+		Notes:        []string{"KAH stores and validates declared phase state only; KHS remains responsible for phase applicability and workflow policy."},
 	},
 }
 
@@ -1782,6 +1952,70 @@ func writeDiagnosticsExportResult(w io.Writer, result project.DiagnosticsBundle,
 	fmt.Fprintf(w, "schema_versions: %d\n", len(payload.SchemaVersions))
 	fmt.Fprintf(w, "gate_reports: %d\n", len(payload.GateReports))
 	fmt.Fprintf(w, "selected_artifacts: %d\n", len(payload.SelectedArtifacts))
+}
+
+func writePhasePlanInitResult(w io.Writer, result project.PhasePlanInitResult, jsonMode bool) {
+	payload := phasePlanInitOutput{PhasePlan: result.Plan, EventID: result.EventID}
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(payload)
+		return
+	}
+	fmt.Fprintf(w, "initialized phase plan for run: %s\n", payload.PhasePlan.RunID)
+	fmt.Fprintf(w, "path: %s\n", payload.PhasePlan.Path)
+	fmt.Fprintf(w, "event_id: %s\n", payload.EventID)
+	fmt.Fprintf(w, "phases: %d\n", len(payload.PhasePlan.Phases))
+}
+
+func writePhasePlanShowResult(w io.Writer, plan project.PhasePlan, jsonMode bool) {
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(plan)
+		return
+	}
+	fmt.Fprintf(w, "phase plan for run: %s\n", plan.RunID)
+	fmt.Fprintf(w, "path: %s\n", plan.Path)
+	for _, phase := range plan.Phases {
+		fmt.Fprintf(w, "- %s status=%s", phase.ID, phase.Status)
+		if phase.Evidence != "" {
+			fmt.Fprintf(w, " evidence=%s", phase.Evidence)
+		}
+		if phase.Reason != "" {
+			fmt.Fprintf(w, " reason=%s", phase.Reason)
+		}
+		fmt.Fprintln(w)
+	}
+}
+
+func writePhasePlanSetResult(w io.Writer, result project.PhasePlanSetResult, jsonMode bool) {
+	payload := phasePlanSetOutput{PhasePlan: result.Plan, Phase: result.Phase, EventID: result.EventID}
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(payload)
+		return
+	}
+	fmt.Fprintf(w, "updated phase plan for run: %s\n", payload.PhasePlan.RunID)
+	fmt.Fprintf(w, "path: %s\n", payload.PhasePlan.Path)
+	fmt.Fprintf(w, "event_id: %s\n", payload.EventID)
+	fmt.Fprintf(w, "phase: %s status=%s\n", payload.Phase.ID, payload.Phase.Status)
+}
+
+func writePhasePlanValidationResult(w io.Writer, result project.PhasePlanValidationResult, jsonMode bool) {
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(result)
+		return
+	}
+	fmt.Fprintf(w, "phase-plan validation for run: %s\n", result.RunID)
+	fmt.Fprintf(w, "path: %s\n", result.Path)
+	fmt.Fprintf(w, "final: %t\n", result.Final)
+	fmt.Fprintf(w, "status: %s\n", result.Status)
+	for _, check := range result.Checks {
+		fmt.Fprintf(w, "- [%s] %s", check.Status, check.Name)
+		if check.Field != "" {
+			fmt.Fprintf(w, " field=%s", check.Field)
+		}
+		if check.Actual != "" {
+			fmt.Fprintf(w, " actual=%s", check.Actual)
+		}
+		fmt.Fprintf(w, ": %s\n", check.Message)
+	}
 }
 
 func writeLockRecoverResult(w io.Writer, result project.LockRecoveryResult, jsonMode bool) {

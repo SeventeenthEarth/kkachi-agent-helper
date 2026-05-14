@@ -108,9 +108,9 @@ kkachi-agent-helper --help
 kkachi-agent-helper [--json] <command>
 ```
 
-`capabilities --json` is the stable machine-readable command-surface report for KHS activation checks. It includes helper build info, the embedded project schema version, supported command groups, compatibility flags, and explicit omitted surfaces such as the removed `install` command.
+`capabilities --json` is the stable machine-readable command-surface report for KHS activation checks. It includes helper build info, the embedded project schema version, supported command groups, compatibility flags such as phase-plan support, and explicit omitted surfaces such as the removed `install` command.
 
-Help is project-independent and exits `0`. Use `kkachi-agent-helper <command> --help`, supported subcommand topics such as `kkachi-agent-helper project init --help` and `kkachi-agent-helper run create --help`, or `kkachi-agent-helper help <command> [subcommand]` for required arguments, options, and JSON behavior. Implemented command groups have group help pages, including `schema`, `event`, and `lock`. `--json` with help emits structured help JSON; compatibility automation should still prefer `capabilities --json`.
+Help is project-independent and exits `0`. Use `kkachi-agent-helper <command> --help`, supported subcommand topics such as `kkachi-agent-helper project init --help` and `kkachi-agent-helper run create --help`, or `kkachi-agent-helper help <command> [subcommand]` for required arguments, options, and JSON behavior. Implemented command groups have group help pages, including `schema`, `event`, `lock`, and `phase-plan`. `--json` with help emits structured help JSON; compatibility automation should still prefer `capabilities --json`.
 
 Project state:
 
@@ -164,6 +164,15 @@ kkachi-agent-helper gate check <run_id> <intake|sot|roadmap|plan|backend|impleme
 kkachi-agent-helper gate final <run_id> [--json]
 ```
 
+Phase plans:
+
+```sh
+kkachi-agent-helper phase-plan init <run_id> [--json]
+kkachi-agent-helper phase-plan show <run_id> [--json]
+kkachi-agent-helper phase-plan set <run_id> <phase-id> --status <status> [--evidence <path>] [--reason <text>] [--json]
+kkachi-agent-helper phase-plan validate <run_id> [--final] [--json]
+```
+
 Schemas and migrations:
 
 ```sh
@@ -192,5 +201,6 @@ kkachi-agent-helper diagnostics export [--run <run_id>] [--output <repo-relative
 - Mutating commands fail closed when `status.last_event_id` and the event log tail diverge.
 - `project status`, `project doctor`, `artifact list`, and diagnostics stdout export are read-only.
 - `gate check` records deterministic pass/fail/blocked results in run metadata, project status, events, and run-local gate reports.
+- `phase-plan` stores and validates KHS-declared `phase-plan.yaml` state only; KHS owns phase applicability and workflow policy.
 - `diagnostics export` redacts token-like values and exports only a selected support-safe artifact set.
 - Canonical exit codes are `0` success, `1` internal failure, `2` usage/unsupported command state, `3` fail-closed state or validation problems, and `4` missing repository root.

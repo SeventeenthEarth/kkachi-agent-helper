@@ -138,7 +138,7 @@ func TestStandardHelpUX(t *testing.T) {
 		{name: "event group", args: []string{"event", "--help"}, want: []string{"kkachi-agent-helper event", "append <type>", "--payload <json-object> (required)"}},
 		{name: "lock group", args: []string{"lock", "--help"}, want: []string{"kkachi-agent-helper lock", "recover <active-run|project-write|all>", "--reason <text> (required)"}},
 		{name: "diagnostics group", args: []string{"diagnostics", "--help"}, want: []string{"kkachi-agent-helper diagnostics", "export", "--output <repo-relative-path>"}},
-		{name: "phase plan planned", args: []string{"phase-plan", "--help"}, want: []string{"kkachi-agent-helper phase-plan", "planned", "phase_plan=false"}},
+		{name: "phase plan", args: []string{"phase-plan", "--help"}, want: []string{"kkachi-agent-helper phase-plan", "supported", "validate <run_id>"}},
 		{name: "help help", args: []string{"help", "help"}, want: []string{"kkachi-agent-helper help", "[command] [subcommand]", "JSON behavior:"}},
 	}
 
@@ -164,8 +164,8 @@ func TestStandardHelpUX(t *testing.T) {
 	if err := json.Unmarshal([]byte(jsonHelp.stdout), &payload); err != nil {
 		t.Fatalf("phase-plan help output is not JSON: %v\n%s", err, jsonHelp.stdout)
 	}
-	if payload.Command != "kkachi-agent-helper phase-plan" || payload.Status != "planned" || payload.Usage == "" || !strings.Contains(payload.JSONBehavior, "phase_plan=false") {
-		t.Fatalf("payload = %#v, want planned phase-plan help JSON", payload)
+	if payload.Command != "kkachi-agent-helper phase-plan" || payload.Status != "supported" || payload.Usage == "" || !strings.Contains(payload.JSONBehavior, "Failing validation exits 3") {
+		t.Fatalf("payload = %#v, want supported phase-plan help JSON", payload)
 	}
 }
 
@@ -607,11 +607,15 @@ func TestDiagnosticsExportRedaction(t *testing.T) {
 	requireCLI(t, r, "project", "init", "--json")
 	runID := createRun(t, r, "pilot-002", "adapter_qa")
 	requireCLI(t, r, "artifact", "init", runID, "--json")
+	requireCLI(t, r, "phase-plan", "init", runID, "--json")
+	requireCLI(t, r, "phase-plan", "set", runID, "ask", "--status", "not_applicable", "--reason", "No actionable question.", "--json")
+	requireCLI(t, r, "phase-plan", "validate", runID, "--json")
 	writeFile(t, filepath.Join(r, ".kkachi/runs", runID, "selected-cli.json"), fmt.Sprintf(`{"version":"0.1","status":"pending","api_token":"%s"}`+"\n", secret))
 	requireCLI(t, r, "event", "append", "diagnostic.secret", "--run", runID, "--payload", fmt.Sprintf(`{"access_token":"%s"}`, secret), "--json")
 	requireFailCLI(t, r, "gate", "check", runID, "intake", "--json")
 	bundle := requireCLI(t, r, "diagnostics", "export", "--run", runID, "--json")
 	requireContains(t, bundle.stdout, `"schema_versions":`, "diagnostics JSON")
+	requireContains(t, bundle.stdout, `"path":".kkachi/runs/`+runID+`/phase-plan.yaml"`, "diagnostics JSON")
 	requireContains(t, bundle.stdout, `"api_token":"[REDACTED]"`, "diagnostics JSON")
 	requireNotContains(t, bundle.stdout, secret, "diagnostics JSON")
 	human := requireCLI(t, r, "diagnostics", "export", "--run", runID, "--output", "diagnostics/pilot-002.json")
@@ -694,7 +698,7 @@ func TestReleasePackaging(t *testing.T) {
 	requireContains(t, string(out), `"version":"0.1.0"`, "capabilities helper version")
 	requireContains(t, string(out), `"project_schema_version":"0.1"`, "capabilities schema version")
 	requireContains(t, string(out), `"backend_evidence_requirements":true`, "capabilities backend evidence flag")
-	requireContains(t, string(out), `"phase_plan":false`, "capabilities phase-plan flag")
+	requireContains(t, string(out), `"phase_plan":true`, "capabilities phase-plan flag")
 	requireContains(t, string(out), `"name":"install"`, "capabilities omitted install")
 	help := exec.Command(artifact, "run", "create", "--help")
 	out, err = help.Output()
@@ -709,7 +713,7 @@ func TestReleasePackaging(t *testing.T) {
 		t.Fatalf("release artifact phase-plan help: %v", err)
 	}
 	requireContains(t, string(out), `"command":"kkachi-agent-helper phase-plan"`, "release artifact phase-plan help")
-	requireContains(t, string(out), `"status":"planned"`, "release artifact phase-plan help")
+	requireContains(t, string(out), `"status":"supported"`, "release artifact phase-plan help")
 	runMake(t, "VERSION=0.1.0", "COMMIT=e2e", "BUILD_DATE=2026-01-01T00:00:00Z", "PREFIX="+prefix, "install-local")
 	installed := filepath.Join(prefix, "bin/kkachi-agent-helper")
 	out, err = exec.Command(installed, "version", "--json").Output()

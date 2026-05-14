@@ -66,6 +66,7 @@ Default target-project layout:
   runs/
     <run_id>/
       run-metadata.json
+      phase-plan.yaml
       intake-classification.md
       sot-basis.md
       task-brief.md
@@ -186,6 +187,8 @@ Initial event types:
 - `run.aborted`
 - `schema.exported`
 - `schema.migrated`
+- `phase_plan.initialized`
+- `phase_plan.updated`
 
 ## 7. Run metadata
 
@@ -350,6 +353,10 @@ kkachi-agent-helper schema validate <file> --schema <schema>
 kkachi-agent-helper schema export [--schema <schema>|--all] [--dry-run]
 kkachi-agent-helper schema migrate --from <version> --to <version>
 kkachi-agent-helper diagnostics export [--run <run_id-or-prefix>] [--output <repo-relative-path>]
+kkachi-agent-helper phase-plan init <run_id-or-prefix>
+kkachi-agent-helper phase-plan show <run_id-or-prefix>
+kkachi-agent-helper phase-plan set <run_id-or-prefix> <phase-id> --status <pending|in_progress|complete|skipped|not_applicable|blocked> [--evidence <path>] [--reason <text>]
+kkachi-agent-helper phase-plan validate <run_id-or-prefix> [--final]
 kkachi-agent-helper capabilities --json
 kkachi-agent-helper help
 kkachi-agent-helper --help
@@ -362,11 +369,11 @@ kkachi-agent-helper run create --help
 
 `align-003` introduces a project-independent capabilities report for KHS activation checks. The command exits `0` on a healthy binary and does not require `.kkachi/` project state. JSON output is the compatibility contract; human output is informational only.
 
-Stable JSON output includes helper build info, `capabilities_schema_version`, embedded `project_schema_version`, supported command groups/subcommands, compatibility booleans, deprecated surfaces, and omitted surfaces. Current compatibility flags report project init/status/doctor, run lifecycle, artifact init/list/validate, gates, declared backend evidence requirements, and diagnostics export as supported. Phase-plan and approval records are reported as unsupported until their later `align` tasks land. The removed `install` command is reported as an omitted surface because Hermes/KHS skill installation belongs to Hermes native tooling.
+Stable JSON output includes helper build info, `capabilities_schema_version`, embedded `project_schema_version`, supported command groups/subcommands, compatibility booleans, deprecated surfaces, and omitted surfaces. Current compatibility flags report project init/status/doctor, run lifecycle, artifact init/list/validate, gates, declared backend evidence requirements, diagnostics export, and phase-plan support as supported. Approval records are reported as unsupported until their later `align` task lands. The removed `install` command is reported as an omitted surface because Hermes/KHS skill installation belongs to Hermes native tooling.
 
 ### Help UX
 
-`align-004` introduces project-independent help output for top-level discovery, implemented command groups, selected high-argument subcommands (`project init` and `run create` initially), and the planned `phase-plan` surface. `help`, `help help`, `--help`, supported `<command> --help`, and supported subcommand help topics exit `0`, write help to stdout, do not require `.kkachi/` state, and list usage, required arguments/options, subcommands, and JSON behavior. Implemented command groups have group help pages, including `schema`, `event`, and `lock`. `--json` with help emits structured help JSON. Machine compatibility checks should continue to use `capabilities --json`; help JSON is supplemental command documentation.
+`align-004` introduces project-independent help output for top-level discovery, implemented command groups, selected high-argument subcommands (`project init` and `run create` initially), and the `phase-plan` surface. `help`, `help help`, `--help`, supported `<command> --help`, and supported subcommand help topics exit `0`, write help to stdout, do not require `.kkachi/` state, and list usage, required arguments/options, subcommands, and JSON behavior. Implemented command groups have group help pages, including `schema`, `event`, `lock`, and `phase-plan`. `--json` with help emits structured help JSON. Machine compatibility checks should continue to use `capabilities --json`; help JSON is supplemental command documentation.
 
 ### `gate check`
 
@@ -549,11 +556,28 @@ Command UX rules:
 - State-file creation and replacement use atomic temp-file writes with durable sync before publish where the host filesystem supports it.
 - Commands must reject absolute paths, paths escaping the repository root, and ambiguous run ids.
 
+### `phase-plan`
+
+`align-005` introduces `.kkachi/runs/<run_id>/phase-plan.yaml` as the KAH-managed storage surface for KHS-declared phase state. KHS owns workflow policy, phase applicability, and the decision to mark a phase skipped or not applicable. KAH stores and validates declared rows only; it must not infer phases from `work_path`, `work_mode`, `execution_mode`, task semantics, backend choice, or user intent, and it must not intelligently reorder phases.
+
+The supported commands are:
+
+```sh
+kkachi-agent-helper phase-plan init <run_id> [--json]
+kkachi-agent-helper phase-plan show <run_id> [--json]
+kkachi-agent-helper phase-plan set <run_id> <phase-id> --status <pending|in_progress|complete|skipped|not_applicable|blocked> [--evidence <path>] [--reason <text>] [--json]
+kkachi-agent-helper phase-plan validate <run_id> [--final] [--json]
+```
+
+`phase-plan init` creates the constrained YAML file with `version`, `run_id`, and declared phase rows including `ask`, `optimize`, `request-feedback-1`, and `handle-feedback-1`. Mutating phase-plan commands are serialized by `.kkachi/project_write.lock`, refuse status/event incoherence, write atomically, and append `phase_plan.initialized` or `phase_plan.updated`.
+
+`phase-plan validate` checks deterministic structure and completeness only: required rows are present, phase statuses are from the supported enum, skipped/not-applicable rows include non-empty reasons, feedback rounds are within `1..3`, and `request-feedback-N` / `handle-feedback-N` rows are paired. With `--final`, required rows must be terminal (`complete`, `skipped`, or `not_applicable`) and completed rows must include evidence links. Passing validation exits `0`; failing validation exits `3`.
+
 ### `diagnostics export`
 
 `pilot-002` introduces `diagnostics export [--run <run_id-or-prefix>] [--output <repo-relative-path>]` as a support-safe diagnostic bundle. The command is deterministic and does not append events, take locks, recover state, or repair `.kkachi/`. Without `--output`, it writes the JSON bundle to stdout. With `--output`, it writes one new repository-confined JSON file and prints a compact summary unless `--json` is used.
 
-The bundle includes redacted project config, status, event entries, project-local schema versions, run-local gate reports, and a selected support artifact set for the requested run. If `--run` is omitted, the active run is used when one is recorded in `status.json`; otherwise the bundle contains project-level diagnostics only. Selected artifacts are intentionally narrower than the full artifact tree: `run-metadata.json`, intake classification, backend evidence files, test/verification/docs-update evidence, and `final-report.md`.
+The bundle includes redacted project config, status, event entries, project-local schema versions, run-local gate reports, and a selected support artifact set for the requested run. If `--run` is omitted, the active run is used when one is recorded in `status.json`; otherwise the bundle contains project-level diagnostics only. Selected artifacts are intentionally narrower than the full artifact tree: `run-metadata.json`, `phase-plan.yaml`, intake classification, backend evidence files, test/verification/docs-update evidence, and `final-report.md`. Missing selected artifacts are reported in the bundle with `status: "absent"` rather than causing diagnostics export to fail.
 
 Token-like values are redacted in both diagnostics bundles and CLI errors. Redaction preserves field names and replaces sensitive values with `[REDACTED]`; key names such as `token`, `secret`, `password`, `api_key`, `authorization`, and credential-like variants are redacted recursively in JSON payloads, and bearer/assignment/long-token patterns are redacted from text.
 
