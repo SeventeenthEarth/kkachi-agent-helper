@@ -238,6 +238,11 @@ Run lifecycle commands in `runwf-001` use these state transitions. In `runwf-002
 - On success, the command updates `run-metadata.json.required_artifacts`, appends one `artifact.written` event, and advances `status.last_event_id`.
 - If an artifact write succeeds but the later metadata/status update fails, the project is intentionally left fail-closed through the existing status/event coherence checks rather than silently rewriting history.
 - `artifact list <run_id> [--json]` is read-only. It does not append events, create files, repair files, create locks, remove locks, or rewrite metadata. It reports every canonical artifact path with required/present/empty/byte status.
+- `artifact write <run_id> <artifact_path> --from <repo-relative-file> [--json]` atomically replaces or creates one canonical run artifact from exact source bytes.
+- `artifact append <run_id> <artifact_path> --from <repo-relative-file> [--json]` atomically appends exact source bytes to one canonical run artifact, creating it if absent.
+- `artifact set-status <run_id> <artifact_path> --status <pending|complete|not_applicable> [--reason <text>] [--json]` atomically updates markdown `Status:` fields or top-level JSON `status`; `not_applicable` requires a non-empty reason. Patch artifacts do not support status mutation.
+- Artifact mutation commands are serialized by `.kkachi/project_write.lock`, refuse closed/aborted runs, verify status/event-log coherence before mutation, reject unsafe source paths, and only target canonical artifact paths. Unmanaged KHS supplemental paths are rejected in this release while direct-file compatibility remains available during migration.
+- Each artifact mutation records an `artifact.written` event with `operation`, `path`, `artifact_kind: "canonical"`, byte count, and source/status metadata as applicable.
 
 `runwf-004` adds read-only intake validation before later gate commands exist:
 
@@ -369,7 +374,7 @@ kkachi-agent-helper run create --help
 
 `align-003` introduces a project-independent capabilities report for KHS activation checks. The command exits `0` on a healthy binary and does not require `.kkachi/` project state. JSON output is the compatibility contract; human output is informational only.
 
-Stable JSON output includes helper build info, `capabilities_schema_version`, embedded `project_schema_version`, supported command groups/subcommands, compatibility booleans, deprecated surfaces, and omitted surfaces. Current compatibility flags report project init/status/doctor, run lifecycle, artifact init/list/validate, gates, declared backend evidence requirements, diagnostics export, and phase-plan support as supported. Approval records are reported as unsupported until their later `align` task lands. The removed `install` command is reported as an omitted surface because Hermes/KHS skill installation belongs to Hermes native tooling.
+Stable JSON output includes helper build info, `capabilities_schema_version`, embedded `project_schema_version`, supported command groups/subcommands, compatibility booleans, deprecated surfaces, and omitted surfaces. Current compatibility flags report project init/status/doctor, run lifecycle, artifact init/list/validate/mutation, gates, declared backend evidence requirements, diagnostics export, and phase-plan support as supported. Approval records are reported as unsupported until their later `align` task lands. The removed `install` command is reported as an omitted surface because Hermes/KHS skill installation belongs to Hermes native tooling.
 
 ### Help UX
 

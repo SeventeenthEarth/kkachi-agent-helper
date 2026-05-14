@@ -136,7 +136,7 @@ KHS `main` should use KAH `@latest` where possible, but it needs capability-base
 
 - `capabilities --json` exits `0` on a healthy binary.
 - Output includes helper version and project schema version.
-- Output lets KHS determine whether project init, run lifecycle, artifact init/list/validate, gates, backend evidence requirements, phase-plan support, approval records, diagnostics, and omitted install behavior are available.
+- Output lets KHS determine whether project init, run lifecycle, artifact init/list/validate/mutation, gates, backend evidence requirements, phase-plan support, approval records, diagnostics, and omitted install behavior are available.
 - Output is stable enough for KHS activation checks.
 
 #### Completion notes
@@ -225,7 +225,7 @@ KHS can write `phase-plan.yaml` directly today, but KAH lacks a deterministic co
 
 ### align-006 — Deterministic artifact mutation commands
 
-Status: Planned
+Status: Completed
 
 #### Problem
 
@@ -251,6 +251,13 @@ kkachi-agent-helper artifact set-status <run_id> checklist.md --status complete 
 - KAH records an event for artifact write/update operations.
 - KAH can distinguish canonical artifacts from KHS supplemental artifacts.
 - Existing direct file compatibility remains possible during migration.
+
+#### Completion notes
+
+- Implemented `artifact write`, `artifact append`, and `artifact set-status` for canonical run artifacts only.
+- Mutating artifact commands take the project write lock, refuse event incoherence and finished runs, perform atomic writes, and append `artifact.written` events with operation and canonical artifact metadata.
+- Path safety rejects unsafe source paths and unmanaged/supplemental artifact targets while preserving direct-file compatibility during migration.
+- Capabilities, help, README/specs/compatibility docs, unit tests, CLI tests, integration coverage, and E2E coverage now include artifact mutation support.
 
 ### align-007 — Approval record surface
 

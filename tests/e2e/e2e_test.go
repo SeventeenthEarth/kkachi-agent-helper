@@ -426,6 +426,50 @@ func TestProjectInitSchemaAndBootstrapFlow(t *testing.T) {
 	requireContains(t, unknown.stderr, `"code":"schema_migration_unknown_source_version"`, "schema migrate unknown source")
 }
 
+func TestArtifactMutationCommandsE2E(t *testing.T) {
+	r := repo(t, "artifact-mutation")
+	requireCLI(t, r, "project", "init", "--json")
+	runID := createRun(t, r, "align-006", "production_write")
+	requireCLI(t, r, "artifact", "init", runID, "--json")
+
+	writeFile(t, filepath.Join(r, "sources", "acceptance.md"), "Status: complete\nCriteria: artifact mutation commands preserve gate evidence\n")
+	writeFile(t, filepath.Join(r, "sources", "plan.md"), "Status: complete\nPlan: use KAH-managed artifact mutation commands\n")
+	writeFile(t, filepath.Join(r, "sources", "checklist.md"), "- [x] write canonical artifacts\n- [x] append checklist evidence\n")
+
+	acceptance := requireCLI(t, r, "artifact", "write", runID[:24], "acceptance-criteria.md", "--from", "sources/acceptance.md", "--json")
+	requireContains(t, acceptance.stdout, `"operation":"write"`, "acceptance artifact write")
+	requireContains(t, acceptance.stdout, `"artifact_kind":"canonical"`, "acceptance artifact write")
+	requireContains(t, acceptance.stdout, `"event_id":"evt-000004"`, "acceptance artifact write")
+
+	plan := requireCLI(t, r, "artifact", "write", runID, "plan.md", "--from", "sources/plan.md", "--json")
+	requireContains(t, plan.stdout, `"path":"plan.md"`, "plan artifact write")
+	requireContains(t, plan.stdout, `"event_id":"evt-000005"`, "plan artifact write")
+
+	appendChecklist := requireCLI(t, r, "artifact", "append", runID, "checklist.md", "--from", "sources/checklist.md", "--json")
+	requireContains(t, appendChecklist.stdout, `"operation":"append"`, "checklist append")
+	requireContains(t, appendChecklist.stdout, `"event_id":"evt-000006"`, "checklist append")
+
+	completeChecklist := requireCLI(t, r, "artifact", "set-status", runID, "checklist.md", "--status", "complete", "--json")
+	requireContains(t, completeChecklist.stdout, `"operation":"set-status"`, "checklist set-status")
+	requireContains(t, completeChecklist.stdout, `"status":"complete"`, "checklist set-status")
+	requireContains(t, completeChecklist.stdout, `"event_id":"evt-000007"`, "checklist set-status")
+
+	planGate := requireCLI(t, r, "gate", "check", runID, "plan", "--json")
+	requireContains(t, planGate.stdout, `"status":"pass"`, "plan gate after artifact mutation")
+	requireContains(t, planGate.stdout, `"event_id":"evt-000008"`, "plan gate after artifact mutation")
+	requireFileContains(t, filepath.Join(r, ".kkachi", "runs", runID, "plan.md"), "KAH-managed artifact mutation commands", "mutated plan artifact")
+	requireFileContains(t, filepath.Join(r, ".kkachi", "runs", runID, "checklist.md"), "Status: complete", "mutated checklist artifact")
+	requireFileContains(t, filepath.Join(r, ".kkachi", "events.jsonl"), `"operation":"write"`, "artifact write event")
+	requireFileContains(t, filepath.Join(r, ".kkachi", "events.jsonl"), `"operation":"append"`, "artifact append event")
+	requireFileContains(t, filepath.Join(r, ".kkachi", "events.jsonl"), `"operation":"set-status"`, "artifact set-status event")
+
+	supplemental := requireFailCLI(t, r, "artifact", "write", runID, "supplemental/note.md", "--from", "sources/plan.md", "--json")
+	requireContains(t, supplemental.stderr, `"code":"artifact_path_invalid"`, "supplemental artifact rejection")
+	if got := eventCount(t, r); got != 8 {
+		t.Fatalf("event count after rejected supplemental mutation = %d, want 8", got)
+	}
+}
+
 func TestRunArtifactGateAndCoherenceFlow(t *testing.T) {
 	r := repo(t, "repo")
 	requireCLI(t, r, "project", "init", "--json")

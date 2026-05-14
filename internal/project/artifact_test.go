@@ -253,3 +253,131 @@ func artifactRequired(values []ArtifactStatus, target string) bool {
 	}
 	return false
 }
+
+func TestArtifactWriteAppendAndSetStatusMutateCanonically(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+		t.Fatalf("InitArtifacts() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "plan-source.md"), []byte("# Plan\n\nStatus: pending\nBody\n"), 0o600); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	written, err := WriteArtifact(root, ArtifactMutateOptions{RunID: created.Metadata.RunID[:24], Artifact: "plan.md", From: "plan-source.md", Now: testRunNow(5)})
+	if err != nil {
+		t.Fatalf("WriteArtifact() error = %v", err)
+	}
+	if written.Operation != artifactOperationWrite || written.ArtifactKind != artifactKindCanonical || written.SourcePath != "plan-source.md" || written.EventID != "evt-000004" {
+		t.Fatalf("written = %#v, want canonical write result", written)
+	}
+	planPath := filepath.Join(repo, ".kkachi", "runs", created.Metadata.RunID, "plan.md")
+	if got := readText(t, planPath); got != "# Plan\n\nStatus: pending\nBody\n" {
+		t.Fatalf("plan.md after write = %q", got)
+	}
+
+	if err := os.WriteFile(filepath.Join(repo, "append.md"), []byte("- [x] done\n"), 0o600); err != nil {
+		t.Fatalf("write append source: %v", err)
+	}
+	appended, err := AppendArtifact(root, ArtifactMutateOptions{RunID: created.Metadata.RunID, Artifact: "checklist.md", From: "append.md", Now: testRunNow(6)})
+	if err != nil {
+		t.Fatalf("AppendArtifact() error = %v", err)
+	}
+	if appended.Operation != artifactOperationAppend || appended.EventID != "evt-000005" {
+		t.Fatalf("appended = %#v, want append event", appended)
+	}
+	checklist := readText(t, filepath.Join(repo, ".kkachi", "runs", created.Metadata.RunID, "checklist.md"))
+	if !strings.Contains(checklist, "Status: pending") || !strings.HasSuffix(checklist, "- [x] done\n") {
+		t.Fatalf("checklist after append = %q, want baseline plus appended bytes", checklist)
+	}
+
+	updated, err := SetArtifactStatus(root, ArtifactMutateOptions{RunID: created.Metadata.RunID, Artifact: "checklist.md", Status: "complete", Now: testRunNow(7)})
+	if err != nil {
+		t.Fatalf("SetArtifactStatus(markdown) error = %v", err)
+	}
+	if updated.Operation != artifactOperationSetStatus || updated.Status != "complete" || updated.EventID != "evt-000006" {
+		t.Fatalf("updated = %#v, want set-status event", updated)
+	}
+	if got := readText(t, filepath.Join(repo, ".kkachi", "runs", created.Metadata.RunID, "checklist.md")); !strings.Contains(got, "Status: complete") || strings.Contains(got, "Status: pending") {
+		t.Fatalf("checklist after set-status = %q, want complete status", got)
+	}
+
+	jsonUpdated, err := SetArtifactStatus(root, ArtifactMutateOptions{RunID: created.Metadata.RunID, Artifact: "selected-cli.json", Status: "not_applicable", Reason: "backend not used", Now: testRunNow(8)})
+	if err != nil {
+		t.Fatalf("SetArtifactStatus(json) error = %v", err)
+	}
+	if jsonUpdated.Status != "not_applicable" || jsonUpdated.Reason != "backend not used" || jsonUpdated.EventID != "evt-000007" {
+		t.Fatalf("jsonUpdated = %#v, want not_applicable status result", jsonUpdated)
+	}
+	var selected map[string]any
+	readJSONFile(t, filepath.Join(repo, ".kkachi", "runs", created.Metadata.RunID, "selected-cli.json"), &selected)
+	if selected["status"] != "not_applicable" || selected["reason"] != "backend not used" {
+		t.Fatalf("selected-cli = %#v, want status and reason", selected)
+	}
+
+	lines := runEventLines(t, repo)
+	if len(lines) != 7 || !strings.Contains(lines[3], `"operation":"write"`) || !strings.Contains(lines[4], `"operation":"append"`) || !strings.Contains(lines[5], `"operation":"set-status"`) || !strings.Contains(lines[5], `"artifact_kind":"canonical"`) {
+		t.Fatalf("events = %#v, want artifact mutation payloads", lines)
+	}
+}
+
+func TestArtifactMutationRejectsUnsafeSupplementalAndFinishedRuns(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "source.md"), []byte("content\n"), 0o600); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	_, err = WriteArtifact(root, ArtifactMutateOptions{RunID: created.Metadata.RunID, Artifact: "supplemental/note.md", From: "source.md", Now: testRunNow(4)})
+	assertProblemCode(t, err, "artifact_path_invalid")
+	_, err = WriteArtifact(root, ArtifactMutateOptions{RunID: created.Metadata.RunID, Artifact: "../plan.md", From: "source.md", Now: testRunNow(4)})
+	assertProblemCode(t, err, "artifact_path_invalid")
+	_, err = WriteArtifact(root, ArtifactMutateOptions{RunID: created.Metadata.RunID, Artifact: "plan.md", From: "missing.md", Now: testRunNow(4)})
+	assertProblemCode(t, err, "artifact_source_missing")
+	if err := os.Mkdir(filepath.Join(repo, "source-dir"), 0o755); err != nil {
+		t.Fatalf("mkdir source dir: %v", err)
+	}
+	_, err = WriteArtifact(root, ArtifactMutateOptions{RunID: created.Metadata.RunID, Artifact: "plan.md", From: "source-dir", Now: testRunNow(4)})
+	assertProblemCode(t, err, "artifact_source_invalid")
+	if err := os.MkdirAll(filepath.Join(repo, ".kkachi", "runs", created.Metadata.RunID, "redteam", "impl-review.md"), 0o755); err != nil {
+		t.Fatalf("mkdir artifact target: %v", err)
+	}
+	_, err = WriteArtifact(root, ArtifactMutateOptions{RunID: created.Metadata.RunID, Artifact: "redteam/impl-review.md", From: "source.md", Now: testRunNow(4)})
+	assertProblemCode(t, err, "artifact_path_invalid")
+	_, err = SetArtifactStatus(root, ArtifactMutateOptions{RunID: created.Metadata.RunID, Artifact: "roadmap-update.md", Status: "not_applicable", Now: testRunNow(4)})
+	assertProblemCode(t, err, "artifact_reason_required")
+	_, err = SetArtifactStatus(root, ArtifactMutateOptions{RunID: created.Metadata.RunID, Artifact: "diff.patch", Status: "complete", Now: testRunNow(4)})
+	assertProblemCode(t, err, "artifact_status_unsupported")
+	if after := len(runEventLines(t, repo)); after != 2 {
+		t.Fatalf("events after rejected mutations = %d, want unchanged", after)
+	}
+	if _, err := CloseRun(root, RunLifecycleOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+		t.Fatalf("CloseRun() error = %v", err)
+	}
+	_, err = WriteArtifact(root, ArtifactMutateOptions{RunID: created.Metadata.RunID, Artifact: "plan.md", From: "source.md", Now: testRunNow(5)})
+	assertProblemCode(t, err, "run_artifact_mutation_invalid_state")
+}
+
+func TestArtifactMutationRefusesCoherenceMismatch(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "source.md"), []byte("content\n"), 0o600); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	setStatusLastEventID(t, repo, "evt-999999")
+	_, err = WriteArtifact(root, ArtifactMutateOptions{RunID: created.Metadata.RunID, Artifact: "plan.md", From: "source.md", Now: testRunNow(4)})
+	assertProblemCode(t, err, "last_event_id_mismatch")
+	if _, err := os.Stat(filepath.Join(repo, ".kkachi", "runs", created.Metadata.RunID, "plan.md")); !os.IsNotExist(err) {
+		t.Fatalf("plan.md exists after coherence refusal: %v", err)
+	}
+}

@@ -35,6 +35,7 @@ func TestCapabilitiesJSONAtBinaryBoundary(t *testing.T) {
 		CompatibilityFlags   struct {
 			BackendEvidenceRequirements bool `json:"backend_evidence_requirements"`
 			PhasePlan                   bool `json:"phase_plan"`
+			ArtifactMutation            bool `json:"artifact_mutation"`
 			ApprovalRecords             bool `json:"approval_records"`
 			InstallCommand              bool `json:"install_command"`
 		} `json:"compatibility_flags"`
@@ -49,7 +50,7 @@ func TestCapabilitiesJSONAtBinaryBoundary(t *testing.T) {
 	if payload.Helper.Version != "0.1.0" || payload.ProjectSchemaVersion != "0.1" {
 		t.Fatalf("payload versions = %#v, want helper 0.1.0 and schema 0.1", payload)
 	}
-	if !payload.CompatibilityFlags.BackendEvidenceRequirements || !payload.CompatibilityFlags.PhasePlan || payload.CompatibilityFlags.ApprovalRecords || payload.CompatibilityFlags.InstallCommand {
+	if !payload.CompatibilityFlags.BackendEvidenceRequirements || !payload.CompatibilityFlags.PhasePlan || !payload.CompatibilityFlags.ArtifactMutation || payload.CompatibilityFlags.ApprovalRecords || payload.CompatibilityFlags.InstallCommand {
 		t.Fatalf("compatibility flags = %#v, want current align support matrix", payload.CompatibilityFlags)
 	}
 	foundInstall := false
@@ -88,6 +89,72 @@ func TestHelpAtBinaryBoundaryDoesNotRequireProjectState(t *testing.T) {
 	if payload.Command != "kkachi-agent-helper phase-plan" || payload.Status != "supported" || !strings.Contains(payload.JSONBehavior, "Failing validation exits 3") {
 		t.Fatalf("payload = %#v, want supported phase-plan help", payload)
 	}
+}
+
+func TestArtifactMutationBinaryFlow(t *testing.T) {
+	binary := buildHelperBinary(t)
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	runHelper(t, binary, repo, "project", "init", "--json")
+	createdOutput := runHelper(t, binary, repo,
+		"run", "create",
+		"--title", "Artifact mutation integration",
+		"--work-path", "A_development_execution",
+		"--work-mode", "standard",
+		"--urgency", "normal",
+		"--sot-policy", "existing_sot_basis",
+		"--execution-mode", "production_write",
+		"--commander", "Gongmyeong",
+		"--task-id", "align-006",
+		"--json",
+	)
+	var created struct {
+		RunID string `json:"run_id"`
+	}
+	if err := json.Unmarshal(createdOutput, &created); err != nil {
+		t.Fatalf("run create output is not JSON: %v\n%s", err, string(createdOutput))
+	}
+	runHelper(t, binary, repo, "artifact", "init", created.RunID, "--json")
+	if err := os.WriteFile(filepath.Join(repo, "plan-source.md"), []byte("Status: pending\nPlan: preserve pre-start plan\n"), 0o600); err != nil {
+		t.Fatalf("write plan source: %v", err)
+	}
+	writeOutput := runHelper(t, binary, repo, "artifact", "write", created.RunID[:24], "plan.md", "--from", "plan-source.md", "--json")
+	var written struct {
+		RunID     string `json:"run_id"`
+		Path      string `json:"path"`
+		Operation string `json:"operation"`
+		EventID   string `json:"event_id"`
+	}
+	if err := json.Unmarshal(writeOutput, &written); err != nil {
+		t.Fatalf("artifact write output is not JSON: %v\n%s", err, string(writeOutput))
+	}
+	if written.RunID != created.RunID || written.Path != "plan.md" || written.Operation != "write" || written.EventID != "evt-000004" {
+		t.Fatalf("written = %#v, want canonical write", written)
+	}
+	assertFileContains(t, filepath.Join(repo, ".kkachi", "runs", created.RunID, "plan.md"), "preserve pre-start plan", "plan artifact")
+
+	if err := os.WriteFile(filepath.Join(repo, "checklist-append.md"), []byte("- [x] implementation ready\n"), 0o600); err != nil {
+		t.Fatalf("write checklist append source: %v", err)
+	}
+	runHelper(t, binary, repo, "artifact", "append", created.RunID, "checklist.md", "--from", "checklist-append.md", "--json")
+	setOutput := runHelper(t, binary, repo, "artifact", "set-status", created.RunID, "checklist.md", "--status", "complete", "--json")
+	var updated struct {
+		Operation string `json:"operation"`
+		Status    string `json:"status"`
+		EventID   string `json:"event_id"`
+	}
+	if err := json.Unmarshal(setOutput, &updated); err != nil {
+		t.Fatalf("artifact set-status output is not JSON: %v\n%s", err, string(setOutput))
+	}
+	if updated.Operation != "set-status" || updated.Status != "complete" || updated.EventID != "evt-000006" {
+		t.Fatalf("updated = %#v, want set-status complete", updated)
+	}
+	assertFileContains(t, filepath.Join(repo, ".kkachi", "runs", created.RunID, "checklist.md"), "Status: complete", "checklist artifact")
+	assertFileContains(t, filepath.Join(repo, ".kkachi", "events.jsonl"), `"operation":"write"`, "artifact write event")
+	assertFileContains(t, filepath.Join(repo, ".kkachi", "events.jsonl"), `"operation":"append"`, "artifact append event")
+	assertFileContains(t, filepath.Join(repo, ".kkachi", "events.jsonl"), `"operation":"set-status"`, "artifact set-status event")
 }
 
 func TestPhasePlanBinaryFlowAndDiagnostics(t *testing.T) {

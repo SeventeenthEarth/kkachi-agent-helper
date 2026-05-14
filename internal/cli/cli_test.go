@@ -109,7 +109,7 @@ func TestCapabilitiesJSONOutputIsProjectIndependent(t *testing.T) {
 		t.Fatalf("project schema version = %q, want %q", payload.ProjectSchemaVersion, project.SchemaVersion)
 	}
 	flags := payload.CompatibilityFlags
-	if !flags.ProjectInit || !flags.RunLifecycle || !flags.ArtifactInit || !flags.ArtifactList || !flags.ArtifactValidate || !flags.Gates || !flags.BackendEvidenceRequirements || !flags.DiagnosticsExport || !flags.PhasePlan {
+	if !flags.ProjectInit || !flags.RunLifecycle || !flags.ArtifactInit || !flags.ArtifactList || !flags.ArtifactValidate || !flags.ArtifactMutation || !flags.Gates || !flags.BackendEvidenceRequirements || !flags.DiagnosticsExport || !flags.PhasePlan {
 		t.Fatalf("compatibility flags = %#v, want implemented surfaces enabled", flags)
 	}
 	if flags.ApprovalRecords || flags.InstallCommand {
@@ -1414,7 +1414,7 @@ func assertCapabilityCommandGroups(t *testing.T, groups []capabilityCommandGroup
 	want := []capabilityCommandGroup{
 		{Name: "project", Status: capabilityStatusSupported, Subcommands: []string{"init", "status", "doctor"}},
 		{Name: "run", Status: capabilityStatusSupported, Subcommands: []string{"create", "activate", "close", "abort", "list", "show"}},
-		{Name: "artifact", Status: capabilityStatusSupported, Subcommands: []string{"init", "list", "validate"}},
+		{Name: "artifact", Status: capabilityStatusSupported, Subcommands: []string{"init", "list", "validate", "write", "append", "set-status"}},
 		{Name: "gate", Status: capabilityStatusSupported, Subcommands: []string{"check", "final"}},
 		{Name: "event", Status: capabilityStatusSupported, Subcommands: []string{"append"}},
 		{Name: "schema", Status: capabilityStatusSupported, Subcommands: []string{"validate", "export", "migrate"}},
@@ -1653,6 +1653,89 @@ func TestArtifactCLIValidationAndHumanOutput(t *testing.T) {
 	stdout.Reset()
 	stderr.Reset()
 	assertCLIErrorCode(t, runWithOptions([]string{"artifact", "init", "missing", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitSafety, "run_not_found")
+}
+
+func TestArtifactMutationCLIJSONHumanAndFailures(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions(runCreateArgs("Artifact mutate", "--json"), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("run create exit = %d stderr=%s", code, stderr.String())
+	}
+	var created runCreateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"artifact", "init", created.RunID, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("artifact init exit = %d stderr=%s", code, stderr.String())
+	}
+	if err := os.WriteFile(filepath.Join(repo, "plan-source.md"), []byte("# plan\nStatus: pending\n"), 0o600); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"artifact", "write", created.RunID[:24], "plan.md", "--from", "plan-source.md", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("artifact write exit = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var written artifactMutationOutput
+	if err := json.Unmarshal(stdout.Bytes(), &written); err != nil {
+		t.Fatalf("decode write: %v\n%s", err, stdout.String())
+	}
+	if written.RunID != created.RunID || written.Path != "plan.md" || written.Operation != "write" || written.ArtifactKind != "canonical" || written.SourcePath != "plan-source.md" || written.EventID != "evt-000004" {
+		t.Fatalf("written = %#v, want write payload", written)
+	}
+	if got := readCLIText(t, filepath.Join(repo, ".kkachi", "runs", created.RunID, "plan.md")); got != "# plan\nStatus: pending\n" {
+		t.Fatalf("plan.md = %q, want source bytes", got)
+	}
+
+	if err := os.WriteFile(filepath.Join(repo, "append.md"), []byte("- [x] done\n"), 0o600); err != nil {
+		t.Fatalf("write append: %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"artifact", "append", created.RunID, "checklist.md", "--from", "append.md"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("artifact append exit = %d stderr=%s", code, stderr.String())
+	}
+	if output := stdout.String(); !strings.Contains(output, "operation: append") || !strings.Contains(output, "event_id: evt-000005") {
+		t.Fatalf("append output = %q, want human mutation summary", output)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"artifact", "set-status", created.RunID, "checklist.md", "--status", "complete", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("artifact set-status exit = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var updated artifactMutationOutput
+	if err := json.Unmarshal(stdout.Bytes(), &updated); err != nil {
+		t.Fatalf("decode set-status: %v\n%s", err, stdout.String())
+	}
+	if updated.Operation != "set-status" || updated.Status != "complete" || updated.EventID != "evt-000006" {
+		t.Fatalf("updated = %#v, want set-status payload", updated)
+	}
+	if got := readCLIText(t, filepath.Join(repo, ".kkachi", "runs", created.RunID, "checklist.md")); !strings.Contains(got, "Status: complete") {
+		t.Fatalf("checklist.md = %q, want complete status", got)
+	}
+	if events := readCLIText(t, filepath.Join(repo, ".kkachi", "events.jsonl")); !strings.Contains(events, `"operation":"write"`) || !strings.Contains(events, `"operation":"append"`) || !strings.Contains(events, `"operation":"set-status"`) {
+		t.Fatalf("events = %s, want mutation operations", events)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	assertCLIErrorCode(t, runWithOptions([]string{"artifact", "write", created.RunID, "supplemental/note.md", "--from", "plan-source.md", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitSafety, "artifact_path_invalid")
+	stdout.Reset()
+	stderr.Reset()
+	assertCLIErrorCode(t, runWithOptions([]string{"artifact", "append", created.RunID, "plan.md", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitUsage, "from_required")
+	stdout.Reset()
+	stderr.Reset()
+	assertCLIErrorCode(t, runWithOptions([]string{"artifact", "set-status", created.RunID, "plan.md", "--status", "not_applicable", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitSafety, "artifact_reason_required")
 }
 
 func TestArtifactValidateCLIJSONHumanAndFailures(t *testing.T) {

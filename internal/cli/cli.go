@@ -75,6 +75,7 @@ type compatibilityFlagsOutput struct {
 	ArtifactInit                bool `json:"artifact_init"`
 	ArtifactList                bool `json:"artifact_list"`
 	ArtifactValidate            bool `json:"artifact_validate"`
+	ArtifactMutation            bool `json:"artifact_mutation"`
 	Gates                       bool `json:"gates"`
 	BackendEvidenceRequirements bool `json:"backend_evidence_requirements"`
 	DiagnosticsExport           bool `json:"diagnostics_export"`
@@ -162,6 +163,18 @@ type artifactValidateOutput struct {
 	Gate   string                            `json:"gate"`
 	Status string                            `json:"status"`
 	Checks []project.ArtifactValidationCheck `json:"checks"`
+}
+
+type artifactMutationOutput struct {
+	RunID        string `json:"run_id"`
+	Path         string `json:"path"`
+	ArtifactKind string `json:"artifact_kind"`
+	Operation    string `json:"operation"`
+	Bytes        int64  `json:"bytes"`
+	SourcePath   string `json:"source_path,omitempty"`
+	Status       string `json:"status,omitempty"`
+	Reason       string `json:"reason,omitempty"`
+	EventID      string `json:"event_id"`
 }
 
 type gateCheckOutput struct {
@@ -1088,6 +1101,41 @@ func runArtifactCommand(args []string, root project.Root, stdout io.Writer, stde
 			return ExitSafety
 		}
 		return ExitOK
+	case "write", "append":
+		runID, artifact, from, cliErr := parseArtifactFromArgs(args)
+		if cliErr != nil {
+			writeError(stderr, jsonMode, *cliErr)
+			return cliErr.ExitCode
+		}
+		options := project.ArtifactMutateOptions{RunID: runID, Artifact: artifact, From: from}
+		var result project.ArtifactMutationResult
+		var err error
+		if args[0] == "write" {
+			result, err = project.WriteArtifact(root, options)
+		} else {
+			result, err = project.AppendArtifact(root, options)
+		}
+		if err != nil {
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writeArtifactMutationResult(stdout, result, jsonMode)
+		return ExitOK
+	case "set-status":
+		runID, artifact, status, reason, cliErr := parseArtifactSetStatusArgs(args)
+		if cliErr != nil {
+			writeError(stderr, jsonMode, *cliErr)
+			return cliErr.ExitCode
+		}
+		result, err := project.SetArtifactStatus(root, project.ArtifactMutateOptions{RunID: runID, Artifact: artifact, Status: status, Reason: reason})
+		if err != nil {
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writeArtifactMutationResult(stdout, result, jsonMode)
+		return ExitOK
 	default:
 		writeError(stderr, jsonMode, cliError{Code: "not_implemented", Message: "artifact command is not implemented yet", Hint: artifactUsageHint(), ExitCode: ExitUsage})
 		return ExitUsage
@@ -1127,6 +1175,67 @@ func parseArtifactValidateArgs(args []string) (string, string, *cliError) {
 		}
 	}
 	return runID, gate, nil
+}
+
+func parseArtifactFromArgs(args []string) (string, string, string, *cliError) {
+	command := args[0]
+	if len(args) < 3 || strings.HasPrefix(args[1], "--") || strings.HasPrefix(args[2], "--") {
+		return "", "", "", &cliError{Code: "artifact_arguments_required", Message: fmt.Sprintf("artifact %s requires a run id and artifact path", command), Hint: fmt.Sprintf("Use artifact %s <run_id> <artifact_path> --from <repo-relative-file>.", command), ExitCode: ExitUsage, Field: "arguments", Expected: fmt.Sprintf("artifact %s <run_id> <artifact_path> --from <file>", command), Actual: fmt.Sprintf("%d arguments", len(args)-1)}
+	}
+	runID := args[1]
+	artifact := args[2]
+	from := ""
+	for i := 3; i < len(args); i++ {
+		switch args[i] {
+		case "--from":
+			if i+1 >= len(args) {
+				err := missingOptionValueError("--from", "repository-relative file", fmt.Sprintf("Use artifact %s <run_id> <artifact_path> --from <file>.", command))
+				return "", "", "", &err
+			}
+			from = args[i+1]
+			i++
+		default:
+			return "", "", "", &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown artifact %s option %q", command, args[i]), Hint: fmt.Sprintf("Use artifact %s <run_id> <artifact_path> --from <repo-relative-file> with optional global --json.", command), ExitCode: ExitUsage, Field: "option", Expected: "--from", Actual: args[i]}
+		}
+	}
+	if strings.TrimSpace(from) == "" {
+		return "", "", "", &cliError{Code: "from_required", Message: fmt.Sprintf("artifact %s requires --from", command), Hint: fmt.Sprintf("Use artifact %s <run_id> <artifact_path> --from <repo-relative-file>.", command), ExitCode: ExitUsage, Field: "from", Expected: "repository-relative source file", Actual: "missing"}
+	}
+	return runID, artifact, from, nil
+}
+
+func parseArtifactSetStatusArgs(args []string) (string, string, string, string, *cliError) {
+	if len(args) < 3 || strings.HasPrefix(args[1], "--") || strings.HasPrefix(args[2], "--") {
+		return "", "", "", "", &cliError{Code: "artifact_arguments_required", Message: "artifact set-status requires a run id and artifact path", Hint: "Use artifact set-status <run_id> <artifact_path> --status <pending|complete|not_applicable> [--reason <text>] with optional global --json.", ExitCode: ExitUsage, Field: "arguments", Expected: "artifact set-status <run_id> <artifact_path> --status <status>", Actual: fmt.Sprintf("%d arguments", len(args)-1)}
+	}
+	runID := args[1]
+	artifact := args[2]
+	status := ""
+	reason := ""
+	for i := 3; i < len(args); i++ {
+		switch args[i] {
+		case "--status":
+			if i+1 >= len(args) {
+				err := missingOptionValueError("--status", "pending, complete, or not_applicable", "Use artifact set-status <run_id> <artifact_path> --status <status>.")
+				return "", "", "", "", &err
+			}
+			status = args[i+1]
+			i++
+		case "--reason":
+			if i+1 >= len(args) {
+				err := missingOptionValueError("--reason", "reason text", "Pass --reason with a non-empty explanation.")
+				return "", "", "", "", &err
+			}
+			reason = args[i+1]
+			i++
+		default:
+			return "", "", "", "", &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown artifact set-status option %q", args[i]), Hint: "Use artifact set-status <run_id> <artifact_path> --status <status> [--reason <text>] with optional global --json.", ExitCode: ExitUsage, Field: "option", Expected: "--status or --reason", Actual: args[i]}
+		}
+	}
+	if strings.TrimSpace(status) == "" {
+		return "", "", "", "", &cliError{Code: "status_required", Message: "artifact set-status requires --status", Hint: "Use artifact set-status <run_id> <artifact_path> --status <pending|complete|not_applicable>.", ExitCode: ExitUsage, Field: "status", Expected: "pending, complete, or not_applicable", Actual: "missing"}
+	}
+	return runID, artifact, status, reason, nil
 }
 
 func runEventCommand(args []string, root project.Root, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
@@ -1481,7 +1590,7 @@ func eventAppendUsageHint() string {
 }
 
 func artifactUsageHint() string {
-	return "Use artifact init <run_id>, artifact list <run_id>, or artifact validate <run_id> [--gate intake] with optional global --json."
+	return "Use artifact init|list|validate|write|append|set-status. Mutation commands accept canonical artifact paths only."
 }
 
 func runUsageHint() string {
@@ -1606,7 +1715,7 @@ func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
 		CommandGroups: []capabilityCommandGroup{
 			{Name: "project", Status: capabilityStatusSupported, Subcommands: []string{"init", "status", "doctor"}},
 			{Name: "run", Status: capabilityStatusSupported, Subcommands: []string{"create", "activate", "close", "abort", "list", "show"}},
-			{Name: "artifact", Status: capabilityStatusSupported, Subcommands: []string{"init", "list", "validate"}},
+			{Name: "artifact", Status: capabilityStatusSupported, Subcommands: []string{"init", "list", "validate", "write", "append", "set-status"}},
 			{Name: "gate", Status: capabilityStatusSupported, Subcommands: []string{"check", "final"}},
 			{Name: "event", Status: capabilityStatusSupported, Subcommands: []string{"append"}},
 			{Name: "schema", Status: capabilityStatusSupported, Subcommands: []string{"validate", "export", "migrate"}},
@@ -1623,6 +1732,7 @@ func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
 			ArtifactInit:                true,
 			ArtifactList:                true,
 			ArtifactValidate:            true,
+			ArtifactMutation:            true,
 			Gates:                       true,
 			BackendEvidenceRequirements: true,
 			DiagnosticsExport:           true,
@@ -1692,10 +1802,10 @@ var helpPages = map[string]helpOutput{
 	"artifact": {
 		Command:      "kkachi-agent-helper artifact",
 		Status:       capabilityStatusSupported,
-		Usage:        "kkachi-agent-helper artifact <init|list|validate> <run_id> [options]",
-		Summary:      "Initialize, list, and validate canonical run artifacts.",
-		Subcommands:  []helpItem{{Name: "init <run_id>", Description: "Create required artifact placeholders/status for a run."}, {Name: "list <run_id>", Description: "List artifact statuses for a run."}, {Name: "validate <run_id> [--gate intake]", Description: "Validate artifacts for the supported artifact validation gate."}},
-		Options:      []helpItem{{Name: "--gate intake", Description: "Select artifact validation gate for artifact validate."}, {Name: "--json", Description: "Emit JSON for supported artifact subcommands."}, {Name: "--help", Description: "Show artifact help and exit 0."}},
+		Usage:        "kkachi-agent-helper artifact <init|list|validate|write|append|set-status> <run_id> [artifact_path] [options]",
+		Summary:      "Initialize, list, validate, and safely mutate canonical run artifacts.",
+		Subcommands:  []helpItem{{Name: "init <run_id>", Description: "Create required artifact placeholders/status for a run."}, {Name: "list <run_id>", Description: "List artifact statuses for a run."}, {Name: "validate <run_id> [--gate intake]", Description: "Validate artifacts for the supported artifact validation gate."}, {Name: "write <run_id> <artifact_path> --from <file>", Description: "Atomically replace a canonical artifact from a repository-relative file."}, {Name: "append <run_id> <artifact_path> --from <file>", Description: "Atomically append a repository-relative file to a canonical artifact."}, {Name: "set-status <run_id> <artifact_path> --status <status> [--reason <text>]", Description: "Update a markdown or JSON artifact status."}},
+		Options:      []helpItem{{Name: "--from <file>", Description: "Repository-relative source file for write or append."}, {Name: "--status <pending|complete|not_applicable>", Description: "Status for artifact set-status."}, {Name: "--reason <text>", Description: "Reason required with not_applicable status."}, {Name: "--gate intake", Description: "Select artifact validation gate for artifact validate."}, {Name: "--json", Description: "Emit JSON for supported artifact subcommands."}, {Name: "--help", Description: "Show artifact help and exit 0."}},
 		JSONBehavior: "Artifact subcommands support global --json for structured output and structured errors. artifact --help --json emits structured help only.",
 	},
 	"gate": {
@@ -2067,6 +2177,26 @@ func writeArtifactListResult(w io.Writer, runID string, artifacts []project.Arti
 	}
 }
 
+func writeArtifactMutationResult(w io.Writer, result project.ArtifactMutationResult, jsonMode bool) {
+	payload := artifactMutationOutput{RunID: result.RunID, Path: result.Path, ArtifactKind: result.ArtifactKind, Operation: result.Operation, Bytes: result.Bytes, SourcePath: result.SourcePath, Status: result.Status, Reason: result.Reason, EventID: result.EventID}
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(payload)
+		return
+	}
+	fmt.Fprintf(w, "mutated artifact for run: %s\n", payload.RunID)
+	fmt.Fprintf(w, "operation: %s\n", payload.Operation)
+	fmt.Fprintf(w, "path: %s\n", payload.Path)
+	fmt.Fprintf(w, "artifact_kind: %s\n", payload.ArtifactKind)
+	fmt.Fprintf(w, "bytes: %d\n", payload.Bytes)
+	if payload.SourcePath != "" {
+		fmt.Fprintf(w, "source_path: %s\n", payload.SourcePath)
+	}
+	if payload.Status != "" {
+		fmt.Fprintf(w, "status: %s\n", payload.Status)
+	}
+	fmt.Fprintf(w, "event_id: %s\n", payload.EventID)
+}
+
 func writeGateCheckResult(w io.Writer, result project.GateCheckResult, jsonMode bool) {
 	if jsonMode {
 		_ = json.NewEncoder(w).Encode(gateCheckOutput{RunID: result.RunID, Gate: result.Gate, Status: result.Status, Checks: result.Checks, MissingEvidence: result.MissingEvidence, EventID: result.EventID, ReportPath: result.ReportPath})
@@ -2331,9 +2461,9 @@ func exitCodeForProblem(code string) int {
 	switch code {
 	case "repo_root_not_found":
 		return ExitNotFound
-	case "artifact_baseline_encode_failed", "schema_encode_failed":
+	case "artifact_baseline_encode_failed", "artifact_json_encode_failed", "schema_encode_failed":
 		return ExitInternal
-	case "absolute_path", "empty_path", "path_escape", "repo_root_path", "symlink_escape", "symlink_resolution_failed", "path_inspection_failed", "repo_root_required", "helper_state_exists", "last_event_id_mismatch", "status_invalid_json", "status_last_event_id_invalid", "status_active_run_invalid", "event_log_invalid", "event_log_empty", "event_id_invalid", "event_id_exhausted", "run_metadata_invalid", "run_metadata_invalid_json", "active_run_conflict", "run_transition_invalid", "run_not_found", "run_id_ambiguous", "run_root_read_failed", "run_metadata_read_failed", "run_id_collision", "run_artifact_init_invalid_state", "artifact_inspection_failed", "artifact_path_invalid", "status_gate_summary_invalid", "lock_conflict", "lock_stale_recovery_required", "lock_metadata_invalid", "lock_not_found", "lock_identity_mismatch", "lock_release_failed", "schema_validation_read_failed", "schema_reference_invalid", "schema_read_failed", "schema_export_inspection_failed", "schema_export_conflict", "schema_export_read_failed", "schema_migration_path_inspection_failed", "schema_migration_source_version_mismatch", "schema_migration_read_failed", "schema_migration_invalid_json", "schema_migration_invalid_event_log", "schema_migration_version_missing", "schema_migration_backup_failed", "install_manifest_read_failed", "install_manifest_invalid_json", "install_manifest_invalid", "install_manifest_kind_mismatch", "install_source_invalid", "install_source_item_invalid", "install_source_read_failed", "install_checksum_mismatch", "install_duplicate_target", "install_target_inspection_failed", "install_target_read_failed", "install_owner_marker_missing", "install_compatibility_failed", "install_preflight_blocked", "install_apply_failed", "diagnostics_encode_failed", "diagnostics_output_exists":
+	case "absolute_path", "empty_path", "path_escape", "repo_root_path", "symlink_escape", "symlink_resolution_failed", "path_inspection_failed", "repo_root_required", "helper_state_exists", "last_event_id_mismatch", "status_invalid_json", "status_last_event_id_invalid", "status_active_run_invalid", "event_log_invalid", "event_log_empty", "event_id_invalid", "event_id_exhausted", "run_metadata_invalid", "run_metadata_invalid_json", "active_run_conflict", "run_transition_invalid", "run_not_found", "run_id_ambiguous", "run_root_read_failed", "run_metadata_read_failed", "run_id_collision", "run_artifact_init_invalid_state", "run_artifact_mutation_invalid_state", "artifact_inspection_failed", "artifact_path_invalid", "artifact_source_missing", "artifact_source_inspection_failed", "artifact_source_invalid", "artifact_source_read_failed", "artifact_read_failed", "artifact_status_invalid", "artifact_reason_required", "artifact_status_unsupported", "artifact_json_invalid", "status_gate_summary_invalid", "lock_conflict", "lock_stale_recovery_required", "lock_metadata_invalid", "lock_not_found", "lock_identity_mismatch", "lock_release_failed", "schema_validation_read_failed", "schema_reference_invalid", "schema_read_failed", "schema_export_inspection_failed", "schema_export_conflict", "schema_export_read_failed", "schema_migration_path_inspection_failed", "schema_migration_source_version_mismatch", "schema_migration_read_failed", "schema_migration_invalid_json", "schema_migration_invalid_event_log", "schema_migration_version_missing", "schema_migration_backup_failed", "install_manifest_read_failed", "install_manifest_invalid_json", "install_manifest_invalid", "install_manifest_kind_mismatch", "install_source_invalid", "install_source_item_invalid", "install_source_read_failed", "install_checksum_mismatch", "install_duplicate_target", "install_target_inspection_failed", "install_target_read_failed", "install_owner_marker_missing", "install_compatibility_failed", "install_preflight_blocked", "install_apply_failed", "diagnostics_encode_failed", "diagnostics_output_exists":
 		return ExitSafety
 	default:
 		return ExitUsage

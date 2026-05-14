@@ -1,6 +1,7 @@
 package project
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,6 +12,10 @@ import (
 
 const (
 	artifactWrittenEventType    = "artifact.written"
+	artifactOperationWrite      = "write"
+	artifactOperationAppend     = "append"
+	artifactOperationSetStatus  = "set-status"
+	artifactKindCanonical       = "canonical"
 	artifactActionCreated       = "created"
 	artifactActionReinitialized = "reinitialized"
 	artifactActionPreserved     = "preserved"
@@ -83,6 +88,27 @@ type ArtifactInitResult struct {
 type ArtifactListResult struct {
 	RunID     string
 	Artifacts []ArtifactStatus
+}
+
+type ArtifactMutateOptions struct {
+	RunID    string
+	Artifact string
+	From     string
+	Status   string
+	Reason   string
+	Now      func() time.Time
+}
+
+type ArtifactMutationResult struct {
+	RunID        string `json:"run_id"`
+	Path         string `json:"path"`
+	ArtifactKind string `json:"artifact_kind"`
+	Operation    string `json:"operation"`
+	Bytes        int64  `json:"bytes"`
+	SourcePath   string `json:"source_path,omitempty"`
+	Status       string `json:"status,omitempty"`
+	Reason       string `json:"reason,omitempty"`
+	EventID      string `json:"event_id"`
 }
 
 type ArtifactStatus struct {
@@ -178,6 +204,105 @@ func initArtifactsUnlocked(root Root, options ArtifactInitOptions) (ArtifactInit
 	return result, nil
 }
 
+func WriteArtifact(root Root, options ArtifactMutateOptions) (ArtifactMutationResult, error) {
+	return mutateArtifact(root, artifactOperationWrite, options)
+}
+
+func AppendArtifact(root Root, options ArtifactMutateOptions) (ArtifactMutationResult, error) {
+	return mutateArtifact(root, artifactOperationAppend, options)
+}
+
+func SetArtifactStatus(root Root, options ArtifactMutateOptions) (ArtifactMutationResult, error) {
+	return mutateArtifact(root, artifactOperationSetStatus, options)
+}
+
+func mutateArtifact(root Root, operation string, options ArtifactMutateOptions) (ArtifactMutationResult, error) {
+	var result ArtifactMutationResult
+	err := withProjectWriteLock(root, "artifact "+operation, options.RunID, func() error {
+		var err error
+		result, err = mutateArtifactUnlocked(root, operation, options)
+		return err
+	})
+	return result, err
+}
+
+func mutateArtifactUnlocked(root Root, operation string, options ArtifactMutateOptions) (ArtifactMutationResult, error) {
+	if options.Now == nil {
+		options.Now = func() time.Time { return time.Now().UTC() }
+	}
+	metadata, metadataPath, err := ReadRunMetadata(root, options.RunID)
+	if err != nil {
+		return ArtifactMutationResult{}, err
+	}
+	if metadata.State == RunStateClosed || metadata.State == RunStateAborted {
+		return ArtifactMutationResult{}, &Problem{Code: "run_artifact_mutation_invalid_state", Message: "cannot mutate artifacts for a finished run", Hint: "Create a new run or inspect the existing artifacts without mutating them.", Path: metadataPath.Relative, Field: "state", Expected: "created or active", Actual: metadata.State}
+	}
+	if err := preflightEventCoherence(root); err != nil {
+		return ArtifactMutationResult{}, err
+	}
+	artifact := strings.TrimSpace(options.Artifact)
+	path, err := artifactPath(root, metadata.RunID, artifact)
+	if err != nil {
+		return ArtifactMutationResult{}, err
+	}
+	if operation == artifactOperationWrite {
+		if err := validateArtifactTargetWritable(path); err != nil {
+			return ArtifactMutationResult{}, err
+		}
+	}
+
+	var sourcePath string
+	var content []byte
+	switch operation {
+	case artifactOperationWrite, artifactOperationAppend:
+		content, sourcePath, err = readArtifactSource(root, options.From)
+		if err != nil {
+			return ArtifactMutationResult{}, err
+		}
+		if operation == artifactOperationAppend {
+			existing, err := readExistingArtifactForAppend(path)
+			if err != nil {
+				return ArtifactMutationResult{}, err
+			}
+			content = append(existing, content...)
+		}
+	case artifactOperationSetStatus:
+		content, err = artifactContentWithStatus(path, options.Status, options.Reason)
+		if err != nil {
+			return ArtifactMutationResult{}, err
+		}
+	default:
+		return ArtifactMutationResult{}, &Problem{Code: "artifact_operation_invalid", Message: "artifact mutation operation is not supported", Hint: "Use artifact write, artifact append, or artifact set-status.", Field: "operation", Expected: "write, append, or set-status", Actual: operation}
+	}
+
+	payload := map[string]any{
+		"run_id":        metadata.RunID,
+		"path":          artifact,
+		"artifact_kind": artifactKindCanonical,
+		"operation":     operation,
+		"bytes":         len(content),
+	}
+	if sourcePath != "" {
+		payload["source_path"] = sourcePath
+	}
+	status := strings.TrimSpace(options.Status)
+	reason := strings.TrimSpace(options.Reason)
+	if operation == artifactOperationSetStatus {
+		payload["status"] = status
+		if reason != "" {
+			payload["reason"] = reason
+		}
+	}
+
+	appendResult, err := appendEventWithStatusMutation(root, AppendEventOptions{Type: artifactWrittenEventType, RunID: metadata.RunID, Payload: payload, Now: options.Now}, func(map[string]any, string) error {
+		return writeExistingFileAtomically(path, content)
+	})
+	if err != nil {
+		return ArtifactMutationResult{}, err
+	}
+	return ArtifactMutationResult{RunID: metadata.RunID, Path: artifact, ArtifactKind: artifactKindCanonical, Operation: operation, Bytes: int64(len(content)), SourcePath: sourcePath, Status: status, Reason: reason, EventID: appendResult.EventID}, nil
+}
+
 func ListArtifacts(root Root, runID string) (ArtifactListResult, error) {
 	if err := preflightEventCoherence(root); err != nil {
 		return ArtifactListResult{}, err
@@ -258,11 +383,7 @@ func inspectArtifacts(root Root, runID string, required map[string]bool) ([]Arti
 			return nil, &Problem{Code: "artifact_inspection_failed", Message: "cannot inspect artifact path", Hint: "Check run artifact permissions before initializing artifacts.", Path: safe.Relative, Field: "path", Expected: "inspectable artifact path", Actual: err.Error()}
 		}
 		if !info.Mode().IsRegular() {
-			actual := "non-regular"
-			if info.IsDir() {
-				actual = "directory"
-			}
-			return nil, &Problem{Code: "artifact_path_invalid", Message: "artifact path must be a regular file", Hint: "Move the conflicting path before initializing run artifacts.", Path: safe.Relative, Field: "path", Expected: "regular file or absent path", Actual: actual}
+			return nil, artifactPathInvalidProblem(safe, info, "Move the conflicting path before initializing run artifacts.")
 		}
 		status.Exists = true
 		status.Bytes = info.Size()
@@ -308,6 +429,178 @@ func artifactPath(root Root, runID string, artifact string) (SafePath, error) {
 		return SafePath{}, &Problem{Code: "artifact_path_invalid", Message: "artifact path is not part of the canonical run manifest", Hint: "Use artifact list to inspect helper-managed artifact paths.", Field: "path", Expected: "canonical artifact path from docs/specs.md", Actual: artifact}
 	}
 	return ResolveRelativePath(root, filepath.ToSlash(filepath.Join(RunRootPath, runID, artifact)))
+}
+
+func validateArtifactTargetWritable(path SafePath) error {
+	info, err := os.Lstat(path.Absolute)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return artifactInspectionProblem(path, "Check run artifact permissions before mutating.", err)
+	}
+	if info.Mode().IsRegular() {
+		return nil
+	}
+	return artifactPathInvalidProblem(path, info, "Move the conflicting path before mutating run artifacts.")
+}
+
+func artifactInspectionProblem(path SafePath, hint string, err error) *Problem {
+	return &Problem{Code: "artifact_inspection_failed", Message: "cannot inspect artifact path", Hint: hint, Path: path.Relative, Field: "path", Expected: "inspectable artifact path", Actual: err.Error()}
+}
+
+func artifactPathInvalidProblem(path SafePath, info os.FileInfo, hint string) *Problem {
+	return &Problem{Code: "artifact_path_invalid", Message: "artifact path must be a regular file", Hint: hint, Path: path.Relative, Field: "path", Expected: "regular file or absent path", Actual: fileKind(info)}
+}
+
+func fileKind(info os.FileInfo) string {
+	if info.IsDir() {
+		return "directory"
+	}
+	return "non-regular"
+}
+
+func readArtifactSource(root Root, source string) ([]byte, string, error) {
+	path, err := ResolveRelativePath(root, source)
+	if err != nil {
+		return nil, "", err
+	}
+	info, err := os.Lstat(path.Absolute)
+	if os.IsNotExist(err) {
+		return nil, "", &Problem{Code: "artifact_source_missing", Message: "artifact source file is missing", Hint: "Pass --from with an existing repository-relative regular file.", Path: path.Relative, Field: "from", Expected: "existing regular file", Actual: "missing"}
+	}
+	if err != nil {
+		return nil, "", &Problem{Code: "artifact_source_inspection_failed", Message: "cannot inspect artifact source file", Hint: "Check source file permissions before retrying.", Path: path.Relative, Field: "from", Expected: "inspectable regular file", Actual: err.Error()}
+	}
+	if !info.Mode().IsRegular() {
+		return nil, "", &Problem{Code: "artifact_source_invalid", Message: "artifact source must be a regular file", Hint: "Pass --from with a repository-relative regular file.", Path: path.Relative, Field: "from", Expected: "regular file", Actual: fileKind(info)}
+	}
+	content, err := os.ReadFile(path.Absolute)
+	if err != nil {
+		return nil, "", &Problem{Code: "artifact_source_read_failed", Message: "cannot read artifact source file", Hint: "Check source file permissions before retrying.", Path: path.Relative, Field: "from", Expected: "readable regular file", Actual: err.Error()}
+	}
+	return content, path.Relative, nil
+}
+
+func readExistingArtifactForAppend(path SafePath) ([]byte, error) {
+	return readOptionalArtifact(path, "appending")
+}
+
+func readOptionalArtifact(path SafePath, action string) ([]byte, error) {
+	info, err := os.Lstat(path.Absolute)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, artifactInspectionProblem(path, "Check run artifact permissions before "+action+".", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, artifactPathInvalidProblem(path, info, "Move the conflicting path before mutating run artifacts.")
+	}
+	content, err := os.ReadFile(path.Absolute)
+	if err != nil {
+		return nil, &Problem{Code: "artifact_read_failed", Message: "cannot read artifact before " + action, Hint: "Check run artifact permissions before retrying.", Path: path.Relative, Field: "path", Expected: "readable regular file", Actual: err.Error()}
+	}
+	return content, nil
+}
+
+func artifactContentWithStatus(path SafePath, status string, reason string) ([]byte, error) {
+	status = strings.TrimSpace(status)
+	if !validArtifactStatus(status) {
+		return nil, &Problem{Code: "artifact_status_invalid", Message: "artifact status is not supported", Hint: "Use pending, complete, or not_applicable.", Path: path.Relative, Field: "status", Expected: "pending, complete, or not_applicable", Actual: status}
+	}
+	reason = strings.TrimSpace(reason)
+	if status == "not_applicable" && reason == "" {
+		return nil, &Problem{Code: "artifact_reason_required", Message: "not_applicable artifact status requires a reason", Hint: "Pass --reason with KHS's explicit reason.", Path: path.Relative, Field: "reason", Expected: "non-empty reason", Actual: "missing"}
+	}
+	if strings.HasSuffix(path.Relative, ".patch") {
+		return nil, &Problem{Code: "artifact_status_unsupported", Message: "artifact status mutation is not supported for patch artifacts", Hint: "Use artifact write for patch evidence content.", Path: path.Relative, Field: "path", Expected: ".md or .json artifact", Actual: path.Relative}
+	}
+	content, err := readArtifactForStatus(path)
+	if err != nil {
+		return nil, err
+	}
+	if strings.HasSuffix(path.Relative, ".json") {
+		return jsonArtifactContentWithStatus(path, content, status, reason)
+	}
+	return markdownArtifactContentWithStatus(content, status, reason), nil
+}
+
+func validArtifactStatus(status string) bool {
+	switch status {
+	case "pending", "complete", "not_applicable":
+		return true
+	default:
+		return false
+	}
+}
+
+func readArtifactForStatus(path SafePath) ([]byte, error) {
+	return readOptionalArtifact(path, "setting status")
+}
+
+func markdownArtifactContentWithStatus(content []byte, status string, reason string) []byte {
+	if len(content) == 0 {
+		content = []byte("Status: " + status + "\n")
+		if status == "not_applicable" {
+			content = append(content, []byte("Reason: "+reason+"\n")...)
+		}
+		return content
+	}
+	lines := strings.Split(string(content), "\n")
+	statusSet := false
+	reasonSet := false
+	for i, line := range lines {
+		key, _, ok := strings.Cut(strings.TrimSpace(line), ":")
+		if !ok {
+			continue
+		}
+		switch normalizeMarkdownFieldKey(key) {
+		case "status":
+			lines[i] = "Status: " + status
+			statusSet = true
+		case "reason":
+			if status == "not_applicable" {
+				lines[i] = "Reason: " + reason
+				reasonSet = true
+			}
+		}
+	}
+	insert := []string{}
+	if !statusSet {
+		insert = append(insert, "Status: "+status)
+	}
+	if status == "not_applicable" && !reasonSet {
+		insert = append(insert, "Reason: "+reason)
+	}
+	if len(insert) > 0 {
+		lines = append(insert, lines...)
+	}
+	result := strings.Join(lines, "\n")
+	if !strings.HasSuffix(result, "\n") {
+		result += "\n"
+	}
+	return []byte(result)
+}
+
+func jsonArtifactContentWithStatus(path SafePath, content []byte, status string, reason string) ([]byte, error) {
+	payload := map[string]any{}
+	if len(bytes.TrimSpace(content)) > 0 {
+		if err := json.Unmarshal(content, &payload); err != nil {
+			return nil, &Problem{Code: "artifact_json_invalid", Message: "cannot parse JSON artifact before setting status", Hint: "Repair the JSON artifact or use artifact write with valid JSON content.", Path: path.Relative, Field: "json", Expected: "JSON object", Actual: err.Error()}
+		}
+	}
+	payload["status"] = status
+	if status == "not_applicable" {
+		payload["reason"] = reason
+	} else {
+		delete(payload, "reason")
+	}
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return nil, &Problem{Code: "artifact_json_encode_failed", Message: "cannot encode JSON artifact status", Hint: "Preserve stderr for diagnosis if this repeats.", Path: path.Relative, Field: "json", Expected: "JSON-encodable object", Actual: err.Error()}
+	}
+	return append(data, '\n'), nil
 }
 
 func artifactBaselineContent(metadata RunMetadata, artifact string) ([]byte, error) {

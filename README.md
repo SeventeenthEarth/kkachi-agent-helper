@@ -2,7 +2,7 @@
 
 `kkachi-agent-helper` is the deterministic local CLI helper for Kkachi project state, run artifacts, locks, schemas, events, diagnostics, and project bootstrap scaffolding. It stays local-first and scriptable: it does not choose a backend, plan work, review code, call network services, or store secrets.
 
-The current implementation covers `corex-001` through `corex-005`, `runwf-001` through `runwf-004`, `gates-001` through `gates-005`, `packg-001` through `packg-004`, `pilot-001` through `pilot-005`, and `align-001` through `align-004`.
+The current implementation covers `corex-001` through `corex-005`, `runwf-001` through `runwf-004`, `gates-001` through `gates-005`, `packg-001` through `packg-004`, `pilot-001` through `pilot-005`, and `align-001` through `align-006`.
 
 ## Source of truth
 
@@ -108,7 +108,7 @@ kkachi-agent-helper --help
 kkachi-agent-helper [--json] <command>
 ```
 
-`capabilities --json` is the stable machine-readable command-surface report for KHS activation checks. It includes helper build info, the embedded project schema version, supported command groups, compatibility flags such as phase-plan support, and explicit omitted surfaces such as the removed `install` command.
+`capabilities --json` is the stable machine-readable command-surface report for KHS activation checks. It includes helper build info, the embedded project schema version, supported command groups, compatibility flags such as artifact mutation and phase-plan support, and explicit omitted surfaces such as the removed `install` command.
 
 Help is project-independent and exits `0`. Use `kkachi-agent-helper <command> --help`, supported subcommand topics such as `kkachi-agent-helper project init --help` and `kkachi-agent-helper run create --help`, or `kkachi-agent-helper help <command> [subcommand]` for required arguments, options, and JSON behavior. Implemented command groups have group help pages, including `schema`, `event`, `lock`, and `phase-plan`. `--json` with help emits structured help JSON; compatibility automation should still prefer `capabilities --json`.
 
@@ -160,6 +160,9 @@ Artifacts and gates:
 kkachi-agent-helper artifact init <run_id> [--json]
 kkachi-agent-helper artifact list <run_id> [--json]
 kkachi-agent-helper artifact validate <run_id> [--gate intake] [--json]
+kkachi-agent-helper artifact write <run_id> <artifact_path> --from <repo-relative-file> [--json]
+kkachi-agent-helper artifact append <run_id> <artifact_path> --from <repo-relative-file> [--json]
+kkachi-agent-helper artifact set-status <run_id> <artifact_path> --status <pending|complete|not_applicable> [--reason <text>] [--json]
 kkachi-agent-helper gate check <run_id> <intake|sot|roadmap|plan|backend|implementation|review|verification|docs|final> [--json]
 kkachi-agent-helper gate final <run_id> [--json]
 ```
@@ -201,6 +204,7 @@ kkachi-agent-helper diagnostics export [--run <run_id>] [--output <repo-relative
 - Mutating commands fail closed when `status.last_event_id` and the event log tail diverge.
 - `project status`, `project doctor`, `artifact list`, and diagnostics stdout export are read-only.
 - `gate check` records deterministic pass/fail/blocked results in run metadata, project status, events, and run-local gate reports.
+- `artifact write`, `artifact append`, and `artifact set-status` safely mutate canonical run artifacts with atomic writes and audit events; direct file reads remain compatible during migration.
 - `phase-plan` stores and validates KHS-declared `phase-plan.yaml` state only; KHS owns phase applicability and workflow policy.
 - `diagnostics export` redacts token-like values and exports only a selected support-safe artifact set.
 - Canonical exit codes are `0` success, `1` internal failure, `2` usage/unsupported command state, `3` fail-closed state or validation problems, and `4` missing repository root.
