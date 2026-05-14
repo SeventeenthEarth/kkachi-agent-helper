@@ -1,6 +1,7 @@
 package project
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,6 +85,12 @@ func TestExportDiagnosticsRedactsMalformedAndNestedContent(t *testing.T) {
 	if err := os.WriteFile(badSnapshot, []byte(`{"api_token":"`+secret+`"`), 0o600); err != nil {
 		t.Fatalf("write malformed snapshot: %v", err)
 	}
+	if _, err := RequestApproval(root, ApprovalRequestOptions{RunID: created.Metadata.RunID, Phase: "implement", Reason: "Authorization: Bearer " + secret, Evidence: "plan.md#risk", Now: fixedDiagnosticsTime}); err != nil {
+		t.Fatalf("RequestApproval() error = %v", err)
+	}
+	if _, err := RecordApproval(root, ApprovalRecordOptions{RunID: created.Metadata.RunID, Phase: "implement", Decision: ApprovalDecisionApproved, Approver: "master", Evidence: "token=" + secret, Now: fixedDiagnosticsTime}); err != nil {
+		t.Fatalf("RecordApproval() error = %v", err)
+	}
 
 	bundle, err := ExportDiagnostics(root, DiagnosticsExportOptions{RunID: created.Metadata.RunID, Now: fixedDiagnosticsTime})
 	if err != nil {
@@ -108,6 +115,13 @@ func TestExportDiagnosticsRedactsMalformedAndNestedContent(t *testing.T) {
 				t.Fatalf("snapshot artifact = %#v, want invalid with redacted error", artifact)
 			}
 		}
+	}
+	approvalRecords, err := json.Marshal(bundle.ApprovalRecords)
+	if err != nil {
+		t.Fatalf("marshal approval records: %v", err)
+	}
+	if strings.Contains(string(approvalRecords), secret) || !strings.Contains(string(approvalRecords), RedactedPlaceholder) {
+		t.Fatalf("approval records = %s, want redacted secret", approvalRecords)
 	}
 }
 

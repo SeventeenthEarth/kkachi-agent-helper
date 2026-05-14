@@ -50,7 +50,7 @@ func TestCapabilitiesJSONAtBinaryBoundary(t *testing.T) {
 	if payload.Helper.Version != "0.1.0" || payload.ProjectSchemaVersion != "0.1" {
 		t.Fatalf("payload versions = %#v, want helper 0.1.0 and schema 0.1", payload)
 	}
-	if !payload.CompatibilityFlags.BackendEvidenceRequirements || !payload.CompatibilityFlags.PhasePlan || !payload.CompatibilityFlags.ArtifactMutation || payload.CompatibilityFlags.ApprovalRecords || payload.CompatibilityFlags.InstallCommand {
+	if !payload.CompatibilityFlags.BackendEvidenceRequirements || !payload.CompatibilityFlags.PhasePlan || !payload.CompatibilityFlags.ArtifactMutation || !payload.CompatibilityFlags.ApprovalRecords || payload.CompatibilityFlags.InstallCommand {
 		t.Fatalf("compatibility flags = %#v, want current align support matrix", payload.CompatibilityFlags)
 	}
 	foundInstall := false
@@ -258,6 +258,120 @@ func TestPhasePlanBinaryFlowAndDiagnostics(t *testing.T) {
 
 	diagnostics := runHelper(t, binary, repo, "diagnostics", "export", "--run", created.RunID, "--json")
 	assertOutputContains(t, diagnostics, `"path":".kkachi/runs/`+created.RunID+`/phase-plan.yaml"`, "phase diagnostics")
+}
+
+func TestApprovalBinaryFlowDiagnosticsAndFinalPhaseValidation(t *testing.T) {
+	binary := buildHelperBinary(t)
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+
+	runHelper(t, binary, repo, "project", "init", "--json")
+	createdOutput := runHelper(t, binary, repo,
+		"run", "create",
+		"--title", "Approval integration",
+		"--work-path", "A_development_execution",
+		"--work-mode", "standard",
+		"--urgency", "normal",
+		"--sot-policy", "existing_sot_basis",
+		"--execution-mode", "production_write",
+		"--commander", "Gongmyeong",
+		"--task-id", "align-007",
+		"--json",
+	)
+	var created struct {
+		RunID string `json:"run_id"`
+	}
+	if err := json.Unmarshal(createdOutput, &created); err != nil {
+		t.Fatalf("run create output is not JSON: %v\n%s", err, string(createdOutput))
+	}
+	runHelper(t, binary, repo, "phase-plan", "init", created.RunID, "--json")
+	setOutput := runHelper(t, binary, repo, "phase-plan", "set", created.RunID, "implement", "--status", "in_progress", "--approval-required", "true", "--json")
+	var updated struct {
+		Phase struct {
+			ID               string `json:"id"`
+			Status           string `json:"status"`
+			ApprovalRequired bool   `json:"approval_required"`
+		} `json:"phase"`
+	}
+	if err := json.Unmarshal(setOutput, &updated); err != nil {
+		t.Fatalf("phase-plan set output is not JSON: %v\n%s", err, string(setOutput))
+	}
+	if updated.Phase.ID != "implement" || !updated.Phase.ApprovalRequired {
+		t.Fatalf("updated = %#v, want implement approval_required", updated)
+	}
+
+	requestOutput := runHelper(t, binary, repo, "approval", "request", created.RunID, "--phase", "implement", "--reason", "High-risk phase needs master approval.", "--evidence", "plan.md#approval", "--json")
+	var requested struct {
+		Record struct {
+			Type      string `json:"type"`
+			Phase     string `json:"phase"`
+			Reason    string `json:"reason"`
+			Timestamp string `json:"timestamp"`
+			Evidence  string `json:"evidence"`
+		} `json:"record"`
+		EventID string `json:"event_id"`
+	}
+	if err := json.Unmarshal(requestOutput, &requested); err != nil {
+		t.Fatalf("approval request output is not JSON: %v\n%s", err, string(requestOutput))
+	}
+	if requested.Record.Type != "approval.requested" || requested.Record.Phase != "implement" || requested.Record.Timestamp == "" || requested.EventID == "" {
+		t.Fatalf("requested = %#v, want approval request", requested)
+	}
+
+	finalBefore, err := runHelperAllowError(binary, repo, "phase-plan", "validate", created.RunID, "--final", "--json")
+	if err == nil {
+		t.Fatalf("phase-plan final unexpectedly passed before approval: %s", string(finalBefore))
+	}
+	assertOutputContains(t, finalBefore, `"name":"final_approval_records","status":"fail"`, "final approval check before decision")
+
+	recordOutput := runHelper(t, binary, repo, "approval", "record", created.RunID, "--phase", "implement", "--decision", "approved", "--by", "master", "--evidence", "messages/approval-123", "--reason", "Approved after review.", "--json")
+	var recorded struct {
+		Record struct {
+			Type     string `json:"type"`
+			Phase    string `json:"phase"`
+			Decision string `json:"decision"`
+			Approver string `json:"approver"`
+			Evidence string `json:"evidence"`
+		} `json:"record"`
+		EventID string `json:"event_id"`
+	}
+	if err := json.Unmarshal(recordOutput, &recorded); err != nil {
+		t.Fatalf("approval record output is not JSON: %v\n%s", err, string(recordOutput))
+	}
+	if recorded.Record.Type != "approval.recorded" || recorded.Record.Decision != "approved" || recorded.Record.Approver != "master" || recorded.Record.Evidence == "" {
+		t.Fatalf("recorded = %#v, want approved decision", recorded)
+	}
+
+	showOutput := runHelper(t, binary, repo, "approval", "show", created.RunID, "--phase", "implement", "--json")
+	var shown struct {
+		RunID   string `json:"run_id"`
+		Phase   string `json:"phase"`
+		Records []struct {
+			Type     string `json:"type"`
+			Decision string `json:"decision"`
+		} `json:"records"`
+	}
+	if err := json.Unmarshal(showOutput, &shown); err != nil {
+		t.Fatalf("approval show output is not JSON: %v\n%s", err, string(showOutput))
+	}
+	if shown.RunID != created.RunID || shown.Phase != "implement" || len(shown.Records) != 2 || shown.Records[1].Decision != "approved" {
+		t.Fatalf("shown = %#v, want request and approved decision", shown)
+	}
+
+	finalAfter, err := runHelperAllowError(binary, repo, "phase-plan", "validate", created.RunID, "--final", "--json")
+	if err == nil {
+		t.Fatalf("phase-plan final unexpectedly passed with incomplete phases: %s", string(finalAfter))
+	}
+	assertOutputContains(t, finalAfter, `"name":"final_approval_records","status":"pass"`, "final approval check after decision")
+
+	diagnostics := runHelper(t, binary, repo, "diagnostics", "export", "--run", created.RunID, "--json")
+	assertOutputContains(t, diagnostics, `"approval_records":[`, "approval diagnostics")
+	assertOutputContains(t, diagnostics, `"type":"approval.requested"`, "approval diagnostics")
+	assertOutputContains(t, diagnostics, `"decision":"approved"`, "approval diagnostics")
+	assertFileContains(t, filepath.Join(repo, ".kkachi", "events.jsonl"), `"type":"approval.requested"`, "approval request event")
+	assertFileContains(t, filepath.Join(repo, ".kkachi", "events.jsonl"), `"type":"approval.recorded"`, "approval record event")
 }
 
 func TestInstallCommandRemovedAtBinaryBoundary(t *testing.T) {

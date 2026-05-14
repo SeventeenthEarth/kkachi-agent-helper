@@ -61,10 +61,11 @@ type PhasePlan struct {
 }
 
 type PhaseRow struct {
-	ID       string `json:"id"`
-	Status   string `json:"status"`
-	Evidence string `json:"evidence,omitempty"`
-	Reason   string `json:"reason,omitempty"`
+	ID               string `json:"id"`
+	Status           string `json:"status"`
+	Evidence         string `json:"evidence,omitempty"`
+	Reason           string `json:"reason,omitempty"`
+	ApprovalRequired bool   `json:"approval_required,omitempty"`
 }
 
 type PhasePlanInitOptions struct {
@@ -78,12 +79,14 @@ type PhasePlanInitResult struct {
 }
 
 type PhasePlanSetOptions struct {
-	RunID    string
-	PhaseID  string
-	Status   string
-	Evidence string
-	Reason   string
-	Now      func() time.Time
+	RunID               string
+	PhaseID             string
+	Status              string
+	Evidence            string
+	Reason              string
+	ApprovalRequired    bool
+	ApprovalRequiredSet bool
+	Now                 func() time.Time
 }
 
 type PhasePlanSetResult struct {
@@ -213,7 +216,10 @@ func setPhasePlanPhaseUnlocked(root Root, options PhasePlanSetOptions) (PhasePla
 	if index == -1 {
 		return PhasePlanSetResult{}, &Problem{Code: "phase_id_unknown", Message: "phase id is not declared in phase plan", Hint: "KAH stores declared phase rows only; initialize or rewrite the phase plan with the required row before updating it.", Path: plan.Path, Field: "phase_id", Expected: "declared phase id", Actual: phaseID}
 	}
-	updated := PhaseRow{ID: phaseID, Status: status, Evidence: strings.TrimSpace(options.Evidence), Reason: reason}
+	updated := PhaseRow{ID: phaseID, Status: status, Evidence: strings.TrimSpace(options.Evidence), Reason: reason, ApprovalRequired: plan.Phases[index].ApprovalRequired}
+	if options.ApprovalRequiredSet {
+		updated.ApprovalRequired = options.ApprovalRequired
+	}
 	plan.Phases[index] = updated
 	if _, err := validatePhasePlanShape(plan); err != nil {
 		return PhasePlanSetResult{}, err
@@ -223,7 +229,11 @@ func setPhasePlanPhaseUnlocked(root Root, options PhasePlanSetOptions) (PhasePla
 	if err != nil {
 		return PhasePlanSetResult{}, err
 	}
-	appendResult, err := appendEventWithStatusMutation(root, AppendEventOptions{Type: "phase_plan.updated", RunID: metadata.RunID, Payload: map[string]any{"path": path.Relative, "phase_id": phaseID, "status": status}, Now: options.Now}, func(map[string]any, string) error {
+	payload := map[string]any{"path": path.Relative, "phase_id": phaseID, "status": status}
+	if options.ApprovalRequiredSet {
+		payload["approval_required"] = options.ApprovalRequired
+	}
+	appendResult, err := appendEventWithStatusMutation(root, AppendEventOptions{Type: "phase_plan.updated", RunID: metadata.RunID, Payload: payload, Now: options.Now}, func(map[string]any, string) error {
 		return writeExistingFileAtomically(path, content)
 	})
 	if err != nil {
@@ -241,7 +251,7 @@ func ValidatePhasePlan(root Root, options PhasePlanValidationOptions) (PhasePlan
 	if err != nil {
 		return PhasePlanValidationResult{}, err
 	}
-	checks := validatePhasePlanChecks(plan, options.Final)
+	checks := validatePhasePlanChecksWithApprovals(root, plan, options.Final)
 	status := PhasePlanStatusPass
 	for _, check := range checks {
 		if check.Status == PhasePlanStatusFail {
@@ -378,6 +388,14 @@ func validatePhasePlanChecks(plan PhasePlan, final bool) []PhasePlanCheck {
 	return checks
 }
 
+func validatePhasePlanChecksWithApprovals(root Root, plan PhasePlan, final bool) []PhasePlanCheck {
+	checks := validatePhasePlanChecks(plan, final)
+	if final {
+		checks = append(checks, validateFinalApprovalState(root, plan)...)
+	}
+	return checks
+}
+
 func validateFeedbackPhases(seen map[string]PhaseRow, path string) []PhasePlanCheck {
 	checks := []PhasePlanCheck{}
 	requests := map[int]bool{}
@@ -454,6 +472,45 @@ func validateFinalPhaseState(plan PhasePlan, seen map[string]PhaseRow) []PhasePl
 	return checks
 }
 
+func validateFinalApprovalState(root Root, plan PhasePlan) []PhasePlanCheck {
+	required := []string{}
+	for _, phase := range plan.Phases {
+		if phase.ApprovalRequired {
+			required = append(required, phase.ID)
+		}
+	}
+	if len(required) == 0 {
+		return []PhasePlanCheck{{Name: "final_approval_records", Status: PhasePlanStatusPass, Path: plan.Path, Message: "no required phase approvals are declared"}}
+	}
+	latest, err := ApprovalLatestDecisions(root, plan.RunID)
+	if err != nil {
+		return []PhasePlanCheck{{Name: "final_approval_records", Status: PhasePlanStatusFail, Path: plan.Path, Message: "required phase approvals cannot be checked", Hint: "Repair approval event records or restore a coherent event log.", Field: "approval_required", Expected: "readable approval records", Actual: err.Error()}}
+	}
+	missing := []string{}
+	rejected := []string{}
+	for _, phase := range required {
+		decision, ok := latest[phase]
+		if !ok {
+			missing = append(missing, phase)
+			continue
+		}
+		if decision.Decision != ApprovalDecisionApproved {
+			rejected = append(rejected, phase+"="+decision.Decision)
+		}
+	}
+	if len(missing) == 0 && len(rejected) == 0 {
+		return []PhasePlanCheck{{Name: "final_approval_records", Status: PhasePlanStatusPass, Path: plan.Path, Message: "required phase approvals are approved"}}
+	}
+	actual := []string{}
+	if len(missing) > 0 {
+		actual = append(actual, "missing:"+strings.Join(missing, ","))
+	}
+	if len(rejected) > 0 {
+		actual = append(actual, "not_approved:"+strings.Join(rejected, ","))
+	}
+	return []PhasePlanCheck{{Name: "final_approval_records", Status: PhasePlanStatusFail, Path: plan.Path, Message: "required phase approvals are missing or not approved", Hint: "Use approval record with --decision approved for each approval-required phase before final validation.", Field: "approval_required", Expected: "approved approval records", Actual: strings.Join(actual, ";")}}
+}
+
 func knownPhaseStatus(status string) bool {
 	for _, known := range phaseStatuses {
 		if status == known {
@@ -489,6 +546,9 @@ func encodePhasePlan(plan PhasePlan) []byte {
 			builder.WriteString("    reason: ")
 			builder.WriteString(yamlQuotedScalar(phase.Reason))
 			builder.WriteByte('\n')
+		}
+		if phase.ApprovalRequired {
+			builder.WriteString("    approval_required: true\n")
 		}
 	}
 	return []byte(builder.String())
@@ -538,13 +598,16 @@ func parsePhasePlan(data []byte, path string) (PhasePlan, error) {
 				return PhasePlan{}, &Problem{Code: "phase_plan_invalid_yaml", Message: "top-level phase plan field appears inside a phase row", Hint: "Place run_id before the phases list.", Path: path, Field: key, Expected: "top-level field", Actual: fmt.Sprintf("line %d", lineNumber+1)}
 			}
 			plan.RunID = parsed
-		case "id", "status", "evidence", "reason":
+		case "id", "status", "evidence", "reason", "approval_required":
 			if current == nil {
 				return PhasePlan{}, &Problem{Code: "phase_plan_invalid_yaml", Message: "phase field appears outside a phase row", Hint: "Place phase fields under phases: list rows.", Path: path, Field: key, Expected: "field below phases list item", Actual: fmt.Sprintf("line %d", lineNumber+1)}
 			}
+			if key == "approval_required" && parsed != "true" && parsed != "false" {
+				return PhasePlan{}, &Problem{Code: "phase_plan_invalid_yaml", Message: "phase approval_required field is invalid", Hint: "Use approval_required: true or approval_required: false.", Path: path, Field: key, Expected: "true or false", Actual: parsed}
+			}
 			setPhaseField(current, key, parsed)
 		default:
-			return PhasePlan{}, &Problem{Code: "phase_plan_invalid_yaml", Message: "phase plan contains an unsupported field", Hint: "Use version, run_id, phases, id, status, evidence, and reason only.", Path: path, Field: key, Expected: "supported phase-plan field", Actual: key}
+			return PhasePlan{}, &Problem{Code: "phase_plan_invalid_yaml", Message: "phase plan contains an unsupported field", Hint: "Use version, run_id, phases, id, status, evidence, reason, and approval_required only.", Path: path, Field: key, Expected: "supported phase-plan field", Actual: key}
 		}
 	}
 	flush()
@@ -564,6 +627,8 @@ func setPhaseField(phase *PhaseRow, key string, value string) {
 		phase.Evidence = value
 	case "reason":
 		phase.Reason = value
+	case "approval_required":
+		phase.ApprovalRequired = value == "true"
 	}
 }
 

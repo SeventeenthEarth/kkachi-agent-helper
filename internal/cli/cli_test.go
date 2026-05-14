@@ -109,11 +109,11 @@ func TestCapabilitiesJSONOutputIsProjectIndependent(t *testing.T) {
 		t.Fatalf("project schema version = %q, want %q", payload.ProjectSchemaVersion, project.SchemaVersion)
 	}
 	flags := payload.CompatibilityFlags
-	if !flags.ProjectInit || !flags.RunLifecycle || !flags.ArtifactInit || !flags.ArtifactList || !flags.ArtifactValidate || !flags.ArtifactMutation || !flags.Gates || !flags.BackendEvidenceRequirements || !flags.DiagnosticsExport || !flags.PhasePlan {
+	if !flags.ProjectInit || !flags.RunLifecycle || !flags.ArtifactInit || !flags.ArtifactList || !flags.ArtifactValidate || !flags.ArtifactMutation || !flags.Gates || !flags.BackendEvidenceRequirements || !flags.DiagnosticsExport || !flags.PhasePlan || !flags.ApprovalRecords {
 		t.Fatalf("compatibility flags = %#v, want implemented surfaces enabled", flags)
 	}
-	if flags.ApprovalRecords || flags.InstallCommand {
-		t.Fatalf("compatibility flags = %#v, want planned/omitted surfaces disabled", flags)
+	if flags.InstallCommand {
+		t.Fatalf("compatibility flags = %#v, want omitted install surface disabled", flags)
 	}
 	assertCapabilityCommandGroups(t, payload.CommandGroups)
 	if len(payload.DeprecatedSurfaces) != 0 {
@@ -181,6 +181,7 @@ func TestHelpCommandsExitZeroWithoutProjectState(t *testing.T) {
 		{name: "lock group", args: []string{"lock", "--help"}, want: []string{"kkachi-agent-helper lock", "recover <active-run|project-write|all>", "--reason <text> (required)"}},
 		{name: "diagnostics group", args: []string{"diagnostics", "--help"}, want: []string{"kkachi-agent-helper diagnostics", "export", "--output <repo-relative-path>"}},
 		{name: "phase plan", args: []string{"phase-plan", "--help"}, want: []string{"kkachi-agent-helper phase-plan", "supported", "validate <run_id>"}},
+		{name: "approval group", args: []string{"approval", "--help"}, want: []string{"kkachi-agent-helper approval", "request <run_id>", "--decision <approved|rejected>"}},
 		{name: "help alias", args: []string{"help", "run", "create"}, want: []string{"kkachi-agent-helper run create", "--execution-mode"}},
 		{name: "help help", args: []string{"help", "help"}, want: []string{"kkachi-agent-helper help", "[command] [subcommand]", "JSON behavior:"}},
 	}
@@ -1421,7 +1422,7 @@ func assertCapabilityCommandGroups(t *testing.T, groups []capabilityCommandGroup
 		{Name: "lock", Status: capabilityStatusSupported, Subcommands: []string{"recover"}},
 		{Name: "diagnostics", Status: capabilityStatusSupported, Subcommands: []string{"export"}},
 		{Name: "phase-plan", Status: capabilityStatusSupported, Subcommands: []string{"init", "show", "set", "validate"}},
-		{Name: "approval", Status: capabilityStatusPlanned, Subcommands: []string{}},
+		{Name: "approval", Status: capabilityStatusSupported, Subcommands: []string{"request", "record", "show"}},
 	}
 	if !slices.EqualFunc(groups, want, func(got capabilityCommandGroup, want capabilityCommandGroup) bool {
 		return got.Name == want.Name && got.Status == want.Status && slices.Equal(got.Subcommands, want.Subcommands)
@@ -2456,6 +2457,56 @@ func TestPhasePlanCLIInitSetValidateAndDiagnostics(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
+	if code := runWithOptions([]string{"phase-plan", "set", created.RunID, "implement", "--status", "in_progress", "--approval-required", "true", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("phase-plan approval-required set exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &updated); err != nil {
+		t.Fatalf("phase-plan approval-required stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if !updated.Phase.ApprovalRequired {
+		t.Fatalf("updated = %#v, want approval_required phase", updated)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"approval", "request", created.RunID, "--phase", "implement", "--reason", "High-risk write.", "--evidence", "plan.md#risk", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("approval request exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	var approval approvalMutationOutput
+	if err := json.Unmarshal(stdout.Bytes(), &approval); err != nil {
+		t.Fatalf("approval request stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if approval.Record.Type != project.ApprovalEventRequested || approval.Record.Phase != "implement" || approval.Record.Timestamp == "" {
+		t.Fatalf("approval request = %#v, want request record", approval)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"approval", "record", created.RunID, "--phase", "implement", "--decision", "approved", "--by", "master", "--evidence", "messages/123", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("approval record exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &approval); err != nil {
+		t.Fatalf("approval record stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if approval.Record.Type != project.ApprovalEventRecorded || approval.Record.Decision != project.ApprovalDecisionApproved || approval.Record.Approver != "master" {
+		t.Fatalf("approval record = %#v, want approved decision", approval)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"approval", "show", created.RunID, "--phase", "implement", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("approval show exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	var approvals project.ApprovalShowResult
+	if err := json.Unmarshal(stdout.Bytes(), &approvals); err != nil {
+		t.Fatalf("approval show stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if len(approvals.Records) != 2 {
+		t.Fatalf("approvals = %#v, want request and decision", approvals)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
 	if code := runWithOptions([]string{"phase-plan", "validate", created.RunID, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("phase-plan validate exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
 	}
@@ -2498,5 +2549,8 @@ func TestPhasePlanCLIInitSetValidateAndDiagnostics(t *testing.T) {
 	}
 	if !foundPhasePlan {
 		t.Fatalf("diagnostics selected artifacts = %#v, want phase-plan.yaml", bundle.SelectedArtifacts)
+	}
+	if len(bundle.ApprovalRecords) != 2 {
+		t.Fatalf("diagnostics approval records = %#v, want request and decision", bundle.ApprovalRecords)
 	}
 }

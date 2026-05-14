@@ -142,7 +142,7 @@ KHS `main` should use KAH `@latest` where possible, but it needs capability-base
 #### Completion notes
 
 - Added project-independent `capabilities --json` with helper build info, capabilities schema version, embedded project schema version, command-group inventory, compatibility flags, and explicit omitted `install` surface.
-- Initial flags exposed supported project/run/artifact/gate/backend-evidence/diagnostics surfaces and reported phase-plan plus approval records as unavailable until later align tasks; align-005 now promotes phase-plan to supported while approval records remain planned.
+- Initial flags exposed supported project/run/artifact/gate/backend-evidence/diagnostics surfaces and reported phase-plan plus approval records as unavailable until later align tasks; align-005 promoted phase-plan to supported and align-007 promotes approval records to supported.
 - Unit, integration, and e2e release packaging coverage verify the JSON shape and version propagation.
 
 ### align-004 — Standard help UX
@@ -261,7 +261,7 @@ kkachi-agent-helper artifact set-status <run_id> checklist.md --status complete 
 
 ### align-007 — Approval record surface
 
-Status: Planned
+Status: Completed
 
 #### Problem
 
@@ -285,6 +285,13 @@ A strict wrapper around `event append` is acceptable if KAH should avoid a large
 - Approval records are included in diagnostics export.
 - KAH does not decide whether approval is needed; it records the declaration and decision.
 - Final verification can check approvals when the phase plan says they were required.
+
+#### Completion notes
+
+- Implemented `approval request`, `approval record`, and `approval show` over strict `approval.requested` and `approval.recorded` event payloads with helper-generated RFC3339 timestamps.
+- Approval records are included in diagnostics export and advertised through capabilities/help.
+- `phase-plan set --approval-required true` lets KHS declare final approval requirements; `phase-plan validate --final` fails closed until the latest decision for that phase is `approved`.
+- KAH records declarations only and does not decide when approval is required.
 
 ### align-008 — KHS/KAH compatibility contract docs
 

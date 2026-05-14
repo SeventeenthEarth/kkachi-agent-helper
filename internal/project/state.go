@@ -141,6 +141,22 @@ func appendEventWithStatusMutation(root Root, options AppendEventOptions, mutate
 		Actor:      options.Actor,
 		Payload:    options.Payload,
 	}
+	if isApprovalEventType(event.Type) {
+		record, err := approvalRecordFromEvent(event)
+		if err != nil {
+			return AppendEventResult{}, err
+		}
+		if event.Type == ApprovalEventRequested {
+			if err := validateApprovalRequestRecord(record); err != nil {
+				return AppendEventResult{}, err
+			}
+		}
+		if event.Type == ApprovalEventRecorded {
+			if err := validateApprovalDecisionRecord(record); err != nil {
+				return AppendEventResult{}, err
+			}
+		}
+	}
 
 	line, err := json.Marshal(event)
 	if err != nil {

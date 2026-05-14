@@ -43,6 +43,7 @@ type DiagnosticsBundle struct {
 	RunID             string               `json:"run_id,omitempty"`
 	GateReports       []DiagnosticsFile    `json:"gate_reports"`
 	SelectedArtifacts []DiagnosticsFile    `json:"selected_artifacts"`
+	ApprovalRecords   []ApprovalRecord     `json:"approval_records,omitempty"`
 	OutputPath        string               `json:"output_path,omitempty"`
 }
 
@@ -108,6 +109,11 @@ func ExportDiagnostics(root Root, options DiagnosticsExportOptions) (Diagnostics
 	if runID != "" {
 		bundle.GateReports = diagnosticGateReports(root, runID)
 		bundle.SelectedArtifacts = diagnosticSelectedArtifacts(root, runID)
+		records, err := ApprovalRecords(root, runID)
+		if err != nil {
+			return DiagnosticsBundle{}, err
+		}
+		bundle.ApprovalRecords = redactedApprovalRecords(records)
 	} else {
 		bundle.GateReports = []DiagnosticsFile{}
 		bundle.SelectedArtifacts = []DiagnosticsFile{}
@@ -134,6 +140,25 @@ func ExportDiagnostics(root Root, options DiagnosticsExportOptions) (Diagnostics
 		bundle.OutputPath = path.Relative
 	}
 	return bundle, nil
+}
+
+func redactedApprovalRecords(records []ApprovalRecord) []ApprovalRecord {
+	redacted := make([]ApprovalRecord, len(records))
+	for i, record := range records {
+		redacted[i] = ApprovalRecord{
+			EventID:    RedactString(record.EventID),
+			OccurredAt: RedactString(record.OccurredAt),
+			Type:       RedactString(record.Type),
+			RunID:      RedactString(record.RunID),
+			Phase:      RedactString(record.Phase),
+			Reason:     RedactString(record.Reason),
+			Decision:   RedactString(record.Decision),
+			Approver:   RedactString(record.Approver),
+			Timestamp:  RedactString(record.Timestamp),
+			Evidence:   RedactString(record.Evidence),
+		}
+	}
+	return redacted
 }
 
 func activeRunIDForDiagnostics(root Root) string {

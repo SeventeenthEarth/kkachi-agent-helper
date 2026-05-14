@@ -139,6 +139,7 @@ func TestStandardHelpUX(t *testing.T) {
 		{name: "lock group", args: []string{"lock", "--help"}, want: []string{"kkachi-agent-helper lock", "recover <active-run|project-write|all>", "--reason <text> (required)"}},
 		{name: "diagnostics group", args: []string{"diagnostics", "--help"}, want: []string{"kkachi-agent-helper diagnostics", "export", "--output <repo-relative-path>"}},
 		{name: "phase plan", args: []string{"phase-plan", "--help"}, want: []string{"kkachi-agent-helper phase-plan", "supported", "validate <run_id>"}},
+		{name: "approval", args: []string{"approval", "--help"}, want: []string{"kkachi-agent-helper approval", "request <run_id>", "--decision <approved|rejected>"}},
 		{name: "help help", args: []string{"help", "help"}, want: []string{"kkachi-agent-helper help", "[command] [subcommand]", "JSON behavior:"}},
 	}
 
@@ -674,6 +675,38 @@ func TestDiagnosticsExportRedaction(t *testing.T) {
 	requireNotContains(t, redacted.stderr, secret, "redacted diagnostics error")
 }
 
+func TestApprovalRecordsEndToEnd(t *testing.T) {
+	r := repo(t, "approval")
+	requireCLI(t, r, "project", "init", "--json")
+	runID := createRun(t, r, "align-007", "production_write")
+	requireCLI(t, r, "phase-plan", "init", runID, "--json")
+	set := requireCLI(t, r, "phase-plan", "set", runID, "implement", "--status", "in_progress", "--approval-required", "true", "--json")
+	requireContains(t, set.stdout, `"approval_required":true`, "phase approval-required")
+	request := requireCLI(t, r, "approval", "request", runID, "--phase", "implement", "--reason", "High-risk implementation phase.", "--evidence", "plan.md#approval", "--json")
+	requireContains(t, request.stdout, `"type":"approval.requested"`, "approval request")
+	requireContains(t, request.stdout, `"timestamp":`, "approval request")
+
+	finalBefore := requireFailCLI(t, r, "phase-plan", "validate", runID, "--final", "--json")
+	requireContains(t, finalBefore.stdout, `"name":"final_approval_records","status":"fail"`, "approval final before decision")
+
+	record := requireCLI(t, r, "approval", "record", runID, "--phase", "implement", "--decision", "approved", "--by", "master", "--evidence", "messages/approval-123", "--json")
+	requireContains(t, record.stdout, `"type":"approval.recorded"`, "approval record")
+	requireContains(t, record.stdout, `"decision":"approved"`, "approval record")
+	show := requireCLI(t, r, "approval", "show", runID, "--phase", "implement", "--json")
+	requireContains(t, show.stdout, `"records":[`, "approval show")
+	requireContains(t, show.stdout, `"type":"approval.requested"`, "approval show")
+	requireContains(t, show.stdout, `"decision":"approved"`, "approval show")
+
+	finalAfter := requireFailCLI(t, r, "phase-plan", "validate", runID, "--final", "--json")
+	requireContains(t, finalAfter.stdout, `"name":"final_approval_records","status":"pass"`, "approval final after decision")
+	bundle := requireCLI(t, r, "diagnostics", "export", "--run", runID, "--json")
+	requireContains(t, bundle.stdout, `"approval_records":[`, "approval diagnostics")
+	requireContains(t, bundle.stdout, `"type":"approval.requested"`, "approval diagnostics")
+	requireContains(t, bundle.stdout, `"type":"approval.recorded"`, "approval diagnostics")
+	requireFileContains(t, filepath.Join(r, ".kkachi", "events.jsonl"), `"type":"approval.requested"`, "approval event log")
+	requireFileContains(t, filepath.Join(r, ".kkachi", "events.jsonl"), `"type":"approval.recorded"`, "approval event log")
+}
+
 func TestReleasePackaging(t *testing.T) {
 	tmp := t.TempDir()
 	dist := filepath.Join(tmp, "dist")
@@ -743,6 +776,7 @@ func TestReleasePackaging(t *testing.T) {
 	requireContains(t, string(out), `"project_schema_version":"0.1"`, "capabilities schema version")
 	requireContains(t, string(out), `"backend_evidence_requirements":true`, "capabilities backend evidence flag")
 	requireContains(t, string(out), `"phase_plan":true`, "capabilities phase-plan flag")
+	requireContains(t, string(out), `"approval_records":true`, "capabilities approval flag")
 	requireContains(t, string(out), `"name":"install"`, "capabilities omitted install")
 	help := exec.Command(artifact, "run", "create", "--help")
 	out, err = help.Output()
@@ -758,6 +792,13 @@ func TestReleasePackaging(t *testing.T) {
 	}
 	requireContains(t, string(out), `"command":"kkachi-agent-helper phase-plan"`, "release artifact phase-plan help")
 	requireContains(t, string(out), `"status":"supported"`, "release artifact phase-plan help")
+	approvalHelp := exec.Command(artifact, "--json", "approval", "--help")
+	out, err = approvalHelp.Output()
+	if err != nil {
+		t.Fatalf("release artifact approval help: %v", err)
+	}
+	requireContains(t, string(out), `"command":"kkachi-agent-helper approval"`, "release artifact approval help")
+	requireContains(t, string(out), `"status":"supported"`, "release artifact approval help")
 	runMake(t, "VERSION=0.1.0", "COMMIT=e2e", "BUILD_DATE=2026-01-01T00:00:00Z", "PREFIX="+prefix, "install-local")
 	installed := filepath.Join(prefix, "bin/kkachi-agent-helper")
 	out, err = exec.Command(installed, "version", "--json").Output()

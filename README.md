@@ -108,9 +108,9 @@ kkachi-agent-helper --help
 kkachi-agent-helper [--json] <command>
 ```
 
-`capabilities --json` is the stable machine-readable command-surface report for KHS activation checks. It includes helper build info, the embedded project schema version, supported command groups, compatibility flags such as artifact mutation and phase-plan support, and explicit omitted surfaces such as the removed `install` command.
+`capabilities --json` is the stable machine-readable command-surface report for KHS activation checks. It includes helper build info, the embedded project schema version, supported command groups, compatibility flags such as artifact mutation, phase-plan support, and approval records, and explicit omitted surfaces such as the removed `install` command.
 
-Help is project-independent and exits `0`. Use `kkachi-agent-helper <command> --help`, supported subcommand topics such as `kkachi-agent-helper project init --help` and `kkachi-agent-helper run create --help`, or `kkachi-agent-helper help <command> [subcommand]` for required arguments, options, and JSON behavior. Implemented command groups have group help pages, including `schema`, `event`, `lock`, and `phase-plan`. `--json` with help emits structured help JSON; compatibility automation should still prefer `capabilities --json`.
+Help is project-independent and exits `0`. Use `kkachi-agent-helper <command> --help`, supported subcommand topics such as `kkachi-agent-helper project init --help` and `kkachi-agent-helper run create --help`, or `kkachi-agent-helper help <command> [subcommand]` for required arguments, options, and JSON behavior. Implemented command groups have group help pages, including `schema`, `event`, `lock`, `phase-plan`, and `approval`. `--json` with help emits structured help JSON; compatibility automation should still prefer `capabilities --json`.
 
 Project state:
 
@@ -172,8 +172,16 @@ Phase plans:
 ```sh
 kkachi-agent-helper phase-plan init <run_id> [--json]
 kkachi-agent-helper phase-plan show <run_id> [--json]
-kkachi-agent-helper phase-plan set <run_id> <phase-id> --status <status> [--evidence <path>] [--reason <text>] [--json]
+kkachi-agent-helper phase-plan set <run_id> <phase-id> --status <status> [--evidence <path>] [--reason <text>] [--approval-required true|false] [--json]
 kkachi-agent-helper phase-plan validate <run_id> [--final] [--json]
+```
+
+Approvals:
+
+```sh
+kkachi-agent-helper approval request <run_id> --phase <phase-id> --reason <reason> [--evidence <ref>] [--json]
+kkachi-agent-helper approval record <run_id> --phase <phase-id> --decision <approved|rejected> --by <approver> --evidence <ref> [--reason <reason>] [--json]
+kkachi-agent-helper approval show <run_id> [--phase <phase-id>] [--json]
 ```
 
 Schemas and migrations:
@@ -205,6 +213,7 @@ kkachi-agent-helper diagnostics export [--run <run_id>] [--output <repo-relative
 - `project status`, `project doctor`, `artifact list`, and diagnostics stdout export are read-only.
 - `gate check` records deterministic pass/fail/blocked results in run metadata, project status, events, and run-local gate reports.
 - `artifact write`, `artifact append`, and `artifact set-status` safely mutate canonical run artifacts with atomic writes and audit events; direct file reads remain compatible during migration.
-- `phase-plan` stores and validates KHS-declared `phase-plan.yaml` state only; KHS owns phase applicability and workflow policy.
+- `phase-plan` stores and validates KHS-declared `phase-plan.yaml` state only; KHS owns phase applicability and workflow policy. `--approval-required true` makes final phase-plan validation require an approved KAH approval record for that phase.
+- `approval` records KHS-declared approval requests and decisions as strict events; KAH does not decide whether approval is needed.
 - `diagnostics export` redacts token-like values and exports only a selected support-safe artifact set.
 - Canonical exit codes are `0` success, `1` internal failure, `2` usage/unsupported command state, `3` fail-closed state or validation problems, and `4` missing repository root.

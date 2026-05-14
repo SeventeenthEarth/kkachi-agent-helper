@@ -32,6 +32,7 @@ var commandGroups = map[string]struct{}{
 	"lock":        {},
 	"diagnostics": {},
 	"phase-plan":  {},
+	"approval":    {},
 }
 
 const (
@@ -271,6 +272,7 @@ type diagnosticsExportOutput struct {
 	RunID             string                       `json:"run_id,omitempty"`
 	GateReports       []project.DiagnosticsFile    `json:"gate_reports"`
 	SelectedArtifacts []project.DiagnosticsFile    `json:"selected_artifacts"`
+	ApprovalRecords   []project.ApprovalRecord     `json:"approval_records,omitempty"`
 	OutputPath        string                       `json:"output_path,omitempty"`
 }
 
@@ -283,6 +285,11 @@ type phasePlanSetOutput struct {
 	PhasePlan project.PhasePlan `json:"phase_plan"`
 	Phase     project.PhaseRow  `json:"phase"`
 	EventID   string            `json:"event_id"`
+}
+
+type approvalMutationOutput struct {
+	Record  project.ApprovalRecord `json:"record"`
+	EventID string                 `json:"event_id"`
 }
 
 type helpOutput struct {
@@ -413,6 +420,9 @@ func runWithOptions(args []string, stdout io.Writer, stderr io.Writer, info Buil
 			}
 			if command == "phase-plan" {
 				return runPhasePlanCommand(opts.args[1:], root, stdout, stderr, opts.json)
+			}
+			if command == "approval" {
+				return runApprovalCommand(opts.args[1:], root, stdout, stderr, opts.json)
 			}
 			writeError(stderr, opts.json, cliError{
 				Code:     "not_implemented",
@@ -606,6 +616,161 @@ func runPhasePlanCommand(args []string, root project.Root, stdout io.Writer, std
 	}
 }
 
+func runApprovalCommand(args []string, root project.Root, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
+	if len(args) == 0 {
+		writeError(stderr, jsonMode, cliError{Code: "approval_subcommand_required", Message: "approval subcommand is required", Hint: approvalUsageHint(), ExitCode: ExitUsage})
+		return ExitUsage
+	}
+	switch args[0] {
+	case "request":
+		options, cliErr := parseApprovalRequestArgs(args)
+		if cliErr != nil {
+			writeError(stderr, jsonMode, *cliErr)
+			return cliErr.ExitCode
+		}
+		result, err := project.RequestApproval(root, options)
+		if err != nil {
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writeApprovalMutationResult(stdout, result, jsonMode)
+		return ExitOK
+	case "record":
+		options, cliErr := parseApprovalRecordArgs(args)
+		if cliErr != nil {
+			writeError(stderr, jsonMode, *cliErr)
+			return cliErr.ExitCode
+		}
+		result, err := project.RecordApproval(root, options)
+		if err != nil {
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writeApprovalMutationResult(stdout, result, jsonMode)
+		return ExitOK
+	case "show":
+		options, cliErr := parseApprovalShowArgs(args)
+		if cliErr != nil {
+			writeError(stderr, jsonMode, *cliErr)
+			return cliErr.ExitCode
+		}
+		result, err := project.ShowApprovals(root, options)
+		if err != nil {
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writeApprovalShowResult(stdout, result, jsonMode)
+		return ExitOK
+	default:
+		writeError(stderr, jsonMode, cliError{Code: "approval_subcommand_unknown", Message: "approval subcommand is not supported", Hint: approvalUsageHint(), ExitCode: ExitUsage, Field: "subcommand", Expected: "request, record, or show", Actual: args[0]})
+		return ExitUsage
+	}
+}
+
+func parseApprovalRequestArgs(args []string) (project.ApprovalRequestOptions, *cliError) {
+	options := project.ApprovalRequestOptions{}
+	parsed, cliErr := parseApprovalFlags(args, "request", map[string]approvalFlagSpec{
+		"--phase":    {expectedValue: "non-empty value"},
+		"--reason":   {expectedValue: "non-empty value"},
+		"--evidence": {expectedValue: "non-empty value"},
+	}, "--phase, --reason, or --evidence")
+	if cliErr != nil {
+		return options, cliErr
+	}
+	options.RunID = parsed.runID
+	options.Phase = parsed.values["--phase"]
+	options.Reason = parsed.values["--reason"]
+	options.Evidence = parsed.values["--evidence"]
+	if cliErr := requireApprovalOptions("request", parsed.seen, "--phase", "--reason"); cliErr != nil {
+		return options, cliErr
+	}
+	return options, nil
+}
+
+func parseApprovalRecordArgs(args []string) (project.ApprovalRecordOptions, *cliError) {
+	options := project.ApprovalRecordOptions{}
+	parsed, cliErr := parseApprovalFlags(args, "record", map[string]approvalFlagSpec{
+		"--phase":    {expectedValue: "non-empty value"},
+		"--decision": {expectedValue: "non-empty value"},
+		"--by":       {expectedValue: "non-empty value"},
+		"--evidence": {expectedValue: "non-empty value"},
+		"--reason":   {expectedValue: "non-empty value"},
+	}, "--phase, --decision, --by, --evidence, or --reason")
+	if cliErr != nil {
+		return options, cliErr
+	}
+	options.RunID = parsed.runID
+	options.Phase = parsed.values["--phase"]
+	options.Decision = parsed.values["--decision"]
+	options.Approver = parsed.values["--by"]
+	options.Evidence = parsed.values["--evidence"]
+	options.Reason = parsed.values["--reason"]
+	if cliErr := requireApprovalOptions("record", parsed.seen, "--phase", "--decision", "--by", "--evidence"); cliErr != nil {
+		return options, cliErr
+	}
+	return options, nil
+}
+
+func parseApprovalShowArgs(args []string) (project.ApprovalShowOptions, *cliError) {
+	options := project.ApprovalShowOptions{}
+	parsed, cliErr := parseApprovalFlags(args, "show", map[string]approvalFlagSpec{
+		"--phase": {expectedValue: "phase id"},
+	}, "--phase")
+	if cliErr != nil {
+		return options, cliErr
+	}
+	options.RunID = parsed.runID
+	options.Phase = parsed.values["--phase"]
+	return options, nil
+}
+
+type approvalFlagSpec struct {
+	expectedValue string
+}
+
+type approvalFlagParseResult struct {
+	runID  string
+	values map[string]string
+	seen   map[string]bool
+}
+
+func parseApprovalFlags(args []string, subcommand string, specs map[string]approvalFlagSpec, expectedOptions string) (approvalFlagParseResult, *cliError) {
+	result := approvalFlagParseResult{values: map[string]string{}, seen: map[string]bool{}}
+	if len(args) < 2 || strings.HasPrefix(args[1], "--") {
+		return result, &cliError{Code: "run_id_required", Message: fmt.Sprintf("approval %s requires exactly one run id", subcommand), Hint: approvalUsageHint(), ExitCode: ExitUsage, Field: "run_id", Expected: "one run id or unique prefix", Actual: fmt.Sprintf("%d arguments", len(args)-1)}
+	}
+	result.runID = args[1]
+	for i := 2; i < len(args); i++ {
+		flag := args[i]
+		spec, ok := specs[flag]
+		if !ok {
+			return result, &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown approval %s option %q", subcommand, flag), Hint: approvalUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: expectedOptions, Actual: flag}
+		}
+		if i+1 >= len(args) {
+			return result, &cliError{Code: "missing_option_value", Message: flag + " requires a value", Hint: approvalUsageHint(), ExitCode: ExitUsage, Field: flag, Expected: spec.expectedValue, Actual: "missing"}
+		}
+		if result.seen[flag] {
+			return result, &cliError{Code: "duplicate_option", Message: fmt.Sprintf("duplicate approval %s option %q", subcommand, flag), Hint: approvalUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: flag}
+		}
+		result.seen[flag] = true
+		result.values[flag] = args[i+1]
+		i++
+	}
+	return result, nil
+}
+
+func requireApprovalOptions(subcommand string, seen map[string]bool, requiredOptions ...string) *cliError {
+	for _, required := range requiredOptions {
+		if !seen[required] {
+			return &cliError{Code: "missing_required_option", Message: fmt.Sprintf("approval %s requires %s", subcommand, required), Hint: approvalUsageHint(), ExitCode: ExitUsage, Field: required, Expected: "required option", Actual: "missing"}
+		}
+	}
+	return nil
+}
+
 func requireOnePhasePlanRunID(args []string) *cliError {
 	command := args[0]
 	if len(args) == 2 {
@@ -627,6 +792,7 @@ func parsePhasePlanSetArgs(args []string) (project.PhasePlanSetOptions, *cliErro
 	seenStatus := false
 	seenEvidence := false
 	seenReason := false
+	seenApprovalRequired := false
 	for i := 3; i < len(args); i++ {
 		switch args[i] {
 		case "--status":
@@ -659,8 +825,23 @@ func parsePhasePlanSetArgs(args []string) (project.PhasePlanSetOptions, *cliErro
 			seenReason = true
 			options.Reason = args[i+1]
 			i++
+		case "--approval-required":
+			if i+1 >= len(args) {
+				return options, &cliError{Code: "missing_option_value", Message: "--approval-required requires a value", Hint: phasePlanUsageHint(), ExitCode: ExitUsage, Field: "--approval-required", Expected: "true or false", Actual: "missing"}
+			}
+			if seenApprovalRequired {
+				return options, &cliError{Code: "duplicate_option", Message: "duplicate phase-plan set option \"--approval-required\"", Hint: phasePlanUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: "--approval-required"}
+			}
+			value := strings.TrimSpace(args[i+1])
+			if value != "true" && value != "false" {
+				return options, &cliError{Code: "invalid_option_value", Message: "--approval-required must be true or false", Hint: phasePlanUsageHint(), ExitCode: ExitUsage, Field: "--approval-required", Expected: "true or false", Actual: value}
+			}
+			seenApprovalRequired = true
+			options.ApprovalRequiredSet = true
+			options.ApprovalRequired = value == "true"
+			i++
 		default:
-			return options, &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown phase-plan set option %q", args[i]), Hint: phasePlanUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "--status, --evidence, or --reason", Actual: args[i]}
+			return options, &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown phase-plan set option %q", args[i]), Hint: phasePlanUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "--status, --evidence, --reason, or --approval-required", Actual: args[i]}
 		}
 	}
 	if !seenStatus {
@@ -1574,7 +1755,11 @@ func diagnosticsUsageHint() string {
 }
 
 func phasePlanUsageHint() string {
-	return "Use phase-plan init <run_id>, phase-plan show <run_id>, phase-plan set <run_id> <phase-id> --status <pending|in_progress|complete|skipped|not_applicable|blocked> [--evidence <path>] [--reason <text>], or phase-plan validate <run_id> [--final] with optional global --json."
+	return "Use phase-plan init <run_id>, phase-plan show <run_id>, phase-plan set <run_id> <phase-id> --status <pending|in_progress|complete|skipped|not_applicable|blocked> [--evidence <path>] [--reason <text>] [--approval-required true|false], or phase-plan validate <run_id> [--final] with optional global --json."
+}
+
+func approvalUsageHint() string {
+	return "Use approval request <run_id> --phase <phase-id> --reason <reason> [--evidence <ref>], approval record <run_id> --phase <phase-id> --decision <approved|rejected> --by <approver> --evidence <ref> [--reason <reason>], or approval show <run_id> [--phase <phase-id>] with optional global --json."
 }
 
 func lockRecoverUsageHint() string {
@@ -1722,7 +1907,7 @@ func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
 			{Name: "lock", Status: capabilityStatusSupported, Subcommands: []string{"recover"}},
 			{Name: "diagnostics", Status: capabilityStatusSupported, Subcommands: []string{"export"}},
 			{Name: "phase-plan", Status: capabilityStatusSupported, Subcommands: []string{"init", "show", "set", "validate"}},
-			{Name: "approval", Status: capabilityStatusPlanned, Subcommands: []string{}},
+			{Name: "approval", Status: capabilityStatusSupported, Subcommands: []string{"request", "record", "show"}},
 		},
 		CompatibilityFlags: compatibilityFlagsOutput{
 			ProjectInit:                 true,
@@ -1737,7 +1922,7 @@ func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
 			BackendEvidenceRequirements: true,
 			DiagnosticsExport:           true,
 			PhasePlan:                   true,
-			ApprovalRecords:             false,
+			ApprovalRecords:             true,
 			InstallCommand:              false,
 		},
 		DeprecatedSurfaces: []capabilitySurfaceOutput{},
@@ -1753,7 +1938,7 @@ var helpPages = map[string]helpOutput{
 		Status:       capabilityStatusSupported,
 		Usage:        "kkachi-agent-helper [--json] <command> [subcommand] [options]",
 		Summary:      "Deterministic local helper for Kkachi project state, run artifacts, gates, events, schemas, locks, diagnostics, and compatibility discovery.",
-		Subcommands:  []helpItem{{Name: "version", Description: "Print helper build version."}, {Name: "capabilities", Description: "Print the command-surface compatibility report."}, {Name: "project", Description: "Initialize and inspect helper project state."}, {Name: "run", Description: "Create, list, show, activate, close, or abort helper runs."}, {Name: "artifact", Description: "Initialize, list, and validate canonical run artifacts."}, {Name: "gate", Description: "Run deterministic gate checks."}, {Name: "event", Description: "Append attributed helper events."}, {Name: "schema", Description: "Validate, export, or migrate helper schemas/state."}, {Name: "lock", Description: "Recover stale helper write locks explicitly."}, {Name: "diagnostics", Description: "Export redacted diagnostics bundles."}, {Name: "phase-plan", Description: "Manage KHS-declared phase-plan state."}, {Name: "help", Description: "Show help for the top level or a command topic."}},
+		Subcommands:  []helpItem{{Name: "version", Description: "Print helper build version."}, {Name: "capabilities", Description: "Print the command-surface compatibility report."}, {Name: "project", Description: "Initialize and inspect helper project state."}, {Name: "run", Description: "Create, list, show, activate, close, or abort helper runs."}, {Name: "artifact", Description: "Initialize, list, and validate canonical run artifacts."}, {Name: "gate", Description: "Run deterministic gate checks."}, {Name: "event", Description: "Append attributed helper events."}, {Name: "schema", Description: "Validate, export, or migrate helper schemas/state."}, {Name: "lock", Description: "Recover stale helper write locks explicitly."}, {Name: "diagnostics", Description: "Export redacted diagnostics bundles."}, {Name: "phase-plan", Description: "Manage KHS-declared phase-plan state."}, {Name: "approval", Description: "Record and show KHS-declared approval requests/decisions."}, {Name: "help", Description: "Show help for the top level or a command topic."}},
 		Options:      []helpItem{{Name: "--json", Description: "Emit machine-readable JSON for commands that support JSON output."}, {Name: "--help", Description: "Show help and exit 0 without requiring helper project state."}, {Name: "--version", Description: "Print helper build version."}},
 		JSONBehavior: "Use --json with help for structured help. Use capabilities --json for stable machine compatibility checks; command help is supplemental documentation.",
 	},
@@ -1861,12 +2046,22 @@ var helpPages = map[string]helpOutput{
 	"phase-plan": {
 		Command:      "kkachi-agent-helper phase-plan",
 		Status:       capabilityStatusSupported,
-		Usage:        "kkachi-agent-helper phase-plan init <run_id> [--json]\n  kkachi-agent-helper phase-plan show <run_id> [--json]\n  kkachi-agent-helper phase-plan set <run_id> <phase-id> --status <status> [--evidence <path>] [--reason <text>] [--json]\n  kkachi-agent-helper phase-plan validate <run_id> [--final] [--json]",
+		Usage:        "kkachi-agent-helper phase-plan init <run_id> [--json]\n  kkachi-agent-helper phase-plan show <run_id> [--json]\n  kkachi-agent-helper phase-plan set <run_id> <phase-id> --status <status> [--evidence <path>] [--reason <text>] [--approval-required true|false] [--json]\n  kkachi-agent-helper phase-plan validate <run_id> [--final] [--json]",
 		Summary:      "Store, update, show, and deterministically validate KHS-declared phase-plan.yaml state.",
 		Subcommands:  []helpItem{{Name: "init <run_id>", Description: "Initialize .kkachi/runs/<run_id>/phase-plan.yaml with required declared phase rows."}, {Name: "show <run_id>", Description: "Show the declared phase plan."}, {Name: "set <run_id> <phase-id>", Description: "Update one declared phase row."}, {Name: "validate <run_id>", Description: "Validate phase-plan structure and optional final completeness."}},
-		Options:      []helpItem{{Name: "--status <pending|in_progress|complete|skipped|not_applicable|blocked>", Required: true, Description: "Phase status for phase-plan set."}, {Name: "--evidence <path>", Description: "Evidence link for a completed phase."}, {Name: "--reason <text>", Description: "Required reason for skipped or not-applicable phases."}, {Name: "--final", Description: "Require terminal states and evidence for completed phases."}, {Name: "--json", Description: "Emit structured phase-plan output."}, {Name: "--help", Description: "Show phase-plan help and exit 0."}},
+		Options:      []helpItem{{Name: "--status <pending|in_progress|complete|skipped|not_applicable|blocked>", Required: true, Description: "Phase status for phase-plan set."}, {Name: "--evidence <path>", Description: "Evidence link for a completed phase."}, {Name: "--reason <text>", Description: "Required reason for skipped or not-applicable phases."}, {Name: "--approval-required true|false", Description: "Declare whether final validation requires an approved approval record for this phase."}, {Name: "--final", Description: "Require terminal states, evidence, and declared approvals for completed phases."}, {Name: "--json", Description: "Emit structured phase-plan output."}, {Name: "--help", Description: "Show phase-plan help and exit 0."}},
 		JSONBehavior: "Phase-plan commands support global --json for structured output and structured errors. Failing validation exits 3 with structured checks.",
 		Notes:        []string{"KAH stores and validates declared phase state only; KHS remains responsible for phase applicability and workflow policy."},
+	},
+	"approval": {
+		Command:      "kkachi-agent-helper approval",
+		Status:       capabilityStatusSupported,
+		Usage:        "kkachi-agent-helper approval request <run_id> --phase <phase-id> --reason <reason> [--evidence <ref>] [--json]\n  kkachi-agent-helper approval record <run_id> --phase <phase-id> --decision <approved|rejected> --by <approver> --evidence <ref> [--reason <reason>] [--json]\n  kkachi-agent-helper approval show <run_id> [--phase <phase-id>] [--json]",
+		Summary:      "Record and inspect KHS-declared high-risk phase approval requests and decisions.",
+		Subcommands:  []helpItem{{Name: "request <run_id>", Description: "Append an approval.requested event."}, {Name: "record <run_id>", Description: "Append an approval.recorded decision event."}, {Name: "show <run_id>", Description: "Show approval events for a run."}},
+		Options:      []helpItem{{Name: "--phase <phase-id>", Required: true, Description: "KHS-declared phase id."}, {Name: "--reason <text>", Description: "Reason for the approval request or decision."}, {Name: "--decision <approved|rejected>", Description: "Approval decision for approval record."}, {Name: "--by <approver>", Description: "Approving principal for approval record."}, {Name: "--evidence <ref>", Description: "Artifact path or message reference; required for approval record."}, {Name: "--json", Description: "Emit structured approval output."}, {Name: "--help", Description: "Show approval help and exit 0."}},
+		JSONBehavior: "Approval commands support global --json for structured output and structured errors. KAH records declarations only and does not decide whether approval is required.",
+		Notes:        []string{"Use phase-plan set --approval-required true plus phase-plan validate --final to make final validation require an approved decision for a phase."},
 	},
 }
 
@@ -2052,7 +2247,7 @@ func writeSchemaMigrationResult(w io.Writer, result project.SchemaMigrationResul
 }
 
 func writeDiagnosticsExportResult(w io.Writer, result project.DiagnosticsBundle, jsonMode bool) {
-	payload := diagnosticsExportOutput{Version: result.Version, GeneratedAt: result.GeneratedAt, RootPath: result.RootPath, Redaction: result.Redaction, Project: result.Project, SchemaVersions: result.SchemaVersions, RunID: result.RunID, GateReports: result.GateReports, SelectedArtifacts: result.SelectedArtifacts, OutputPath: result.OutputPath}
+	payload := diagnosticsExportOutput{Version: result.Version, GeneratedAt: result.GeneratedAt, RootPath: result.RootPath, Redaction: result.Redaction, Project: result.Project, SchemaVersions: result.SchemaVersions, RunID: result.RunID, GateReports: result.GateReports, SelectedArtifacts: result.SelectedArtifacts, ApprovalRecords: result.ApprovalRecords, OutputPath: result.OutputPath}
 	if jsonMode || payload.OutputPath == "" {
 		_ = json.NewEncoder(w).Encode(payload)
 		return
@@ -2062,6 +2257,7 @@ func writeDiagnosticsExportResult(w io.Writer, result project.DiagnosticsBundle,
 	fmt.Fprintf(w, "schema_versions: %d\n", len(payload.SchemaVersions))
 	fmt.Fprintf(w, "gate_reports: %d\n", len(payload.GateReports))
 	fmt.Fprintf(w, "selected_artifacts: %d\n", len(payload.SelectedArtifacts))
+	fmt.Fprintf(w, "approval_records: %d\n", len(payload.ApprovalRecords))
 }
 
 func writePhasePlanInitResult(w io.Writer, result project.PhasePlanInitResult, jsonMode bool) {
@@ -2091,6 +2287,9 @@ func writePhasePlanShowResult(w io.Writer, plan project.PhasePlan, jsonMode bool
 		if phase.Reason != "" {
 			fmt.Fprintf(w, " reason=%s", phase.Reason)
 		}
+		if phase.ApprovalRequired {
+			fmt.Fprintf(w, " approval_required=true")
+		}
 		fmt.Fprintln(w)
 	}
 }
@@ -2105,6 +2304,47 @@ func writePhasePlanSetResult(w io.Writer, result project.PhasePlanSetResult, jso
 	fmt.Fprintf(w, "path: %s\n", payload.PhasePlan.Path)
 	fmt.Fprintf(w, "event_id: %s\n", payload.EventID)
 	fmt.Fprintf(w, "phase: %s status=%s\n", payload.Phase.ID, payload.Phase.Status)
+	if payload.Phase.ApprovalRequired {
+		fmt.Fprintln(w, "approval_required: true")
+	}
+}
+
+func writeApprovalMutationResult(w io.Writer, result project.ApprovalMutationResult, jsonMode bool) {
+	payload := approvalMutationOutput{Record: result.Record, EventID: result.EventID}
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(payload)
+		return
+	}
+	fmt.Fprintf(w, "recorded approval event: %s\n", payload.EventID)
+	fmt.Fprintf(w, "type: %s\n", payload.Record.Type)
+	fmt.Fprintf(w, "phase: %s\n", payload.Record.Phase)
+	if payload.Record.Decision != "" {
+		fmt.Fprintf(w, "decision: %s\n", payload.Record.Decision)
+	}
+}
+
+func writeApprovalShowResult(w io.Writer, result project.ApprovalShowResult, jsonMode bool) {
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(result)
+		return
+	}
+	fmt.Fprintf(w, "approvals for run: %s\n", result.RunID)
+	if result.Phase != "" {
+		fmt.Fprintf(w, "phase: %s\n", result.Phase)
+	}
+	for _, record := range result.Records {
+		fmt.Fprintf(w, "- %s %s phase=%s timestamp=%s", record.EventID, record.Type, record.Phase, record.Timestamp)
+		if record.Decision != "" {
+			fmt.Fprintf(w, " decision=%s", record.Decision)
+		}
+		if record.Approver != "" {
+			fmt.Fprintf(w, " approver=%s", record.Approver)
+		}
+		if record.Evidence != "" {
+			fmt.Fprintf(w, " evidence=%s", record.Evidence)
+		}
+		fmt.Fprintln(w)
+	}
 }
 
 func writePhasePlanValidationResult(w io.Writer, result project.PhasePlanValidationResult, jsonMode bool) {

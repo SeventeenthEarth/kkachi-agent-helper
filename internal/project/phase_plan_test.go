@@ -248,3 +248,12 @@ func phaseCheckFailed(checks []PhasePlanCheck, name string) bool {
 	}
 	return false
 }
+
+func phaseCheckPassed(checks []PhasePlanCheck, name string) bool {
+	for _, check := range checks {
+		if check.Name == name && check.Status == PhasePlanStatusPass {
+			return true
+		}
+	}
+	return false
+}
