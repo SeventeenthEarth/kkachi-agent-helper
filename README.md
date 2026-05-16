@@ -167,6 +167,8 @@ kkachi-agent-helper gate check <run_id> <intake|sot|roadmap|plan|backend|impleme
 kkachi-agent-helper gate final <run_id> [--json]
 ```
 
+Backend JSON evidence is schema-owned. Write `selected-cli.json` and `bridge-session-snapshot.json` with `artifact write`; do not run generic `artifact set-status ... --status complete` on those files. KAH rejects that with `artifact_status_not_applicable` so fields such as `selected-cli.json.status=supported|degraded` are not overwritten. Use `gate check backend` to validate backend evidence completion.
+
 Phase plans:
 
 ```sh
@@ -220,7 +222,7 @@ Project bootstrap remains `project init` / `project init --force`: KAH creates o
 - Mutating commands fail closed when `status.last_event_id` and the event log tail diverge.
 - `project status`, `project doctor`, `artifact list`, and diagnostics stdout export are read-only.
 - `gate check` records deterministic pass/fail/blocked results in run metadata, project status, events, and run-local gate reports.
-- `artifact write`, `artifact append`, and `artifact set-status` safely mutate canonical run artifacts with atomic writes and audit events; direct file reads remain compatible during migration.
+- `artifact write`, `artifact append`, and markdown `artifact set-status` safely mutate canonical run artifacts with atomic writes and audit events; direct file reads remain compatible during migration. Schema-owned backend JSON artifacts reject generic lifecycle `set-status` and must be rewritten with valid JSON evidence.
 - `phase-plan` stores and validates KHS-declared `phase-plan.yaml` state only; KHS owns phase applicability and workflow policy. `--approval-required true` makes final phase-plan validation require an approved KAH approval record for that phase.
 - `approval` records KHS-declared approval requests and decisions as strict events; KAH does not decide whether approval is needed.
 - `diagnostics export` redacts token-like values and exports only a selected support-safe artifact set.

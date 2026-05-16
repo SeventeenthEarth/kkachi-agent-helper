@@ -509,6 +509,9 @@ func artifactContentWithStatus(path SafePath, status string, reason string) ([]b
 	if !validArtifactStatus(status) {
 		return nil, &Problem{Code: "artifact_status_invalid", Message: "artifact status is not supported", Hint: "Use pending, complete, or not_applicable.", Path: path.Relative, Field: "status", Expected: "pending, complete, or not_applicable", Actual: status}
 	}
+	if schemaOwnedBackendJSONArtifact(path.Relative) {
+		return nil, &Problem{Code: "artifact_status_not_applicable", Message: "artifact lifecycle status is not applicable to schema-owned backend JSON artifacts", Hint: "Use artifact write with valid backend JSON schema fields and rely on gate check backend for completion validation.", Path: path.Relative, Field: "path", Expected: "markdown lifecycle artifact", Actual: path.Relative}
+	}
 	reason = strings.TrimSpace(reason)
 	if status == "not_applicable" && reason == "" {
 		return nil, &Problem{Code: "artifact_reason_required", Message: "not_applicable artifact status requires a reason", Hint: "Pass --reason with KHS's explicit reason.", Path: path.Relative, Field: "reason", Expected: "non-empty reason", Actual: "missing"}
@@ -533,6 +536,10 @@ func validArtifactStatus(status string) bool {
 	default:
 		return false
 	}
+}
+
+func schemaOwnedBackendJSONArtifact(relative string) bool {
+	return strings.HasSuffix(relative, "/selected-cli.json") || strings.HasSuffix(relative, "/bridge-session-snapshot.json")
 }
 
 func readArtifactForStatus(path SafePath) ([]byte, error) {

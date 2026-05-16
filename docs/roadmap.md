@@ -22,6 +22,7 @@ Status values: `Planned`, `In Progress`, `Blocked`, `Completed`, `Deferred`.
 | 4 | `packg` | Versioned schemas, migration surface, and historical package/bootstrap contract. |
 | 5 | `pilot` | End-to-end evidence, diagnostics, docs, release, and MVP pilot proof. |
 | 6 | `align` | KHS can consume KAH `@latest` through stable capability checks, declared backend evidence, phase-plan validation, and compatibility diagnostics. |
+| 7 | `feedb` | Feedback-driven KAH hardening is preserved in planning history after KHS and PM consumer feedback exposes deterministic-helper risk. |
 
 ## Active roadmap
 
@@ -99,6 +100,14 @@ Status values: `Planned`, `In Progress`, `Blocked`, `Completed`, `Deferred`.
 | align-006 | Deterministic artifact mutation commands | Completed | Add safe `artifact write`, `artifact append`, and `artifact set-status` commands for canonical run artifacts with path safety, atomic writes, status updates, and event recording while keeping direct-file compatibility during migration. | Implemented canonical-only artifact mutation commands with lock/coherence safeguards, atomic writes/appends/status updates, `artifact.written` audit events, help/capabilities/docs updates, and unit/CLI/integration/E2E coverage. |
 | align-007 | Approval record surface | Completed | Add approval request/record/show commands or a strict approval event schema so KHS can record high-risk phase approvals with phase, reason, decision, approver, timestamp, and evidence reference. | Implemented `approval request/record/show`, strict `approval.*` events, diagnostics inclusion, capabilities/help/docs updates, and phase-plan final approval checks for rows marked approval-required. |
 | align-008 | KHS/KAH compatibility contract docs | Completed | Update README/specs/compatibility docs to state the KHS/KAH boundary, `project init` bootstrap contract, no Hermes skill installation, `@latest` plus capabilities policy, and tested-version recommendation model. | Consolidated README/specs/compatibility docs around KHS/KAH ownership, `capabilities --json` activation checks, tested/recommended release versions, project-init bootstrap, and no Hermes skill installation by KAH; locked with E2E docs-contract regression coverage. |
+
+### EPIC: feedb — Feedback-driven hardening and intake
+
+> Goal: preserve feedback-originated KAH hardening work in the roadmap so small completed fixes remain traceable without promoting KAH beyond deterministic local helper ownership.
+
+| Task ID | Title | Status | Work guide | Notes |
+|---|---|---|---|---|
+| feedb-001 | Guard schema-owned backend JSON from generic artifact status mutation | Completed | Record the KHS/PM feedback-driven fix that prevents `artifact set-status <run_id> selected-cli.json --status complete` from overwriting schema-owned backend evidence status values such as `supported` or `degraded`. | Completed before this intake rule was formalized; the guard preserves backend gate evidence checks by requiring schema-owned backend JSON artifacts to be written with valid JSON evidence instead of generic lifecycle status mutation. No separate TODO file is needed for this small historical item. |
 
 ## Backlog and review points
 

@@ -1730,6 +1730,13 @@ func TestArtifactMutationCLIJSONHumanAndFailures(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
+	assertCLIErrorCode(t, runWithOptions([]string{"artifact", "set-status", created.RunID, "selected-cli.json", "--status", "complete", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitSafety, "artifact_status_not_applicable")
+	if got := readCLIText(t, filepath.Join(repo, ".kkachi", "runs", created.RunID, "selected-cli.json")); !strings.Contains(got, `"status": "pending"`) {
+		t.Fatalf("selected-cli.json = %q, want unchanged pending baseline after rejected set-status", got)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
 	assertCLIErrorCode(t, runWithOptions([]string{"artifact", "write", created.RunID, "supplemental/note.md", "--from", "plan-source.md", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitSafety, "artifact_path_invalid")
 	stdout.Reset()
 	stderr.Reset()

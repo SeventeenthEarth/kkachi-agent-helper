@@ -305,22 +305,53 @@ func TestArtifactWriteAppendAndSetStatusMutateCanonically(t *testing.T) {
 		t.Fatalf("checklist after set-status = %q, want complete status", got)
 	}
 
-	jsonUpdated, err := SetArtifactStatus(root, ArtifactMutateOptions{RunID: created.Metadata.RunID, Artifact: "selected-cli.json", Status: "not_applicable", Reason: "backend not used", Now: testRunNow(8)})
+	lines := runEventLines(t, repo)
+	if len(lines) != 6 || !strings.Contains(lines[3], `"operation":"write"`) || !strings.Contains(lines[4], `"operation":"append"`) || !strings.Contains(lines[5], `"operation":"set-status"`) || !strings.Contains(lines[5], `"artifact_kind":"canonical"`) {
+		t.Fatalf("events = %#v, want artifact mutation payloads", lines)
+	}
+}
+
+func TestArtifactSetStatusRejectsSchemaOwnedBackendJSON(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.BackendEvidence = BackendEvidenceRequired
+	created, err := CreateRun(root, options)
 	if err != nil {
-		t.Fatalf("SetArtifactStatus(json) error = %v", err)
+		t.Fatalf("CreateRun() error = %v", err)
 	}
-	if jsonUpdated.Status != "not_applicable" || jsonUpdated.Reason != "backend not used" || jsonUpdated.EventID != "evt-000007" {
-		t.Fatalf("jsonUpdated = %#v, want not_applicable status result", jsonUpdated)
+	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+		t.Fatalf("InitArtifacts() error = %v", err)
 	}
-	var selected map[string]any
-	readJSONFile(t, filepath.Join(repo, ".kkachi", "runs", created.Metadata.RunID, "selected-cli.json"), &selected)
-	if selected["status"] != "not_applicable" || selected["reason"] != "backend not used" {
-		t.Fatalf("selected-cli = %#v, want status and reason", selected)
+	runDir := filepath.Join(repo, ".kkachi", "runs", created.Metadata.RunID)
+	selectedPath := filepath.Join(runDir, "selected-cli.json")
+	selectedContent := []byte(`{"version":"0.1","status":"supported","backend_type":"local_cli","adapter_type":"kkachi-agent-bridge","source_ledger_ref":"ledger://selected","caveats":[]}` + "\n")
+	if err := os.WriteFile(selectedPath, selectedContent, 0o600); err != nil {
+		t.Fatalf("write selected-cli: %v", err)
+	}
+	snapshotPath := filepath.Join(runDir, "bridge-session-snapshot.json")
+	snapshotContent := []byte(`{"version":"0.1","session_id":"session-1","backend_type":"local_cli","adapter_type":"kkachi-agent-bridge","state":"closed","lifecycle_class":"completed","open_pendings":0}` + "\n")
+	if err := os.WriteFile(snapshotPath, snapshotContent, 0o600); err != nil {
+		t.Fatalf("write bridge snapshot: %v", err)
 	}
 
-	lines := runEventLines(t, repo)
-	if len(lines) != 7 || !strings.Contains(lines[3], `"operation":"write"`) || !strings.Contains(lines[4], `"operation":"append"`) || !strings.Contains(lines[5], `"operation":"set-status"`) || !strings.Contains(lines[5], `"artifact_kind":"canonical"`) {
-		t.Fatalf("events = %#v, want artifact mutation payloads", lines)
+	beforeEvents := runEventLines(t, repo)
+	_, err = SetArtifactStatus(root, ArtifactMutateOptions{RunID: created.Metadata.RunID, Artifact: "selected-cli.json", Status: "complete", Now: testRunNow(5)})
+	assertProblemCode(t, err, "artifact_status_not_applicable")
+	if got := readText(t, selectedPath); got != string(selectedContent) {
+		t.Fatalf("selected-cli.json after rejected set-status = %q, want unchanged", got)
+	}
+	if afterEvents := runEventLines(t, repo); len(afterEvents) != len(beforeEvents) {
+		t.Fatalf("events changed after selected-cli rejection: before=%d after=%d", len(beforeEvents), len(afterEvents))
+	}
+
+	_, err = SetArtifactStatus(root, ArtifactMutateOptions{RunID: created.Metadata.RunID, Artifact: "bridge-session-snapshot.json", Status: "complete", Now: testRunNow(6)})
+	assertProblemCode(t, err, "artifact_status_not_applicable")
+	if got := readText(t, snapshotPath); got != string(snapshotContent) {
+		t.Fatalf("bridge-session-snapshot.json after rejected set-status = %q, want unchanged", got)
+	}
+	if afterEvents := runEventLines(t, repo); len(afterEvents) != len(beforeEvents) {
+		t.Fatalf("events changed after bridge snapshot rejection: before=%d after=%d", len(beforeEvents), len(afterEvents))
 	}
 }
 
