@@ -216,9 +216,12 @@ KHS `main` may install KAH with `go install github.com/SeventeenthEarth/kkachi-a
 
 Project bootstrap remains `project init` / `project init --force`: KAH creates or reconfigures helper-managed project state, schemas, overlays, and docs maps, but never installs Hermes/KHS skill content. Hermes skill installation belongs to Hermes native tooling.
 
+Capability records follow the same boundary. KAH owns project-local `.kkachi/` persistence, evidence, and audit surfaces for accepted capability snapshots and reports, but it does not discover backend-native inventories and does not make a KHS semantic catalog callable. KAB owns raw backend-native discovery/verification; KHS owns workflow/prompt/semantic guidance; Blue command owns final active prompt selection.
+
 ## Operational notes
 
-- `.kkachi/config.yaml`, `.kkachi/project-overlay.yaml`, `docs/kkachi-docs-map.yaml`, `.kkachi/status.json`, `.kkachi/events.jsonl`, `.kkachi/schemas/*.schema.json`, and `.kkachi/runs/<run_id>/...` are the local helper state and evidence surfaces.
+- `.kkachi/config.yaml`, `.kkachi/project-overlay.yaml`, `docs/kkachi-docs-map.yaml`, `.kkachi/status.json`, `.kkachi/events.jsonl`, `.kkachi/schemas/*.schema.json`, `.kkachi/capabilities/...`, and `.kkachi/runs/<run_id>/...` are the local helper state and evidence surfaces.
+- Planned capability cache layout is `.kkachi/capabilities/current.json`, `snapshots/<id>.json`, `reports/<id>.json`, `fingerprints/<id>.json`, and `drift/<id>.json`, plus run-local `capability-snapshot.json` / `capability-check.md`. These are cache/evidence records, not backend-native inventory SOT.
 - Mutating commands fail closed when `status.last_event_id` and the event log tail diverge.
 - `project status`, `project doctor`, `artifact list`, and diagnostics stdout export are read-only.
 - `gate check` records deterministic pass/fail/blocked results in run metadata, project status, events, and run-local gate reports.

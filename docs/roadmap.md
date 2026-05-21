@@ -88,7 +88,7 @@ Status values: `Planned`, `In Progress`, `Blocked`, `Completed`, `Deferred`.
 
 > Goal: let KHS use KAH `@latest` safely while preserving the boundary that KHS owns workflow policy and KAH owns deterministic state, artifact, gate, event, and diagnostics validation.
 >
-> Source of truth: `docs/TODO-ALIGN.md` owns the detailed scope, acceptance criteria, and implementation notes for this epic; this roadmap tracks task ids, order, and status.
+> Source of truth: `docs/specs.md`, `docs/compatibility.md`, and implemented capability evidence own current helper behavior. The former `docs/TODO-ALIGN.md` reference is stale because that file is deleted in the current working tree; do not treat it as active authority.
 
 | Task ID | Title | Status | Work guide | Notes |
 |---|---|---|---|---|
@@ -109,6 +109,22 @@ Status values: `Planned`, `In Progress`, `Blocked`, `Completed`, `Deferred`.
 |---|---|---|---|---|
 | feedb-001 | Guard schema-owned backend JSON from generic artifact status mutation | Completed | Record the KHS/PM feedback-driven fix that prevents `artifact set-status <run_id> selected-cli.json --status complete` from overwriting schema-owned backend evidence status values such as `supported` or `degraded`. | Completed before this intake rule was formalized; the guard preserves backend gate evidence checks by requiring schema-owned backend JSON artifacts to be written with valid JSON evidence instead of generic lifecycle status mutation. No separate TODO file is needed for this small historical item. |
 
+### EPIC: graph — Command-managed workflow graph
+
+> Goal: add a deterministic KAH graph surface for project-level `.kkachi-workflow.yaml` state while preserving KHS policy ownership and run-local `phase-plan.yaml` evidence.
+>
+> Status note: candidate/planned only until `docs/sot/workflow-graph.md` is confirmed, Hwangchung authorizes implementation, and KAH capabilities/help prove each command surface. Implementation proceeds one PR-candidate task at a time after required review gates.
+
+| Task ID | Title | Status | Work guide | Notes |
+|---|---|---|---|---|
+| graph-001 | Docs/SOT and schema v1 outline for `.kkachi-workflow.yaml` | Planned | Confirm `docs/sot/workflow-graph.md`, authority tables, source precedence, command classification, JSON/human output expectations, and schema outline. | This docs update creates candidate records only; Blue confirmation required before implementation. |
+| graph-002 | Read-only graph validation and explanation commands | Planned | Implement capability-advertised `graph validate` and `graph explain` with fail-closed schema/source checks and compact human/JSON output. | No graph mutation; prove command/help/capability evidence. |
+| graph-003 | Semantic diff and proposal record format | Planned | Implement semantic graph diff plus proposal record storage that preserves changed phases, edges, gates, approvals, risk flags, and next action. | Proposal records do not apply graph changes. |
+| graph-004 | `init --from-template` template ingestion and initial graph write | Planned | Accept explicit KHS template id/path, validate input, write initial `.kkachi-workflow.yaml` only when no graph exists or through approved replacement. | Use `init --from-template`, not `init --profile`. |
+| graph-005 | Approval-gated apply with audit events and fail-closed source precedence | Planned | Apply approved proposals atomically, record checksum/version and graph audit event ids, and fail closed on invalid/missing/conflicting sources. | KAH still does not decide policy. |
+| graph-006 | Visualization export to Mermaid/PlantUML as generated artifacts only | Planned | Export non-authoritative diagrams with source checksum and `authoritative: false` in JSON output. | Exports never become graph source of truth. |
+| graph-007 | KHS compatibility diagnostics/capabilities for graph support and no direct YAML fallback | Planned | Advertise graph support through capabilities, publish compatibility diagnostics, and make KHS fail closed when graph support is required but absent. | No silent direct YAML edit fallback. |
+
 ## Backlog and review points
 
 - Revisit implementation language and package manager before `corex-001` starts.
@@ -116,3 +132,18 @@ Status values: `Planned`, `In Progress`, `Blocked`, `Completed`, `Deferred`.
 - Keep helper validation deterministic. Backend choice, planning, and review reasoning remain commander/general responsibilities.
 - Do not promote helper behavior into shared Kkachi skills until the behavior is implemented, tested, and reflected in the install/package contracts.
 - Review this roadmap after each epic; split only tasks that prove too large for one reviewable PR.
+
+## Candidate graph record appendix
+
+Date: 2026-05-21
+Owner: KAH roadmap archive
+Confirming role: Hwangchung / KHC Blue commander
+Status: candidate roadmap addition pending Blue confirmation
+Authority level: active roadmap planning record; not implementation authorization by itself
+Scope: KAH docs roadmap only
+Related docs: `README.md`, `sot/workflow-graph.md`, `specs.md`, `compatibility.md`
+Decision summary: add `graph — Command-managed workflow graph` as PR-candidate roadmap epic and mark the deleted `docs/TODO-ALIGN.md` pointer stale.
+Evidence/source paths: `/Users/draccoon/.hermes/kanban/workspaces/t_81f61495/hwangchung-final-kah-khs-graph-docs-plan.md`, kanban task `t_2fb00394`
+Stale/conflict markers: `docs/TODO-ALIGN.md` is deleted in the current working tree and is not active authority; graph commands are candidate until capabilities/help prove them.
+Open questions: task details must be refined one PR at a time after SOT/spec confirmation and required reviews.
+Next record action: Hwangchung review of roadmap order and graph task boundaries.
