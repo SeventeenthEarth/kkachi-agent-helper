@@ -33,6 +33,7 @@ var commandGroups = map[string]struct{}{
 	"diagnostics": {},
 	"phase-plan":  {},
 	"approval":    {},
+	"graph":       {},
 }
 
 const (
@@ -82,6 +83,7 @@ type compatibilityFlagsOutput struct {
 	DiagnosticsExport           bool `json:"diagnostics_export"`
 	PhasePlan                   bool `json:"phase_plan"`
 	ApprovalRecords             bool `json:"approval_records"`
+	WorkflowGraphReadonly       bool `json:"workflow_graph_readonly"`
 	InstallCommand              bool `json:"install_command"`
 }
 
@@ -424,6 +426,9 @@ func runWithOptions(args []string, stdout io.Writer, stderr io.Writer, info Buil
 			if command == "approval" {
 				return runApprovalCommand(opts.args[1:], root, stdout, stderr, opts.json)
 			}
+			if command == "graph" {
+				return runGraphCommand(opts.args[1:], root, stdout, stderr, opts.json)
+			}
 			writeError(stderr, opts.json, cliError{
 				Code:     "not_implemented",
 				Message:  fmt.Sprintf("command group %q is not implemented yet", command),
@@ -614,6 +619,70 @@ func runPhasePlanCommand(args []string, root project.Root, stdout io.Writer, std
 		writeError(stderr, jsonMode, cliError{Code: "phase_plan_subcommand_unknown", Message: "phase-plan subcommand is not supported", Hint: phasePlanUsageHint(), ExitCode: ExitUsage, Field: "subcommand", Expected: "init, show, set, or validate", Actual: args[0]})
 		return ExitUsage
 	}
+}
+
+func runGraphCommand(args []string, root project.Root, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
+	if len(args) == 0 {
+		writeError(stderr, jsonMode, cliError{Code: "graph_subcommand_required", Message: "graph subcommand is required", Hint: graphUsageHint(), ExitCode: ExitUsage})
+		return ExitUsage
+	}
+	switch args[0] {
+	case "validate":
+		options, cliErr := parseGraphArgs(args, "validate")
+		if cliErr != nil {
+			writeError(stderr, jsonMode, *cliErr)
+			return cliErr.ExitCode
+		}
+		result := project.ValidateWorkflowGraph(root, options)
+		writeGraphValidateResult(stdout, result, jsonMode)
+		if result.Status == project.GraphStatusPass {
+			return ExitOK
+		}
+		return ExitSafety
+	case "explain":
+		options, cliErr := parseGraphArgs(args, "explain")
+		if cliErr != nil {
+			writeError(stderr, jsonMode, *cliErr)
+			return cliErr.ExitCode
+		}
+		result := project.ExplainWorkflowGraph(root, options)
+		writeGraphExplainResult(stdout, result, jsonMode)
+		if result.Status == project.GraphStatusPass {
+			return ExitOK
+		}
+		return ExitSafety
+	default:
+		writeError(stderr, jsonMode, cliError{Code: "graph_subcommand_unknown", Message: "graph subcommand is not supported", Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "subcommand", Expected: "validate or explain", Actual: args[0]})
+		return ExitUsage
+	}
+}
+
+func parseGraphArgs(args []string, subcommand string) (project.GraphOptions, *cliError) {
+	options := project.GraphOptions{}
+	if len(args) == 0 || args[0] != subcommand {
+		return options, &cliError{Code: "graph_subcommand_required", Message: "graph subcommand is required", Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "subcommand", Expected: subcommand, Actual: "missing"}
+	}
+	seenFile := false
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--file":
+			if i+1 >= len(args) {
+				return options, &cliError{Code: "missing_option_value", Message: "--file requires a value", Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "--file", Expected: "repository-relative workflow graph path", Actual: "missing"}
+			}
+			if strings.TrimSpace(args[i+1]) == "" {
+				return options, &cliError{Code: "missing_option_value", Message: "--file requires a non-empty value", Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "--file", Expected: "repository-relative workflow graph path", Actual: "empty"}
+			}
+			if seenFile {
+				return options, &cliError{Code: "duplicate_option", Message: "duplicate graph option \"--file\"", Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: "--file"}
+			}
+			seenFile = true
+			options.File = args[i+1]
+			i++
+		default:
+			return options, &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown graph %s option %q", subcommand, args[i]), Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "--file", Actual: args[i]}
+		}
+	}
+	return options, nil
 }
 
 func runApprovalCommand(args []string, root project.Root, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
@@ -1758,6 +1827,10 @@ func phasePlanUsageHint() string {
 	return "Use phase-plan init <run_id>, phase-plan show <run_id>, phase-plan set <run_id> <phase-id> --status <pending|in_progress|complete|skipped|not_applicable|blocked> [--evidence <path>] [--reason <text>] [--approval-required true|false], or phase-plan validate <run_id> [--final] with optional global --json."
 }
 
+func graphUsageHint() string {
+	return "Use graph validate [--file .kkachi-workflow.yaml] or graph explain [--file .kkachi-workflow.yaml] with optional global --json."
+}
+
 func approvalUsageHint() string {
 	return "Use approval request <run_id> --phase <phase-id> --reason <reason> [--evidence <ref>], approval record <run_id> --phase <phase-id> --decision <approved|rejected> --by <approver> --evidence <ref> [--reason <reason>], or approval show <run_id> [--phase <phase-id>] with optional global --json."
 }
@@ -1908,6 +1981,7 @@ func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
 			{Name: "diagnostics", Status: capabilityStatusSupported, Subcommands: []string{"export"}},
 			{Name: "phase-plan", Status: capabilityStatusSupported, Subcommands: []string{"init", "show", "set", "validate"}},
 			{Name: "approval", Status: capabilityStatusSupported, Subcommands: []string{"request", "record", "show"}},
+			{Name: "graph", Status: capabilityStatusSupported, Subcommands: []string{"validate", "explain"}},
 		},
 		CompatibilityFlags: compatibilityFlagsOutput{
 			ProjectInit:                 true,
@@ -1923,6 +1997,7 @@ func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
 			DiagnosticsExport:           true,
 			PhasePlan:                   true,
 			ApprovalRecords:             true,
+			WorkflowGraphReadonly:       true,
 			InstallCommand:              false,
 		},
 		DeprecatedSurfaces: []capabilitySurfaceOutput{},
@@ -1938,7 +2013,7 @@ var helpPages = map[string]helpOutput{
 		Status:       capabilityStatusSupported,
 		Usage:        "kkachi-agent-helper [--json] <command> [subcommand] [options]",
 		Summary:      "Deterministic local helper for Kkachi project state, run artifacts, gates, events, schemas, locks, diagnostics, and compatibility discovery.",
-		Subcommands:  []helpItem{{Name: "version", Description: "Print helper build version."}, {Name: "capabilities", Description: "Print the command-surface compatibility report."}, {Name: "project", Description: "Initialize and inspect helper project state."}, {Name: "run", Description: "Create, list, show, activate, close, or abort helper runs."}, {Name: "artifact", Description: "Initialize, list, and validate canonical run artifacts."}, {Name: "gate", Description: "Run deterministic gate checks."}, {Name: "event", Description: "Append attributed helper events."}, {Name: "schema", Description: "Validate, export, or migrate helper schemas/state."}, {Name: "lock", Description: "Recover stale helper write locks explicitly."}, {Name: "diagnostics", Description: "Export redacted diagnostics bundles."}, {Name: "phase-plan", Description: "Manage KHS-declared phase-plan state."}, {Name: "approval", Description: "Record and show KHS-declared approval requests/decisions."}, {Name: "help", Description: "Show help for the top level or a command topic."}},
+		Subcommands:  []helpItem{{Name: "version", Description: "Print helper build version."}, {Name: "capabilities", Description: "Print the command-surface compatibility report."}, {Name: "project", Description: "Initialize and inspect helper project state."}, {Name: "run", Description: "Create, list, show, activate, close, or abort helper runs."}, {Name: "artifact", Description: "Initialize, list, and validate canonical run artifacts."}, {Name: "gate", Description: "Run deterministic gate checks."}, {Name: "event", Description: "Append attributed helper events."}, {Name: "schema", Description: "Validate, export, or migrate helper schemas/state."}, {Name: "lock", Description: "Recover stale helper write locks explicitly."}, {Name: "diagnostics", Description: "Export redacted diagnostics bundles."}, {Name: "phase-plan", Description: "Manage KHS-declared phase-plan state."}, {Name: "approval", Description: "Record and show KHS-declared approval requests/decisions."}, {Name: "graph", Description: "Validate and explain project workflow graph state."}, {Name: "help", Description: "Show help for the top level or a command topic."}},
 		Options:      []helpItem{{Name: "--json", Description: "Emit machine-readable JSON for commands that support JSON output."}, {Name: "--help", Description: "Show help and exit 0 without requiring helper project state."}, {Name: "--version", Description: "Print helper build version."}},
 		JSONBehavior: "Use --json with help for structured help. Use capabilities --json for stable machine compatibility checks; command help is supplemental documentation.",
 	},
@@ -2063,6 +2138,16 @@ var helpPages = map[string]helpOutput{
 		Options:      []helpItem{{Name: "--phase <phase-id>", Required: true, Description: "KHS-declared phase id."}, {Name: "--reason <text>", Description: "Reason for the approval request or decision."}, {Name: "--decision <approved|rejected>", Description: "Approval decision for approval record."}, {Name: "--by <approver>", Description: "Approving principal for approval record."}, {Name: "--evidence <ref>", Description: "Artifact path or message reference; required for approval record."}, {Name: "--json", Description: "Emit structured approval output."}, {Name: "--help", Description: "Show approval help and exit 0."}},
 		JSONBehavior: "Approval commands support global --json for structured output and structured errors. KAH records declarations only and does not decide whether approval is required.",
 		Notes:        []string{"Use phase-plan set --approval-required true plus phase-plan validate --final to make final validation require an approved decision for a phase."},
+	},
+	"graph": {
+		Command:      "kkachi-agent-helper graph",
+		Status:       capabilityStatusSupported,
+		Usage:        "kkachi-agent-helper graph validate [--file .kkachi-workflow.yaml] [--json]\n  kkachi-agent-helper graph explain [--file .kkachi-workflow.yaml] [--json]",
+		Summary:      "Read-only validation and explanation for project-level .kkachi-workflow.yaml graph state.",
+		Subcommands:  []helpItem{{Name: "validate", Description: "Validate workflow graph schema, source authority, and graph references."}, {Name: "explain", Description: "Show the effective graph phases, edges, gates, approvals, and validation summary."}},
+		Options:      []helpItem{{Name: "--file <repo-relative-path>", Description: "Workflow graph file to inspect; defaults to .kkachi-workflow.yaml."}, {Name: "--json", Description: "Emit structured graph output."}, {Name: "--help", Description: "Show graph help and exit 0."}},
+		JSONBehavior: "Graph validate/explain support global --json for structured output. Failing graph validation exits 3 while emitting the graph result on stdout.",
+		Notes:        []string{"This surface is read-only: it does not initialize, write, propose, apply, export, lock, or append events.", "KAH validates declared graph state only; KHS remains responsible for workflow policy and templates."},
 	},
 }
 
@@ -2369,6 +2454,89 @@ func writePhasePlanValidationResult(w io.Writer, result project.PhasePlanValidat
 	}
 }
 
+func writeGraphValidateResult(w io.Writer, result project.GraphValidationResult, jsonMode bool) {
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(result)
+		return
+	}
+	fmt.Fprintf(w, "graph validation: %s\n", result.Status)
+	fmt.Fprintf(w, "file: %s\n", result.File)
+	if result.Checksum != "" {
+		fmt.Fprintf(w, "checksum: %s\n", result.Checksum)
+	}
+	if result.EffectiveSource != "" {
+		fmt.Fprintf(w, "effective_source: %s\n", result.EffectiveSource)
+	}
+	fmt.Fprintf(w, "errors: %d\n", len(result.Errors))
+	for _, issue := range result.Errors {
+		fmt.Fprintf(w, "- %s", issue.Name)
+		if issue.Field != "" {
+			fmt.Fprintf(w, " field=%s", issue.Field)
+		}
+		if issue.Actual != "" {
+			fmt.Fprintf(w, " actual=%s", issue.Actual)
+		}
+		if issue.Line != 0 {
+			fmt.Fprintf(w, " line=%d", issue.Line)
+		}
+		fmt.Fprintf(w, ": %s\n", issue.Message)
+	}
+	fmt.Fprintf(w, "next_action: %s\n", result.NextAction)
+}
+
+func writeGraphExplainResult(w io.Writer, result project.GraphExplanationResult, jsonMode bool) {
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(result)
+		return
+	}
+	fmt.Fprintf(w, "graph explanation: %s\n", result.Status)
+	if result.GraphVersion != "" {
+		fmt.Fprintf(w, "graph_version: %s\n", result.GraphVersion)
+	}
+	if result.EffectiveSource != "" {
+		fmt.Fprintf(w, "effective_source: %s\n", result.EffectiveSource)
+	}
+	fmt.Fprintf(w, "phases: %d\n", len(result.Phases))
+	for _, phase := range result.Phases {
+		fmt.Fprintf(w, "- phase %s", phase.ID)
+		if phase.Title != "" {
+			fmt.Fprintf(w, " title=%s", phase.Title)
+		}
+		if phase.OwnerLayer != "" {
+			fmt.Fprintf(w, " owner_layer=%s", phase.OwnerLayer)
+		}
+		fmt.Fprintf(w, " required=%t\n", phase.Required)
+	}
+	fmt.Fprintf(w, "edges: %d\n", len(result.Edges))
+	for _, edge := range result.Edges {
+		fmt.Fprintf(w, "- edge %s -> %s\n", edge.From, edge.To)
+	}
+	fmt.Fprintf(w, "gates: %d\n", len(result.Gates))
+	for _, gate := range result.Gates {
+		fmt.Fprintf(w, "- gate %s requires=%s\n", gate.ID, strings.Join(gate.Requires, ","))
+	}
+	fmt.Fprintf(w, "approval_requirements: %d\n", len(result.ApprovalRequirements))
+	for _, approval := range result.ApprovalRequirements {
+		fmt.Fprintf(w, "- approval %s role=%s\n", approval.Scope, approval.RequiredRole)
+	}
+	fmt.Fprintf(w, "pending_proposals: %d\n", len(result.PendingProposals))
+	fmt.Fprintf(w, "errors: %d\n", len(result.ValidationSummary.Errors))
+	for _, issue := range result.ValidationSummary.Errors {
+		fmt.Fprintf(w, "- %s", issue.Name)
+		if issue.Field != "" {
+			fmt.Fprintf(w, " field=%s", issue.Field)
+		}
+		if issue.Actual != "" {
+			fmt.Fprintf(w, " actual=%s", issue.Actual)
+		}
+		if issue.Line != 0 {
+			fmt.Fprintf(w, " line=%d", issue.Line)
+		}
+		fmt.Fprintf(w, ": %s\n", issue.Message)
+	}
+	fmt.Fprintf(w, "next_action: %s\n", result.NextAction)
+}
+
 func writeLockRecoverResult(w io.Writer, result project.LockRecoveryResult, jsonMode bool) {
 	payload := lockRecoverOutput{Recovered: result.Recovered}
 	if jsonMode {
@@ -2654,7 +2822,7 @@ func writeHumanError(w io.Writer, err cliError) {
 }
 
 func usageHint() string {
-	return "Usage: kkachi-agent-helper [--json] <version|capabilities|project|run|artifact|gate|event|schema|lock|diagnostics>"
+	return "Usage: kkachi-agent-helper [--json] <version|capabilities|project|run|artifact|gate|event|schema|lock|diagnostics|phase-plan|approval|graph>"
 }
 
 func redactCLIError(err cliError) cliError {

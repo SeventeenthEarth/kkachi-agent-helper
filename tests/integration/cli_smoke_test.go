@@ -37,6 +37,7 @@ func TestCapabilitiesJSONAtBinaryBoundary(t *testing.T) {
 			PhasePlan                   bool `json:"phase_plan"`
 			ArtifactMutation            bool `json:"artifact_mutation"`
 			ApprovalRecords             bool `json:"approval_records"`
+			WorkflowGraphReadonly       bool `json:"workflow_graph_readonly"`
 			InstallCommand              bool `json:"install_command"`
 		} `json:"compatibility_flags"`
 		OmittedSurfaces []struct {
@@ -50,7 +51,7 @@ func TestCapabilitiesJSONAtBinaryBoundary(t *testing.T) {
 	if payload.Helper.Version != "0.1.0" || payload.ProjectSchemaVersion != "0.1" {
 		t.Fatalf("payload versions = %#v, want helper 0.1.0 and schema 0.1", payload)
 	}
-	if !payload.CompatibilityFlags.BackendEvidenceRequirements || !payload.CompatibilityFlags.PhasePlan || !payload.CompatibilityFlags.ArtifactMutation || !payload.CompatibilityFlags.ApprovalRecords || payload.CompatibilityFlags.InstallCommand {
+	if !payload.CompatibilityFlags.BackendEvidenceRequirements || !payload.CompatibilityFlags.PhasePlan || !payload.CompatibilityFlags.ArtifactMutation || !payload.CompatibilityFlags.ApprovalRecords || !payload.CompatibilityFlags.WorkflowGraphReadonly || payload.CompatibilityFlags.InstallCommand {
 		t.Fatalf("compatibility flags = %#v, want current align support matrix", payload.CompatibilityFlags)
 	}
 	foundInstall := false
@@ -77,6 +78,11 @@ func TestHelpAtBinaryBoundaryDoesNotRequireProjectState(t *testing.T) {
 	assertOutputContains(t, output, "--title <title> (required)", "run create help")
 	assertOutputContains(t, output, "--backend-evidence <auto|required|not_applicable>", "run create help")
 
+	output = runHelper(t, binary, t.TempDir(), "graph", "--help")
+	assertOutputContains(t, output, "kkachi-agent-helper graph", "graph help")
+	assertOutputContains(t, output, "graph validate [--file .kkachi-workflow.yaml]", "graph help")
+	assertOutputContains(t, output, "--file <repo-relative-path>", "graph help")
+
 	output = runHelper(t, binary, t.TempDir(), "--json", "phase-plan", "--help")
 	var payload struct {
 		Command      string `json:"command"`
@@ -89,6 +95,69 @@ func TestHelpAtBinaryBoundaryDoesNotRequireProjectState(t *testing.T) {
 	if payload.Command != "kkachi-agent-helper phase-plan" || payload.Status != "supported" || !strings.Contains(payload.JSONBehavior, "Failing validation exits 3") {
 		t.Fatalf("payload = %#v, want supported phase-plan help", payload)
 	}
+}
+
+func TestGraphReadonlyBinaryFlow(t *testing.T) {
+	binary := buildHelperBinary(t)
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	writeIntegrationTarget(t, repo, ".kkachi-workflow.yaml", integrationValidWorkflowGraph())
+
+	validateOutput := runHelper(t, binary, repo, "graph", "validate", "--json")
+	var validation struct {
+		Status          string `json:"status"`
+		File            string `json:"file"`
+		Checksum        string `json:"checksum"`
+		EffectiveSource string `json:"effective_source"`
+	}
+	if err := json.Unmarshal(validateOutput, &validation); err != nil {
+		t.Fatalf("graph validate output is not JSON: %v\n%s", err, string(validateOutput))
+	}
+	if validation.Status != "pass" || validation.File != ".kkachi-workflow.yaml" || validation.Checksum == "" || validation.EffectiveSource != "project_file" {
+		t.Fatalf("validation = %#v, want passing graph validation", validation)
+	}
+
+	explainOutput := runHelper(t, binary, repo, "graph", "explain", "--json")
+	var explained struct {
+		Status string `json:"status"`
+		Phases []struct {
+			ID string `json:"id"`
+		} `json:"phases"`
+		Edges []struct {
+			From string `json:"from"`
+			To   string `json:"to"`
+		} `json:"edges"`
+	}
+	if err := json.Unmarshal(explainOutput, &explained); err != nil {
+		t.Fatalf("graph explain output is not JSON: %v\n%s", err, string(explainOutput))
+	}
+	if explained.Status != "pass" || len(explained.Phases) != 2 || explained.Phases[0].ID != "plan" || len(explained.Edges) != 1 || explained.Edges[0].To != "implement" {
+		t.Fatalf("explained = %#v, want graph projection", explained)
+	}
+
+	alternate := "docs/graphs/candidate-workflow.yaml"
+	writeIntegrationTarget(t, repo, alternate, integrationValidWorkflowGraph())
+	alternateOutput := runHelper(t, binary, repo, "graph", "validate", "--file", alternate, "--json")
+	var alternateValidation struct {
+		Status string `json:"status"`
+		File   string `json:"file"`
+	}
+	if err := json.Unmarshal(alternateOutput, &alternateValidation); err != nil {
+		t.Fatalf("alternate graph validate output is not JSON: %v\n%s", err, string(alternateOutput))
+	}
+	if alternateValidation.Status != "pass" || alternateValidation.File != alternate {
+		t.Fatalf("alternate validation = %#v, want explicit graph candidate", alternateValidation)
+	}
+
+	writeIntegrationTarget(t, repo, ".kkachi-workflow.yaml", strings.Replace(integrationValidWorkflowGraph(), `to: "implement"`, `to: "missing"`, 1))
+	failedOutput, err := runHelperAllowError(binary, repo, "graph", "validate", "--json")
+	if err == nil {
+		t.Fatalf("graph validate unexpectedly passed: %s", string(failedOutput))
+	}
+	assertOutputContains(t, failedOutput, `"status":"fail"`, "graph validation failure")
+	assertOutputContains(t, failedOutput, `"name":"edge_to"`, "graph validation failure")
 }
 
 func TestArtifactMutationBinaryFlow(t *testing.T) {
@@ -1571,6 +1640,38 @@ func writeIntegrationTarget(t *testing.T, repo string, relative string, content 
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write target %s: %v", relative, err)
 	}
+}
+
+func integrationValidWorkflowGraph() string {
+	return `version: "workflow-graph/v1"
+graph_id: "graph-integration"
+metadata:
+  project: "kkachi-integration"
+  created_by: "human"
+  managed_by: "kah"
+phases:
+  - id: "plan"
+    title: "Plan"
+    owner_layer: "khs"
+    required: true
+    evidence: ["plan.md"]
+  - id: "implement"
+    title: "Implement"
+    owner_layer: "khs"
+    required: true
+    evidence: ["diff.patch"]
+edges:
+  - from: "plan"
+    to: "implement"
+gates:
+  - id: "pre-implementation"
+    requires: ["plan"]
+approvals:
+  - scope: "sot-change"
+    required_role: "responsible-approver"
+proposals:
+  policy: "proposal-first"
+`
 }
 
 func mustHostname(t *testing.T) string {
