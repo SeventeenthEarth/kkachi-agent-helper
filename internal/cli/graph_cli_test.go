@@ -301,6 +301,80 @@ func TestGraphApplyJSONAndHumanOutput(t *testing.T) {
 	}
 }
 
+func TestGraphExportJSONFileAndHumanStdout(t *testing.T) {
+	repo := tempGitRepo(t)
+	writeCLIGraph(t, repo, cliValidWorkflowGraph())
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := runWithOptions([]string{"graph", "export", "--format", "mermaid", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	if exitCode != ExitOK {
+		t.Fatalf("exitCode = %d, want %d stderr=%s stdout=%s", exitCode, ExitOK, stderr.String(), stdout.String())
+	}
+	var exported project.GraphExportResult
+	if err := json.Unmarshal(stdout.Bytes(), &exported); err != nil {
+		t.Fatalf("graph export output is not JSON: %v\n%s", err, stdout.String())
+	}
+	if exported.Status != project.GraphStatusPass || exported.Format != "mermaid" || exported.SourceFile != project.WorkflowGraphDefaultPath || exported.SourceChecksum == "" || exported.Authoritative || exported.OutputPath != "" {
+		t.Fatalf("exported = %#v, want non-authoritative mermaid JSON", exported)
+	}
+	for _, want := range []string{"flowchart TD\n", "p001_plan --> p002_implement", "gate: pre-implementation", "approval: sot-change"} {
+		if !strings.Contains(exported.Diagram, want) {
+			t.Fatalf("diagram = %s, want %s", exported.Diagram, want)
+		}
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	output := "docs/generated/workflow.puml"
+	exitCode = runWithOptions([]string{"graph", "export", "--format", "plantuml", "--output", output, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	if exitCode != ExitOK {
+		t.Fatalf("file export exitCode = %d, want %d stderr=%s stdout=%s", exitCode, ExitOK, stderr.String(), stdout.String())
+	}
+	var fileExport project.GraphExportResult
+	if err := json.Unmarshal(stdout.Bytes(), &fileExport); err != nil {
+		t.Fatalf("graph export file output is not JSON: %v\n%s", err, stdout.String())
+	}
+	if fileExport.OutputPath != output || fileExport.Format != "plantuml" || fileExport.Authoritative {
+		t.Fatalf("fileExport = %#v, want non-authoritative plantuml file export", fileExport)
+	}
+	if got := readCLITestText(t, filepath.Join(repo, filepath.FromSlash(output))); got != fileExport.Diagram {
+		t.Fatalf("written export = %s, want diagram", got)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	exitCode = runWithOptions([]string{"graph", "export", "--format", "mermaid"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	if exitCode != ExitOK {
+		t.Fatalf("human export exitCode = %d, want %d stderr=%s", exitCode, ExitOK, stderr.String())
+	}
+	if !strings.HasPrefix(stdout.String(), "flowchart TD\n") || strings.Contains(stdout.String(), "graph export:") {
+		t.Fatalf("human stdout = %q, want diagram only", stdout.String())
+	}
+}
+
+func TestGraphExportValidationFailureEmitsResultOnStdout(t *testing.T) {
+	repo := tempGitRepo(t)
+	writeCLIGraph(t, repo, strings.Replace(cliValidWorkflowGraph(), `to: "implement"`, `to: "missing"`, 1))
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := runWithOptions([]string{"graph", "export", "--format", "mermaid", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	if exitCode != ExitSafety {
+		t.Fatalf("exitCode = %d, want %d", exitCode, ExitSafety)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	var exported project.GraphExportResult
+	if err := json.Unmarshal(stdout.Bytes(), &exported); err != nil {
+		t.Fatalf("graph export failure output is not JSON: %v\n%s", err, stdout.String())
+	}
+	if exported.Status != project.GraphStatusFail || exported.Diagram != "" || !cliGraphIssueNamed(exported.ValidationSummary.Errors, "edge_to") {
+		t.Fatalf("exported = %#v, want validation failure", exported)
+	}
+}
+
 func TestGraphValidationFailureEmitsResultOnStdout(t *testing.T) {
 	repo := tempGitRepo(t)
 	writeCLIGraph(t, repo, strings.Replace(cliValidWorkflowGraph(), `to: "implement"`, `to: "missing"`, 1))
@@ -394,6 +468,14 @@ func TestGraphRejectsUsageErrorsOnStderr(t *testing.T) {
 		{name: "duplicate apply proposal", args: []string{"graph", "apply", "--proposal", "gprop-000001", "--proposal", "gprop-000002", "--approval", "record", "--json"}, wantCode: "duplicate_option"},
 		{name: "duplicate apply approval", args: []string{"graph", "apply", "--proposal", "gprop-000001", "--approval", "record", "--approval", "record-2", "--json"}, wantCode: "duplicate_option"},
 		{name: "unknown apply option", args: []string{"graph", "apply", "--proposal", "gprop-000001", "--approval", "record", "--patch", "candidate.yaml", "--json"}, wantCode: "unknown_option"},
+		{name: "missing export format", args: []string{"graph", "export", "--json"}, wantCode: "missing_required_option"},
+		{name: "missing export format value", args: []string{"graph", "export", "--format", "--json"}, wantCode: "missing_option_value"},
+		{name: "empty export format", args: []string{"graph", "export", "--format", "", "--json"}, wantCode: "missing_option_value"},
+		{name: "invalid export format", args: []string{"graph", "export", "--format", "dot", "--json"}, wantCode: "graph_export_format_invalid"},
+		{name: "duplicate export format", args: []string{"graph", "export", "--format", "mermaid", "--format", "plantuml", "--json"}, wantCode: "duplicate_option"},
+		{name: "empty export output", args: []string{"graph", "export", "--format", "mermaid", "--output", "", "--json"}, wantCode: "missing_option_value"},
+		{name: "duplicate export output", args: []string{"graph", "export", "--format", "mermaid", "--output", "a.mmd", "--output", "b.mmd", "--json"}, wantCode: "duplicate_option"},
+		{name: "unknown export option", args: []string{"graph", "export", "--format", "mermaid", "--file", ".kkachi-workflow.yaml", "--json"}, wantCode: "unknown_option"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

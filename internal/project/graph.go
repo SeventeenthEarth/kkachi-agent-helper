@@ -30,6 +30,7 @@ const (
 	graphNextActionProposal     = "Record required approval evidence before graph apply; proposal storage does not apply graph changes."
 	graphNextActionInitialized  = "Graph is initialized; run graph validate or graph explain for read-only evidence."
 	graphNextActionApplied      = "Graph proposal applied; run graph validate or graph explain for updated evidence."
+	graphNextActionExported     = "Graph diagram exported as a non-authoritative generated artifact; do not use it as workflow graph source of truth."
 	graphInitEventType          = "graph.initialized"
 	graphProposalEventType      = "graph.proposal_recorded"
 	graphApplyEventType         = "graph.applied"
@@ -37,6 +38,8 @@ const (
 	graphTemplateKHSDefault     = "khs-default"
 	graphTemplateSourceBuiltin  = "built_in"
 	graphTemplateSourcePath     = "path"
+	graphExportFormatMermaid    = "mermaid"
+	graphExportFormatPlantUML   = "plantuml"
 )
 
 var graphProposalIDPattern = regexp.MustCompile(`^gprop-(\d{6})\.json$`)
@@ -66,6 +69,11 @@ type GraphInitOptions struct {
 	FromTemplate string
 	Output       string
 	Now          func() time.Time
+}
+
+type GraphExportOptions struct {
+	Format string
+	Output string
 }
 
 type GraphIssue struct {
@@ -218,6 +226,19 @@ type GraphInitResult struct {
 	NextAction     string `json:"next_action"`
 }
 
+type GraphExportResult struct {
+	SchemaVersion     string                `json:"schema_version"`
+	Status            string                `json:"status"`
+	Format            string                `json:"format"`
+	OutputPath        string                `json:"output_path"`
+	SourceFile        string                `json:"source_file"`
+	SourceChecksum    string                `json:"source_checksum"`
+	Authoritative     bool                  `json:"authoritative"`
+	Diagram           string                `json:"diagram"`
+	ValidationSummary GraphValidationResult `json:"validation_summary"`
+	NextAction        string                `json:"next_action"`
+}
+
 type WorkflowGraphProposalRecord struct {
 	SchemaVersion     string                         `json:"schema_version"`
 	Status            string                         `json:"status"`
@@ -333,6 +354,47 @@ func DiffWorkflowGraph(root Root, options GraphDiffOptions) GraphDiffResult {
 	from := loadWorkflowGraph(root, GraphOptions{File: options.From})
 	to := loadWorkflowGraph(root, GraphOptions{File: options.To})
 	return diffLoadedWorkflowGraphs(from, to)
+}
+
+func ExportWorkflowGraph(root Root, options GraphExportOptions) (GraphExportResult, error) {
+	format := strings.TrimSpace(options.Format)
+	if !supportedGraphExportFormat(format) {
+		return GraphExportResult{}, &Problem{Code: "graph_export_format_invalid", Message: "graph export format is not supported", Hint: "Use graph export --format mermaid or graph export --format plantuml.", Field: "format", Expected: "mermaid or plantuml", Actual: format}
+	}
+	loaded := loadWorkflowGraph(root, GraphOptions{File: WorkflowGraphDefaultPath})
+	result := GraphExportResult{
+		SchemaVersion:     WorkflowGraphSchemaVersion,
+		Status:            loaded.validation.Status,
+		Format:            format,
+		SourceFile:        loaded.validation.File,
+		SourceChecksum:    loaded.validation.Checksum,
+		Authoritative:     false,
+		ValidationSummary: loaded.validation,
+		NextAction:        loaded.validation.NextAction,
+	}
+	if loaded.validation.Status != GraphStatusPass {
+		return result, nil
+	}
+	switch format {
+	case graphExportFormatMermaid:
+		result.Diagram = renderWorkflowGraphMermaid(loaded.graph)
+	case graphExportFormatPlantUML:
+		result.Diagram = renderWorkflowGraphPlantUML(loaded.graph)
+	}
+	result.NextAction = graphNextActionExported
+	output := strings.TrimSpace(options.Output)
+	if output == "" {
+		return result, nil
+	}
+	outputPath, err := resolveGraphExportOutput(root, output, format)
+	if err != nil {
+		return GraphExportResult{}, err
+	}
+	result.OutputPath = outputPath.Relative
+	if err := writeNewFileAtomically(outputPath, []byte(result.Diagram)); err != nil {
+		return GraphExportResult{}, err
+	}
+	return result, nil
 }
 
 func InitWorkflowGraph(root Root, options GraphInitOptions) (GraphInitResult, error) {
@@ -1111,6 +1173,166 @@ func sortedGraphKeys(values map[string]bool) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func supportedGraphExportFormat(format string) bool {
+	return format == graphExportFormatMermaid || format == graphExportFormatPlantUML
+}
+
+func resolveGraphExportOutput(root Root, output string, format string) (SafePath, error) {
+	path, err := ResolveRelativePath(root, output)
+	if err != nil {
+		return SafePath{}, err
+	}
+	rel := filepath.ToSlash(path.Relative)
+	path.Relative = rel
+	if rel == WorkflowGraphDefaultPath || strings.HasSuffix(strings.ToLower(rel), ".yaml") || strings.HasSuffix(strings.ToLower(rel), ".yml") {
+		return SafePath{}, &Problem{Code: "graph_export_output_invalid", Message: "graph export output must be a generated diagram artifact", Hint: "Use a Mermaid or PlantUML diagram path; exported diagrams are never workflow graph source of truth.", Path: rel, Field: "output", Expected: "generated diagram path", Actual: rel}
+	}
+	if !graphExportOutputExtensionMatches(rel, format) {
+		return SafePath{}, &Problem{Code: "graph_export_output_invalid", Message: "graph export output extension does not match the requested format", Hint: "Use .mmd or .mermaid for Mermaid and .puml or .plantuml for PlantUML.", Path: rel, Field: "output", Expected: graphExportExpectedExtensions(format), Actual: filepath.Ext(rel)}
+	}
+	info, err := os.Lstat(path.Absolute)
+	if os.IsNotExist(err) {
+		return path, nil
+	}
+	if err != nil {
+		return SafePath{}, &Problem{Code: "graph_export_output_inspection_failed", Message: "cannot inspect graph export output path", Hint: "Check repository permissions before exporting graph diagrams.", Path: rel, Field: "output", Expected: "inspectable output path", Actual: err.Error()}
+	}
+	if info.IsDir() {
+		return SafePath{}, &Problem{Code: "graph_export_output_invalid", Message: "graph export output path must be a file", Hint: "Choose a generated diagram file path, not a directory.", Path: rel, Field: "output", Expected: "file path", Actual: "directory"}
+	}
+	return SafePath{}, &Problem{Code: "graph_export_output_exists", Message: "graph export output path already exists", Hint: "Choose a new generated diagram path or remove the existing artifact before exporting.", Path: rel, Field: "output", Expected: "absent output path", Actual: "exists"}
+}
+
+func graphExportOutputExtensionMatches(path string, format string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch format {
+	case graphExportFormatMermaid:
+		return ext == ".mmd" || ext == ".mermaid"
+	case graphExportFormatPlantUML:
+		return ext == ".puml" || ext == ".plantuml"
+	default:
+		return false
+	}
+}
+
+func graphExportExpectedExtensions(format string) string {
+	if format == graphExportFormatMermaid {
+		return ".mmd or .mermaid"
+	}
+	return ".puml or .plantuml"
+}
+
+func renderWorkflowGraphMermaid(graph WorkflowGraph) string {
+	var b strings.Builder
+	b.WriteString("flowchart TD\n")
+	phaseIDs := make(map[string]string, len(graph.Phases))
+	for i, phase := range graph.Phases {
+		nodeID := diagramNodeID("p", i+1, phase.ID)
+		phaseIDs[phase.ID] = nodeID
+		fmt.Fprintf(&b, "  %s[\"%s\"]\n", nodeID, mermaidLabel(phaseLabel(phase)))
+	}
+	for _, edge := range graph.Edges {
+		from := phaseIDs[edge.From]
+		to := phaseIDs[edge.To]
+		if from != "" && to != "" {
+			fmt.Fprintf(&b, "  %s --> %s\n", from, to)
+		}
+	}
+	for i, gate := range normalizeWorkflowGraphGates(graph.Gates) {
+		nodeID := diagramNodeID("g", i+1, gate.ID)
+		fmt.Fprintf(&b, "  %s[\"%s\"]\n", nodeID, mermaidLabel("gate: "+gate.ID, "requires: "+strings.Join(gate.Requires, ", ")))
+		for _, required := range gate.Requires {
+			if phaseNode := phaseIDs[required]; phaseNode != "" {
+				fmt.Fprintf(&b, "  %s -. requires .-> %s\n", nodeID, phaseNode)
+			}
+		}
+	}
+	for i, approval := range graph.Approvals {
+		nodeID := diagramNodeID("a", i+1, approval.Scope)
+		fmt.Fprintf(&b, "  %s[\"%s\"]\n", nodeID, mermaidLabel("approval: "+approval.Scope, "role: "+approval.RequiredRole))
+		if phaseNode := phaseIDs[approval.Scope]; phaseNode != "" {
+			fmt.Fprintf(&b, "  %s -. approval .-> %s\n", nodeID, phaseNode)
+		}
+	}
+	return b.String()
+}
+
+func renderWorkflowGraphPlantUML(graph WorkflowGraph) string {
+	var b strings.Builder
+	b.WriteString("@startuml\n")
+	phaseIDs := make(map[string]string, len(graph.Phases))
+	for i, phase := range graph.Phases {
+		nodeID := diagramNodeID("p", i+1, phase.ID)
+		phaseIDs[phase.ID] = nodeID
+		fmt.Fprintf(&b, "rectangle \"%s\" as %s\n", plantUMLText(phaseLabel(phase)), nodeID)
+	}
+	for _, edge := range graph.Edges {
+		from := phaseIDs[edge.From]
+		to := phaseIDs[edge.To]
+		if from != "" && to != "" {
+			fmt.Fprintf(&b, "%s --> %s\n", from, to)
+		}
+	}
+	for i, gate := range normalizeWorkflowGraphGates(graph.Gates) {
+		nodeID := diagramNodeID("g", i+1, gate.ID)
+		fmt.Fprintf(&b, "note \"%s\" as %s\n", plantUMLText("gate: "+gate.ID+"\nrequires: "+strings.Join(gate.Requires, ", ")), nodeID)
+		for _, required := range gate.Requires {
+			if phaseNode := phaseIDs[required]; phaseNode != "" {
+				fmt.Fprintf(&b, "%s .. %s\n", nodeID, phaseNode)
+			}
+		}
+	}
+	for i, approval := range graph.Approvals {
+		nodeID := diagramNodeID("a", i+1, approval.Scope)
+		fmt.Fprintf(&b, "note \"%s\" as %s\n", plantUMLText("approval: "+approval.Scope+"\nrole: "+approval.RequiredRole), nodeID)
+		if phaseNode := phaseIDs[approval.Scope]; phaseNode != "" {
+			fmt.Fprintf(&b, "%s .. %s\n", nodeID, phaseNode)
+		}
+	}
+	b.WriteString("@enduml\n")
+	return b.String()
+}
+
+func phaseLabel(phase WorkflowGraphPhase) string {
+	if strings.TrimSpace(phase.Title) == "" {
+		return phase.ID
+	}
+	return phase.Title + " [" + phase.ID + "]"
+}
+
+func diagramNodeID(prefix string, index int, key string) string {
+	return fmt.Sprintf("%s%03d_%s", prefix, index, sanitizeDiagramIdentifier(key))
+}
+
+func sanitizeDiagramIdentifier(value string) string {
+	var b strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	result := strings.Trim(b.String(), "_")
+	if result == "" {
+		return "item"
+	}
+	return result
+}
+
+func mermaidLabel(parts ...string) string {
+	escaped := make([]string, 0, len(parts))
+	for _, part := range parts {
+		escaped = append(escaped, strings.NewReplacer(`\`, `\\`, "&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, `'`, "\r", " ", "\n", " ").Replace(part))
+	}
+	return strings.Join(escaped, "<br/>")
+}
+
+func plantUMLText(value string) string {
+	return strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\r\n", `\n`, "\n", `\n`, "\r", `\n`).Replace(value)
 }
 
 func loadWorkflowGraph(root Root, options GraphOptions) loadedWorkflowGraph {

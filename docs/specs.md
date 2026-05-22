@@ -2,7 +2,7 @@
 
 Date: 2026-04-30
 Owner: KAH maintainers
-Status: source of truth for implemented helper behavior; graph init, validation/explanation, semantic diff, proposal records, and approval-gated apply are implemented; graph export remains planned
+Status: source of truth for implemented helper behavior; graph init, validation/explanation, semantic diff, proposal records, approval-gated apply, and non-authoritative graph export are implemented
 Planning graph update date: 2026-05-22
 Planning graph evidence: governance evidence record in kanban task `t_2fb00394`
 
@@ -131,7 +131,7 @@ Light mode may use the same artifact names with shorter content or explicit not-
 
 ### Project workflow graph note
 
-Status: `graph-005` approval-gated graph apply implemented; graph export evidence pending. `docs/sot/workflow-graph.md` is the narrower SOT for `.kkachi-workflow.yaml` and the graph command surface.
+Status: `graph-006` non-authoritative graph export implemented. `docs/sot/workflow-graph.md` is the narrower SOT for `.kkachi-workflow.yaml` and the graph command surface.
 
 | Path / artifact | Meaning | Owner | Authority |
 |---|---|---|---|
@@ -423,7 +423,7 @@ kkachi-agent-helper run create --help
 
 `align-003` introduces a project-independent capabilities report for KHS activation checks. The command exits `0` on a healthy binary and does not require `.kkachi/` project state. JSON output is the compatibility contract; human output is informational only.
 
-Stable JSON output includes helper build info, `capabilities_schema_version`, embedded `project_schema_version`, supported command groups/subcommands, compatibility booleans, deprecated surfaces, and omitted surfaces. Current compatibility flags report project init/status/doctor, run lifecycle, artifact init/list/validate/mutation, gates, declared backend evidence requirements, diagnostics export, phase-plan support, approval records, read-only workflow graph support, workflow graph init support, and workflow graph apply support as supported; the graph command inventory advertises implemented `init`, `validate`, `explain`, `diff`, `propose`, and `apply` subcommands. The removed `install` command is reported as an omitted surface because Hermes/KHS skill installation belongs to Hermes native tooling. KHS `main` may use KAH `@latest` when this report advertises all required surfaces, while KHS release tags should publish tested/recommended KAH versions for reproducible historical runs.
+Stable JSON output includes helper build info, `capabilities_schema_version`, embedded `project_schema_version`, supported command groups/subcommands, compatibility booleans, deprecated surfaces, and omitted surfaces. Current compatibility flags report project init/status/doctor, run lifecycle, artifact init/list/validate/mutation, gates, declared backend evidence requirements, diagnostics export, phase-plan support, approval records, read-only workflow graph support, workflow graph init support, workflow graph apply support, and workflow graph export support as supported; the graph command inventory advertises implemented `init`, `validate`, `explain`, `diff`, `propose`, `apply`, and `export` subcommands. The removed `install` command is reported as an omitted surface because Hermes/KHS skill installation belongs to Hermes native tooling. KHS `main` may use KAH `@latest` when this report advertises all required surfaces, while KHS release tags should publish tested/recommended KAH versions for reproducible historical runs.
 
 ### Help UX
 
@@ -630,7 +630,7 @@ kkachi-agent-helper phase-plan validate <run_id> [--final] [--json]
 
 ### `graph` surface
 
-Status: `kkachi-agent-helper graph init`, `graph validate`, `graph explain`, `graph diff`, `graph propose`, and `graph apply` are implemented. `graph init` writes the initial `.kkachi-workflow.yaml` only when no graph exists. `graph propose` records proposal evidence only and does not apply graph changes. `graph apply` is the approval-gated replacement path for approved proposal records. Graph export, replacement init, and `kah graph` alias behavior remain planned/candidate.
+Status: `kkachi-agent-helper graph init`, `graph validate`, `graph explain`, `graph diff`, `graph propose`, `graph apply`, and `graph export` are implemented. `graph init` writes the initial `.kkachi-workflow.yaml` only when no graph exists. `graph propose` records proposal evidence only and does not apply graph changes. `graph apply` is the approval-gated replacement path for approved proposal records. `graph export` renders generated visualization artifacts only. Replacement init and `kah graph` alias behavior remain planned/candidate.
 
 Implemented commands:
 
@@ -641,11 +641,6 @@ kkachi-agent-helper graph explain [--file .kkachi-workflow.yaml] [--json]
 kkachi-agent-helper graph diff --from <repo-relative-graph> --to <repo-relative-graph> [--semantic] [--json]
 kkachi-agent-helper graph propose --patch <repo-relative-candidate-graph> --reason <text> [--json]
 kkachi-agent-helper graph apply --proposal <proposal-id> --approval <evidence-ref> [--json]
-```
-
-Planned generated-artifact command:
-
-```text
 kkachi-agent-helper graph export --format mermaid|plantuml [--output <path>] [--json]
 ```
 
@@ -662,6 +657,8 @@ The accepted graph YAML subset is intentionally narrower than full YAML: top-lev
 `graph propose` requires initialized helper state, project event coherence, `--patch <repo-relative-candidate-graph>`, and `--reason <text>`. The patch file is a complete candidate workflow graph, not a partial patch DSL. KAH validates the current `.kkachi-workflow.yaml` and the candidate, computes the semantic diff, writes `.kkachi/graph/proposals/gprop-000001.json` style proposal records atomically under the project write lock, and appends `graph.proposal_recorded`. Proposal records include proposal id/path, timestamp, reason, base/candidate file and checksum, validation summary, embedded semantic diff, approval requirement, and next action. Successful CLI output also includes the appended event id. They never apply changes to `.kkachi-workflow.yaml`.
 
 `graph apply` requires initialized helper state, project event coherence, `--proposal <proposal-id>`, and `--approval <evidence-ref>`. The approval value is recorded as an evidence reference; KAH does not decide approval policy or validate external approver semantics. Apply loads `.kkachi/graph/proposals/<proposal-id>.json`, verifies schema/status/id/path consistency, validates the current `.kkachi-workflow.yaml` and the candidate graph, requires the current base checksum and candidate checksum to match the proposal record, stamps the candidate `metadata.last_applied_event_id` with the pending apply event id, renders canonical graph YAML, validates the rendered graph, writes `.kkachi-workflow.yaml` atomically, and appends `graph.applied`. JSON output includes `schema_version`, `status`, `proposal_id`, `approval_ref`, `graph_path`, `new_checksum`, `event_ids`, and `next_action`. Apply fails closed without writing graph state or appending events when proposal evidence is missing/invalid, graph sources are invalid, or checksums conflict.
+
+`graph export` validates `.kkachi-workflow.yaml` with the same fail-closed graph validation path, then renders either Mermaid (`flowchart TD`) or PlantUML (`@startuml`/`@enduml`) as generated visualization only. `--format mermaid|plantuml` is required. When `--output` is omitted, human output is the diagram body on stdout; JSON output includes metadata plus the `diagram` string. When `--output` is provided, KAH writes a new repository-relative generated diagram file with a matching extension (`.mmd`/`.mermaid` for Mermaid, `.puml`/`.plantuml` for PlantUML) and rejects unsafe paths, graph source paths, existing files, directories, and mismatched extensions. JSON output includes `schema_version`, `status`, `format`, `output_path`, `source_file`, `source_checksum`, `authoritative: false`, `diagram`, `validation_summary`, and `next_action`. Export does not write graph state, create proposals, append events, decide policy, or make diagrams graph authority.
 
 KAH policy-mutation command category is empty. Do not document policy-setting surfaces as normal commands; this excludes workflow subcommands under the `kah` prefix, profile-driven graph initialization, gate-setting commands, review-policy setters, and graph policy setters.
 
@@ -884,12 +881,12 @@ The following items remain open until roadmap tasks close them:
 Date: 2026-05-21
 Owner: KAH deterministic helper boundary
 Confirming role: Responsible approver / governance evidence record
-Status: graph init, validation/explanation, semantic diff, proposal records, and approval-gated apply implemented; export planning retained
-Authority level: `docs/specs.md` remains authoritative for implemented helper behavior; graph export content is planning authority until implemented
+Status: graph init, validation/explanation, semantic diff, proposal records, approval-gated apply, and non-authoritative export implemented
+Authority level: `docs/specs.md` remains authoritative for implemented helper behavior and generated visualization export boundaries
 Scope: KAH helper docs only
 Related docs: `README.md`, `sot/workflow-graph.md`, `roadmap.md`, `compatibility.md`, KHS `docs/sot/workflow-graph-integration.md`
 Decision summary: add `.kkachi-workflow.yaml` as candidate project-level graph state while preserving `.kkachi/config.yaml` as helper config and `phase-plan.yaml` as run-local execution evidence.
 Evidence/source paths: governance evidence record in kanban task `t_2fb00394`
 Stale/conflict markers: older wording that treats `phase-plan.yaml` as the whole workflow SOT is narrowed to run-local state; prior root-level kkachi config YAML/JSON graph phrasing is superseded by `.kkachi-workflow.yaml` if encountered.
-Open questions: graph export behavior and command alias remain implementation tasks.
-Next record action: implement graph export without widening apply into generated-artifact authority or alias behavior.
+Open questions: command alias and graph compatibility diagnostics remain implementation tasks.
+Next record action: implement graph compatibility diagnostics without widening export into generated-artifact authority or alias behavior.

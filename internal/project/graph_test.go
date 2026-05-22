@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -768,6 +769,110 @@ func TestApplyWorkflowGraphFailsClosedWithoutMutation(t *testing.T) {
 			}
 			if afterEvents := runEventLines(t, repo); len(afterEvents) != len(beforeEvents) {
 				t.Fatalf("events changed after rejected apply: before=%d after=%d", len(beforeEvents), len(afterEvents))
+			}
+		})
+	}
+}
+
+func TestExportWorkflowGraphRendersMermaidAndPlantUML(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	writeWorkflowGraph(t, repo, strings.Replace(validWorkflowGraph(), `title: "Plan"`, `title: "Plan <draft> & \"Review\""`, 1))
+
+	mermaid, err := ExportWorkflowGraph(root, GraphExportOptions{Format: "mermaid"})
+	if err != nil {
+		t.Fatalf("ExportWorkflowGraph(mermaid) error = %v", err)
+	}
+	if mermaid.Status != GraphStatusPass || mermaid.Format != "mermaid" || mermaid.SourceFile != WorkflowGraphDefaultPath || mermaid.SourceChecksum == "" || mermaid.Authoritative || mermaid.OutputPath != "" {
+		t.Fatalf("mermaid result = %#v, want non-authoritative stdout export metadata", mermaid)
+	}
+	for _, want := range []string{"flowchart TD\n", `p001_plan["Plan &lt;draft&gt; &amp; 'Review' [plan]"]`, "p001_plan --> p002_implement", `g001_pre_implementation["gate: pre-implementation<br/>requires: plan, implement"]`, `a001_sot_change["approval: sot-change<br/>role: responsible-approver"]`} {
+		if !strings.Contains(mermaid.Diagram, want) {
+			t.Fatalf("mermaid diagram = %s, want %s", mermaid.Diagram, want)
+		}
+	}
+
+	output := "docs/generated/workflow.puml"
+	plantuml, err := ExportWorkflowGraph(root, GraphExportOptions{Format: "plantuml", Output: output})
+	if err != nil {
+		t.Fatalf("ExportWorkflowGraph(plantuml) error = %v", err)
+	}
+	if plantuml.Status != GraphStatusPass || plantuml.Format != "plantuml" || plantuml.OutputPath != output || plantuml.SourceChecksum != mermaid.SourceChecksum || plantuml.Authoritative {
+		t.Fatalf("plantuml result = %#v, want non-authoritative file export metadata", plantuml)
+	}
+	for _, want := range []string{"@startuml\n", `rectangle "Plan <draft> & \"Review\" [plan]" as p001_plan`, "p001_plan --> p002_implement", `note "gate: pre-implementation\nrequires: plan, implement" as g001_pre_implementation`, "@enduml\n"} {
+		if !strings.Contains(plantuml.Diagram, want) {
+			t.Fatalf("plantuml diagram = %s, want %s", plantuml.Diagram, want)
+		}
+	}
+	if got := readGraphTestText(t, filepath.Join(repo, filepath.FromSlash(output))); got != plantuml.Diagram {
+		t.Fatalf("written export = %s, want diagram", got)
+	}
+}
+
+func TestExportWorkflowGraphFailsClosedWithoutWritingInvalidGraph(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	writeWorkflowGraph(t, repo, strings.Replace(validWorkflowGraph(), `to: "implement"`, `to: "missing"`, 1))
+
+	output := "docs/generated/workflow.mmd"
+	result, err := ExportWorkflowGraph(root, GraphExportOptions{Format: "mermaid", Output: output})
+	if err != nil {
+		t.Fatalf("ExportWorkflowGraph() error = %v", err)
+	}
+	if result.Status != GraphStatusFail || result.Diagram != "" || !graphIssueNamed(result.ValidationSummary.Errors, "edge_to") {
+		t.Fatalf("result = %#v, want validation failure without diagram", result)
+	}
+	if _, err := os.Stat(filepath.Join(repo, filepath.FromSlash(output))); !os.IsNotExist(err) {
+		t.Fatalf("export output stat err = %v, want missing output", err)
+	}
+}
+
+func TestExportWorkflowGraphRejectsInvalidOutputPaths(t *testing.T) {
+	cases := []struct {
+		name   string
+		format string
+		output string
+		setup  func(t *testing.T, repo string, output string)
+		code   string
+	}{
+		{name: "source graph path", format: "mermaid", output: WorkflowGraphDefaultPath, code: "graph_export_output_invalid"},
+		{name: "parent path escape", format: "mermaid", output: "../workflow.mmd", code: "path_escape"},
+		{name: "absolute path", format: "mermaid", output: filepath.Join(t.TempDir(), "workflow.mmd"), code: "absolute_path"},
+		{name: "symlink escape", format: "mermaid", output: "docs/out/workflow.mmd", setup: func(t *testing.T, repo string, output string) {
+			outside := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(repo, "docs"), 0o755); err != nil {
+				t.Fatalf("mkdir docs: %v", err)
+			}
+			if err := os.Symlink(outside, filepath.Join(repo, "docs", "out")); err != nil {
+				t.Fatalf("symlink output dir: %v", err)
+			}
+		}, code: "symlink_escape"},
+		{name: "wrong extension", format: "plantuml", output: "docs/generated/workflow.mmd", code: "graph_export_output_invalid"},
+		{name: "directory", format: "mermaid", output: "docs/generated/workflow.mmd", setup: func(t *testing.T, repo string, output string) {
+			if err := os.MkdirAll(filepath.Join(repo, filepath.FromSlash(output)), 0o755); err != nil {
+				t.Fatalf("mkdir output dir: %v", err)
+			}
+		}, code: "graph_export_output_invalid"},
+		{name: "existing file", format: "mermaid", output: "docs/generated/workflow.mmd", setup: func(t *testing.T, repo string, output string) {
+			writeGraphFile(t, repo, output, "existing\n")
+		}, code: "graph_export_output_exists"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := initializedRepo(t)
+			root, _ := DiscoverRoot(repo)
+			writeWorkflowGraph(t, repo, validWorkflowGraph())
+			if tc.setup != nil {
+				tc.setup(t, repo, tc.output)
+			}
+			_, err := ExportWorkflowGraph(root, GraphExportOptions{Format: tc.format, Output: tc.output})
+			if err == nil {
+				t.Fatalf("ExportWorkflowGraph() succeeded, want %s", tc.code)
+			}
+			var problemErr *Problem
+			if !errors.As(err, &problemErr) || problemErr.Code != tc.code {
+				t.Fatalf("error = %#v, want code %s", err, tc.code)
 			}
 		})
 	}

@@ -40,6 +40,7 @@ func TestCapabilitiesJSONAtBinaryBoundary(t *testing.T) {
 			WorkflowGraphReadonly       bool `json:"workflow_graph_readonly"`
 			WorkflowGraphInit           bool `json:"workflow_graph_init"`
 			WorkflowGraphApply          bool `json:"workflow_graph_apply"`
+			WorkflowGraphExport         bool `json:"workflow_graph_export"`
 			InstallCommand              bool `json:"install_command"`
 		} `json:"compatibility_flags"`
 		OmittedSurfaces []struct {
@@ -53,7 +54,7 @@ func TestCapabilitiesJSONAtBinaryBoundary(t *testing.T) {
 	if payload.Helper.Version != "0.1.0" || payload.ProjectSchemaVersion != "0.1" {
 		t.Fatalf("payload versions = %#v, want helper 0.1.0 and schema 0.1", payload)
 	}
-	if !payload.CompatibilityFlags.BackendEvidenceRequirements || !payload.CompatibilityFlags.PhasePlan || !payload.CompatibilityFlags.ArtifactMutation || !payload.CompatibilityFlags.ApprovalRecords || !payload.CompatibilityFlags.WorkflowGraphReadonly || !payload.CompatibilityFlags.WorkflowGraphInit || !payload.CompatibilityFlags.WorkflowGraphApply || payload.CompatibilityFlags.InstallCommand {
+	if !payload.CompatibilityFlags.BackendEvidenceRequirements || !payload.CompatibilityFlags.PhasePlan || !payload.CompatibilityFlags.ArtifactMutation || !payload.CompatibilityFlags.ApprovalRecords || !payload.CompatibilityFlags.WorkflowGraphReadonly || !payload.CompatibilityFlags.WorkflowGraphInit || !payload.CompatibilityFlags.WorkflowGraphApply || !payload.CompatibilityFlags.WorkflowGraphExport || payload.CompatibilityFlags.InstallCommand {
 		t.Fatalf("compatibility flags = %#v, want current align support matrix", payload.CompatibilityFlags)
 	}
 	foundInstall := false
@@ -87,6 +88,7 @@ func TestHelpAtBinaryBoundaryDoesNotRequireProjectState(t *testing.T) {
 	assertOutputContains(t, output, "graph diff --from <repo-relative-graph>", "graph help")
 	assertOutputContains(t, output, "graph propose --patch <repo-relative-candidate-graph>", "graph help")
 	assertOutputContains(t, output, "graph apply --proposal <proposal-id>", "graph help")
+	assertOutputContains(t, output, "graph export --format mermaid|plantuml", "graph help")
 	assertOutputContains(t, output, "--file <repo-relative-path>", "graph help")
 
 	output = runHelper(t, binary, t.TempDir(), "--json", "phase-plan", "--help")
@@ -200,6 +202,14 @@ func TestGraphReadonlyBinaryFlow(t *testing.T) {
 	assertFileContains(t, filepath.Join(repo, ".kkachi-workflow.yaml"), `id: "ask"`, "applied graph")
 	assertFileContains(t, filepath.Join(repo, ".kkachi", "events.jsonl"), `"type":"graph.applied"`, "graph apply event")
 	assertOutputContains(t, runHelper(t, binary, repo, "graph", "validate", "--json"), `"status":"pass"`, "applied graph validation")
+	exportOutput := runHelper(t, binary, repo, "graph", "export", "--format", "mermaid", "--json")
+	assertOutputContains(t, exportOutput, `"authoritative":false`, "graph export")
+	assertOutputContains(t, exportOutput, `"source_checksum":`, "graph export")
+	assertOutputContains(t, exportOutput, `flowchart TD`, "graph export")
+	plantOutput := "docs/generated/workflow.puml"
+	plantExport := runHelper(t, binary, repo, "graph", "export", "--format", "plantuml", "--output", plantOutput, "--json")
+	assertOutputContains(t, plantExport, `"output_path":"`+plantOutput+`"`, "graph export output")
+	assertFileContains(t, filepath.Join(repo, filepath.FromSlash(plantOutput)), "@startuml", "graph export output")
 
 	invalidGraph := "docs/graphs/invalid-workflow.yaml"
 	writeIntegrationTarget(t, repo, invalidGraph, strings.Replace(integrationValidWorkflowGraph(), `to: "implement"`, `to: "missing"`, 1))
@@ -222,6 +232,35 @@ func TestGraphReadonlyBinaryFlow(t *testing.T) {
 	}
 	assertOutputContains(t, failedOutput, `"status":"fail"`, "graph validation failure")
 	assertOutputContains(t, failedOutput, `"name":"edge_to"`, "graph validation failure")
+}
+
+func TestGraphApplyFailsClosedAtBinaryBoundary(t *testing.T) {
+	binary := buildHelperBinary(t)
+	repo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	runHelper(t, binary, repo, "project", "init", "--json")
+	writeIntegrationTarget(t, repo, ".kkachi-workflow.yaml", integrationValidWorkflowGraph())
+	candidate := "docs/graphs/proposed-workflow.yaml"
+	writeIntegrationTarget(t, repo, candidate, integrationCandidateWorkflowGraph())
+	runHelper(t, binary, repo, "graph", "propose", "--patch", candidate, "--reason", "add ask phase", "--json")
+
+	writeIntegrationTarget(t, repo, ".kkachi-workflow.yaml", strings.Replace(integrationValidWorkflowGraph(), `title: "Plan"`, `title: "Plan Updated"`, 1))
+	beforeGraph := readFile(t, filepath.Join(repo, ".kkachi-workflow.yaml"))
+	beforeEvents := readFile(t, filepath.Join(repo, ".kkachi", "events.jsonl"))
+
+	output, err := runHelperAllowError(binary, repo, "graph", "apply", "--proposal", "gprop-000001", "--approval", "approval:integration", "--json")
+	if err == nil {
+		t.Fatalf("graph apply with stale base unexpectedly passed: %s", string(output))
+	}
+	assertOutputContains(t, output, `"code":"graph_base_checksum_mismatch"`, "stale graph apply")
+	if got := readFile(t, filepath.Join(repo, ".kkachi-workflow.yaml")); string(got) != string(beforeGraph) {
+		t.Fatalf("graph apply mutated graph after checksum mismatch\nbefore=%s\nafter=%s", string(beforeGraph), string(got))
+	}
+	if got := readFile(t, filepath.Join(repo, ".kkachi", "events.jsonl")); string(got) != string(beforeEvents) {
+		t.Fatalf("graph apply mutated events after checksum mismatch\nbefore=%s\nafter=%s", string(beforeEvents), string(got))
+	}
 }
 
 func TestArtifactMutationBinaryFlow(t *testing.T) {

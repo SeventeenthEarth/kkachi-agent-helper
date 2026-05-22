@@ -3,8 +3,8 @@
 Date: 2026-05-22
 Owner: KAH deterministic helper boundary
 Confirming role: Responsible approver / governance evidence record
-Status: source of truth for `.kkachi-workflow.yaml`; init, validation/explanation, semantic diff, proposal records, and approval-gated apply implemented; export planned
-Authority level: behavior authority for implemented graph commands and planning authority for future graph export commands
+Status: source of truth for `.kkachi-workflow.yaml`; init, validation/explanation, semantic diff, proposal records, approval-gated apply, and non-authoritative export implemented
+Authority level: behavior authority for implemented graph commands and generated visualization export boundaries
 Scope: KAH graph docs, init, validation/explanation, semantic diff, and proposal record behavior only; no KAB docs, profiles, registries, or gateway changes
 Related docs: `../README.md`, `../specs.md`, `../roadmap.md`, `../compatibility.md`, KHS `docs/sot/workflow-graph-integration.md`
 Evidence/source paths:
@@ -12,7 +12,7 @@ Evidence/source paths:
 
 ## Decision summary
 
-`.kkachi-workflow.yaml` is the project-level workflow graph instance for KAH/KHS coordination. KHS chooses workflow policy, templates, phase applicability, proposal content, and approval evidence. KAH initializes from `khs-default` or explicit repository-relative template paths, validates, explains, semantically diffs, records graph proposals, and applies approved proposal records deterministically. Later roadmap tasks add export evidence. KAH does not decide project policy.
+`.kkachi-workflow.yaml` is the project-level workflow graph instance for KAH/KHS coordination. KHS chooses workflow policy, templates, phase applicability, proposal content, and approval evidence. KAH initializes from `khs-default` or explicit repository-relative template paths, validates, explains, semantically diffs, records graph proposals, applies approved proposal records deterministically, and exports non-authoritative Mermaid/PlantUML diagrams. KAH does not decide project policy.
 
 `phase-plan.yaml` remains run-local execution state/evidence for one KHS run. It may be instantiated from, constrained by, or checked against `.kkachi-workflow.yaml`, but it is not deprecated and is not a second project graph file.
 
@@ -21,7 +21,7 @@ Evidence/source paths:
 In scope:
 
 - project-level `.kkachi-workflow.yaml` graph state;
-- implemented KAH graph init, validation/explanation, semantic diff, proposal records, and approval-gated apply, plus planned/candidate export behavior;
+- implemented KAH graph init, validation/explanation, semantic diff, proposal records, approval-gated apply, and generated visualization export behavior;
 - source precedence and fail-closed rules;
 - relationship between project graph state and run-local KHS phase state;
 - KAH/KHS evidence requirements for future graph mutation.
@@ -31,7 +31,7 @@ Out of scope:
 - KAB backend/session/plan runtime policy;
 - Kkachi v2 `.kkachi/config/workflows/` runtime configuration;
 - Hermes profile/runtime/gateway settings;
-- graph export implementation work outside the active roadmap task;
+- graph export as graph authority, graph mutation, or policy input;
 - KAH deciding phase policy, review policy, gate policy, backend choice, or external approval, risk review, and operator/product approval rules.
 
 ## File authority table
@@ -51,7 +51,7 @@ Out of scope:
 KHS template/policy/proposal
         |
         v
-KAH implemented `kkachi-agent-helper graph init/validate/explain/diff/propose/apply`; planned export
+KAH implemented `kkachi-agent-helper graph init/validate/explain/diff/propose/apply/export`
         |
         v
 project root `.kkachi-workflow.yaml` + KAH audit events
@@ -68,7 +68,7 @@ Rules:
 - `phase-plan.yaml` records run-local execution state/evidence for one run.
 - If project graph, KHS phase policy, and run-local phase state conflict, KAH/KHS fail closed and require responsible role confirmation before work proceeds.
 
-Init, validation/explanation, semantic diff, proposal records, and approval-gated apply are implemented and advertised through capabilities/help. Graph export remains planned until later capability/help evidence exists.
+Init, validation/explanation, semantic diff, proposal records, approval-gated apply, and non-authoritative export are implemented and advertised through capabilities/help.
 
 ## Kkachi v2 namespace collision
 
@@ -76,7 +76,7 @@ Init, validation/explanation, semantic diff, proposal records, and approval-gate
 
 ## `graph` command surface
 
-Status: `kkachi-agent-helper graph init`, `graph validate`, `graph explain`, `graph diff`, `graph propose`, and `graph apply` are implemented. `graph init` writes the initial graph only when `.kkachi-workflow.yaml` does not already exist. `graph propose` records proposal evidence only and does not apply graph changes. `graph apply` applies approved proposal records. `graph export` and `kah graph` remain planned/candidate until implementation evidence exists.
+Status: `kkachi-agent-helper graph init`, `graph validate`, `graph explain`, `graph diff`, `graph propose`, `graph apply`, and `graph export` are implemented. `graph init` writes the initial graph only when `.kkachi-workflow.yaml` does not already exist. `graph propose` records proposal evidence only and does not apply graph changes. `graph apply` applies approved proposal records. `graph export` renders Mermaid or PlantUML generated artifacts only. `kah graph` remains planned/candidate until implementation evidence exists.
 
 ```text
 kkachi-agent-helper graph init --from-template <khs-default|repo-relative-template.yaml> [--output .kkachi-workflow.yaml] [--json]
@@ -85,6 +85,7 @@ kkachi-agent-helper graph explain [--file .kkachi-workflow.yaml] [--json]
 kkachi-agent-helper graph diff --from <repo-relative-graph> --to <repo-relative-graph> [--semantic] [--json]
 kkachi-agent-helper graph propose --patch <repo-relative-candidate-graph> --reason <text> [--json]
 kkachi-agent-helper graph apply --proposal <proposal-id> --approval <evidence-ref> [--json]
+kkachi-agent-helper graph export --format mermaid|plantuml [--output <path>] [--json]
 kah graph export --format mermaid|plantuml [--output <path>] [--json]                                # planned shorthand
 ```
 
@@ -112,7 +113,7 @@ kah graph set-policy ...
 | `diff` | no | semantic diff | no |
 | `propose` | records proposal, does not apply graph | proposal record | no |
 | `apply` | yes, after approval evidence | approval-gated deterministic apply | no |
-| `export` | no graph mutation | visualization artifact generation | no |
+| `export` | no graph mutation; may write a generated diagram artifact | visualization artifact generation | no |
 
 Policy mutation category is empty. KAH validates and records state; KHS and responsible approvers own policy decisions.
 
@@ -204,11 +205,11 @@ Required compact JSON fields:
 | `diff --json` | `schema_version`, `status`, `from`, `to`, `changed_phases`, `changed_edges`, `changed_gates`, `changed_approvals`, `risk_flags`, `requires_approval`, `validation_summary`, `next_action` |
 | `propose --json` | `schema_version`, `status`, `proposal_id`, `proposal_path`, `validation_summary`, `semantic_diff_ref`, `approval_required`, `event_id`, `next_action` |
 | `apply --json` | `schema_version`, `status`, `proposal_id`, `approval_ref`, `graph_path`, `new_checksum`, `event_ids`, `next_action` |
-| `export --json` | `schema_version`, `status`, `format`, `output_path`, `source_checksum`, `authoritative: false` |
+| `export --json` | `schema_version`, `status`, `format`, `output_path`, `source_file`, `source_checksum`, `authoritative: false`, `diagram`, `validation_summary`, `next_action` |
 
 ## Mermaid / PlantUML scope
 
-Mermaid and PlantUML exports are generated visualization artifacts only. They do not become graph policy, schema, or source of truth. A later export command must include source checksum and `authoritative: false` in JSON output. Examples may be shown only when labeled non-authoritative.
+Mermaid and PlantUML exports are generated visualization artifacts only. They do not become graph policy, schema, or source of truth. `graph export` includes source checksum and `authoritative: false` in JSON output, prints the diagram to stdout when `--output` is omitted, and writes only repository-relative generated diagram files when `--output` is provided. Examples may be shown only when labeled non-authoritative.
 
 ## Risk review closure coverage
 
@@ -235,4 +236,4 @@ Mermaid and PlantUML exports are generated visualization artifacts only. They do
 
 ## Next record action
 
-Next implementation work is graph export. Do not widen graph apply into generated-artifact authority or alias behavior.
+Next implementation work is graph compatibility diagnostics. Do not widen graph export into generated-artifact authority or alias behavior.

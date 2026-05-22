@@ -86,6 +86,7 @@ type compatibilityFlagsOutput struct {
 	WorkflowGraphReadonly       bool `json:"workflow_graph_readonly"`
 	WorkflowGraphInit           bool `json:"workflow_graph_init"`
 	WorkflowGraphApply          bool `json:"workflow_graph_apply"`
+	WorkflowGraphExport         bool `json:"workflow_graph_export"`
 	InstallCommand              bool `json:"install_command"`
 }
 
@@ -707,8 +708,25 @@ func runGraphCommand(args []string, root project.Root, stdout io.Writer, stderr 
 		}
 		writeGraphApplyResult(stdout, result, jsonMode)
 		return ExitOK
+	case "export":
+		options, cliErr := parseGraphExportArgs(args)
+		if cliErr != nil {
+			writeError(stderr, jsonMode, *cliErr)
+			return cliErr.ExitCode
+		}
+		result, err := project.ExportWorkflowGraph(root, options)
+		if err != nil {
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writeGraphExportResult(stdout, result, jsonMode)
+		if result.Status == project.GraphStatusPass {
+			return ExitOK
+		}
+		return ExitSafety
 	default:
-		writeError(stderr, jsonMode, cliError{Code: "graph_subcommand_unknown", Message: "graph subcommand is not supported", Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "subcommand", Expected: "init, validate, explain, diff, propose, or apply", Actual: args[0]})
+		writeError(stderr, jsonMode, cliError{Code: "graph_subcommand_unknown", Message: "graph subcommand is not supported", Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "subcommand", Expected: "init, validate, explain, diff, propose, apply, or export", Actual: args[0]})
 		return ExitUsage
 	}
 }
@@ -886,6 +904,47 @@ func parseGraphApplyArgs(args []string) (project.GraphApplyOptions, *cliError) {
 		if !seen[required] {
 			return options, &cliError{Code: "missing_required_option", Message: "graph apply requires " + required, Hint: graphUsageHint(), ExitCode: ExitUsage, Field: required, Expected: "required graph apply option", Actual: "missing"}
 		}
+	}
+	return options, nil
+}
+
+func parseGraphExportArgs(args []string) (project.GraphExportOptions, *cliError) {
+	options := project.GraphExportOptions{}
+	if len(args) == 0 || args[0] != "export" {
+		return options, &cliError{Code: "graph_subcommand_required", Message: "graph subcommand is required", Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "subcommand", Expected: "export", Actual: "missing"}
+	}
+	seen := map[string]bool{}
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--format", "--output":
+			option := args[i]
+			if seen[option] {
+				return options, &cliError{Code: "duplicate_option", Message: "duplicate graph option \"" + option + "\"", Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: option}
+			}
+			expected := "non-empty value"
+			if option == "--output" {
+				expected = "repository-relative generated diagram path"
+			}
+			value, next, cliErr := parseGraphValueOption(args, i, option, expected)
+			if cliErr != nil {
+				return options, cliErr
+			}
+			seen[option] = true
+			if option == "--format" {
+				if value != "mermaid" && value != "plantuml" {
+					return options, &cliError{Code: "graph_export_format_invalid", Message: "graph export format is not supported", Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "format", Expected: "mermaid or plantuml", Actual: value}
+				}
+				options.Format = value
+			} else {
+				options.Output = value
+			}
+			i = next
+		default:
+			return options, &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown graph export option %q", args[i]), Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "--format or --output", Actual: args[i]}
+		}
+	}
+	if !seen["--format"] {
+		return options, &cliError{Code: "missing_required_option", Message: "graph export requires --format", Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "--format", Expected: "required graph export option", Actual: "missing"}
 	}
 	return options, nil
 }
@@ -2044,7 +2103,7 @@ func phasePlanUsageHint() string {
 }
 
 func graphUsageHint() string {
-	return "Use graph init --from-template <template-id-or-path> [--output .kkachi-workflow.yaml], graph validate [--file .kkachi-workflow.yaml], graph explain [--file .kkachi-workflow.yaml], graph diff --from <graph> --to <graph> [--semantic], graph propose --patch <candidate-graph> --reason <text>, or graph apply --proposal <proposal-id> --approval <evidence-ref> with optional global --json."
+	return "Use graph init --from-template <template-id-or-path> [--output .kkachi-workflow.yaml], graph validate [--file .kkachi-workflow.yaml], graph explain [--file .kkachi-workflow.yaml], graph diff --from <graph> --to <graph> [--semantic], graph propose --patch <candidate-graph> --reason <text>, graph apply --proposal <proposal-id> --approval <evidence-ref>, or graph export --format mermaid|plantuml [--output <path>] with optional global --json."
 }
 
 func approvalUsageHint() string {
@@ -2197,7 +2256,7 @@ func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
 			{Name: "diagnostics", Status: capabilityStatusSupported, Subcommands: []string{"export"}},
 			{Name: "phase-plan", Status: capabilityStatusSupported, Subcommands: []string{"init", "show", "set", "validate"}},
 			{Name: "approval", Status: capabilityStatusSupported, Subcommands: []string{"request", "record", "show"}},
-			{Name: "graph", Status: capabilityStatusSupported, Subcommands: []string{"init", "validate", "explain", "diff", "propose", "apply"}},
+			{Name: "graph", Status: capabilityStatusSupported, Subcommands: []string{"init", "validate", "explain", "diff", "propose", "apply", "export"}},
 		},
 		CompatibilityFlags: compatibilityFlagsOutput{
 			ProjectInit:                 true,
@@ -2216,6 +2275,7 @@ func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
 			WorkflowGraphReadonly:       true,
 			WorkflowGraphInit:           true,
 			WorkflowGraphApply:          true,
+			WorkflowGraphExport:         true,
 			InstallCommand:              false,
 		},
 		DeprecatedSurfaces: []capabilitySurfaceOutput{},
@@ -2360,12 +2420,12 @@ var helpPages = map[string]helpOutput{
 	"graph": {
 		Command:      "kkachi-agent-helper graph",
 		Status:       capabilityStatusSupported,
-		Usage:        "kkachi-agent-helper graph init --from-template <template-id-or-path> [--output .kkachi-workflow.yaml] [--json]\n  kkachi-agent-helper graph validate [--file .kkachi-workflow.yaml] [--json]\n  kkachi-agent-helper graph explain [--file .kkachi-workflow.yaml] [--json]\n  kkachi-agent-helper graph diff --from <repo-relative-graph> --to <repo-relative-graph> [--semantic] [--json]\n  kkachi-agent-helper graph propose --patch <repo-relative-candidate-graph> --reason <text> [--json]\n  kkachi-agent-helper graph apply --proposal <proposal-id> --approval <evidence-ref> [--json]",
-		Summary:      "Initialize, validate, explain, diff, propose, and approval-apply project-level .kkachi-workflow.yaml graph state.",
-		Subcommands:  []helpItem{{Name: "init", Description: "Create the initial workflow graph from khs-default or an explicit template path."}, {Name: "validate", Description: "Validate workflow graph schema, source authority, and graph references."}, {Name: "explain", Description: "Show the effective graph phases, edges, gates, approvals, and validation summary."}, {Name: "diff", Description: "Compare two valid workflow graph files semantically without writing graph state."}, {Name: "propose", Description: "Record a proposal for a complete candidate workflow graph without applying it."}, {Name: "apply", Description: "Apply an approved proposal after checksum and source-precedence checks."}},
-		Options:      []helpItem{{Name: "--from-template <template-id-or-path>", Description: "Template id khs-default or repository-relative workflow graph YAML template for graph init."}, {Name: "--output .kkachi-workflow.yaml", Description: "Optional graph init output; graph init only supports .kkachi-workflow.yaml."}, {Name: "--file <repo-relative-path>", Description: "Workflow graph file to inspect; defaults to .kkachi-workflow.yaml for validate/explain."}, {Name: "--from <repo-relative-graph>", Description: "Base graph file for graph diff."}, {Name: "--to <repo-relative-graph>", Description: "Candidate graph file for graph diff."}, {Name: "--semantic", Description: "Accepted for graph diff; semantic comparison is always used."}, {Name: "--patch <repo-relative-candidate-graph>", Description: "Complete candidate workflow graph file for graph propose."}, {Name: "--reason <text>", Description: "Required reason recorded in the graph proposal."}, {Name: "--proposal <proposal-id>", Description: "Proposal id returned by graph propose for graph apply."}, {Name: "--approval <evidence-ref>", Description: "Required approval evidence reference for graph apply."}, {Name: "--json", Description: "Emit structured graph output."}, {Name: "--help", Description: "Show graph help and exit 0."}},
-		JSONBehavior: "Graph init/validate/explain/diff/propose/apply support global --json for structured output. Failing graph validation or diff exits 3 while emitting graph result data on stdout.",
-		Notes:        []string{"graph init creates only the initial .kkachi-workflow.yaml and fails if one already exists.", "graph propose records .kkachi/graph/proposals evidence and an event; it does not edit .kkachi-workflow.yaml.", "graph apply records required approval evidence by reference but does not decide approval policy.", "graph export, replacement init, and kah alias behavior remain unimplemented.", "KAH validates declared graph state only; KHS remains responsible for workflow policy and templates."},
+		Usage:        "kkachi-agent-helper graph init --from-template <template-id-or-path> [--output .kkachi-workflow.yaml] [--json]\n  kkachi-agent-helper graph validate [--file .kkachi-workflow.yaml] [--json]\n  kkachi-agent-helper graph explain [--file .kkachi-workflow.yaml] [--json]\n  kkachi-agent-helper graph diff --from <repo-relative-graph> --to <repo-relative-graph> [--semantic] [--json]\n  kkachi-agent-helper graph propose --patch <repo-relative-candidate-graph> --reason <text> [--json]\n  kkachi-agent-helper graph apply --proposal <proposal-id> --approval <evidence-ref> [--json]\n  kkachi-agent-helper graph export --format mermaid|plantuml [--output <path>] [--json]",
+		Summary:      "Initialize, validate, explain, diff, propose, approval-apply, and export project-level .kkachi-workflow.yaml graph state.",
+		Subcommands:  []helpItem{{Name: "init", Description: "Create the initial workflow graph from khs-default or an explicit template path."}, {Name: "validate", Description: "Validate workflow graph schema, source authority, and graph references."}, {Name: "explain", Description: "Show the effective graph phases, edges, gates, approvals, and validation summary."}, {Name: "diff", Description: "Compare two valid workflow graph files semantically without writing graph state."}, {Name: "propose", Description: "Record a proposal for a complete candidate workflow graph without applying it."}, {Name: "apply", Description: "Apply an approved proposal after checksum and source-precedence checks."}, {Name: "export", Description: "Render Mermaid or PlantUML generated diagrams without making them graph authority."}},
+		Options:      []helpItem{{Name: "--from-template <template-id-or-path>", Description: "Template id khs-default or repository-relative workflow graph YAML template for graph init."}, {Name: "--output .kkachi-workflow.yaml", Description: "Optional graph init output; graph init only supports .kkachi-workflow.yaml."}, {Name: "--file <repo-relative-path>", Description: "Workflow graph file to inspect; defaults to .kkachi-workflow.yaml for validate/explain."}, {Name: "--from <repo-relative-graph>", Description: "Base graph file for graph diff."}, {Name: "--to <repo-relative-graph>", Description: "Candidate graph file for graph diff."}, {Name: "--semantic", Description: "Accepted for graph diff; semantic comparison is always used."}, {Name: "--patch <repo-relative-candidate-graph>", Description: "Complete candidate workflow graph file for graph propose."}, {Name: "--reason <text>", Description: "Required reason recorded in the graph proposal."}, {Name: "--proposal <proposal-id>", Description: "Proposal id returned by graph propose for graph apply."}, {Name: "--approval <evidence-ref>", Description: "Required approval evidence reference for graph apply."}, {Name: "--format mermaid|plantuml", Description: "Required graph export diagram format."}, {Name: "--output <repo-relative-path>", Description: "Optional generated diagram output path for graph export."}, {Name: "--json", Description: "Emit structured graph output."}, {Name: "--help", Description: "Show graph help and exit 0."}},
+		JSONBehavior: "Graph init/validate/explain/diff/propose/apply/export support global --json for structured output. Failing graph validation, diff, or export exits 3 while emitting graph result data on stdout.",
+		Notes:        []string{"graph init creates only the initial .kkachi-workflow.yaml and fails if one already exists.", "graph propose records .kkachi/graph/proposals evidence and an event; it does not edit .kkachi-workflow.yaml.", "graph apply records required approval evidence by reference but does not decide approval policy.", "graph export writes or prints generated diagrams with authoritative=false; exports are never workflow graph source of truth.", "replacement init and kah alias behavior remain unimplemented.", "KAH validates declared graph state only; KHS remains responsible for workflow policy and templates."},
 	},
 }
 
@@ -2686,19 +2746,7 @@ func writeGraphValidateResult(w io.Writer, result project.GraphValidationResult,
 		fmt.Fprintf(w, "effective_source: %s\n", result.EffectiveSource)
 	}
 	fmt.Fprintf(w, "errors: %d\n", len(result.Errors))
-	for _, issue := range result.Errors {
-		fmt.Fprintf(w, "- %s", issue.Name)
-		if issue.Field != "" {
-			fmt.Fprintf(w, " field=%s", issue.Field)
-		}
-		if issue.Actual != "" {
-			fmt.Fprintf(w, " actual=%s", issue.Actual)
-		}
-		if issue.Line != 0 {
-			fmt.Fprintf(w, " line=%d", issue.Line)
-		}
-		fmt.Fprintf(w, ": %s\n", issue.Message)
-	}
+	writeGraphIssues(w, result.Errors)
 	fmt.Fprintf(w, "next_action: %s\n", result.NextAction)
 }
 
@@ -2739,19 +2787,7 @@ func writeGraphExplainResult(w io.Writer, result project.GraphExplanationResult,
 	}
 	fmt.Fprintf(w, "pending_proposals: %d\n", len(result.PendingProposals))
 	fmt.Fprintf(w, "errors: %d\n", len(result.ValidationSummary.Errors))
-	for _, issue := range result.ValidationSummary.Errors {
-		fmt.Fprintf(w, "- %s", issue.Name)
-		if issue.Field != "" {
-			fmt.Fprintf(w, " field=%s", issue.Field)
-		}
-		if issue.Actual != "" {
-			fmt.Fprintf(w, " actual=%s", issue.Actual)
-		}
-		if issue.Line != 0 {
-			fmt.Fprintf(w, " line=%d", issue.Line)
-		}
-		fmt.Fprintf(w, ": %s\n", issue.Message)
-	}
+	writeGraphIssues(w, result.ValidationSummary.Errors)
 	fmt.Fprintf(w, "next_action: %s\n", result.NextAction)
 }
 
@@ -2853,6 +2889,47 @@ func writeGraphApplyResult(w io.Writer, result project.GraphApplyResult, jsonMod
 	fmt.Fprintf(w, "new_checksum: %s\n", result.NewChecksum)
 	fmt.Fprintf(w, "event_ids: %s\n", strings.Join(result.EventIDs, ","))
 	fmt.Fprintf(w, "next_action: %s\n", result.NextAction)
+}
+
+func writeGraphExportResult(w io.Writer, result project.GraphExportResult, jsonMode bool) {
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(result)
+		return
+	}
+	if result.Status != project.GraphStatusPass {
+		fmt.Fprintf(w, "graph export: %s\n", result.Status)
+		fmt.Fprintf(w, "source_file: %s\n", result.SourceFile)
+		fmt.Fprintf(w, "errors: %d\n", len(result.ValidationSummary.Errors))
+		writeGraphIssues(w, result.ValidationSummary.Errors)
+		fmt.Fprintf(w, "next_action: %s\n", result.NextAction)
+		return
+	}
+	if result.OutputPath == "" {
+		fmt.Fprint(w, result.Diagram)
+		return
+	}
+	fmt.Fprintf(w, "graph export: %s\n", result.Status)
+	fmt.Fprintf(w, "format: %s\n", result.Format)
+	fmt.Fprintf(w, "output_path: %s\n", result.OutputPath)
+	fmt.Fprintf(w, "source_checksum: %s\n", result.SourceChecksum)
+	fmt.Fprintf(w, "authoritative: %t\n", result.Authoritative)
+	fmt.Fprintf(w, "next_action: %s\n", result.NextAction)
+}
+
+func writeGraphIssues(w io.Writer, issues []project.GraphIssue) {
+	for _, issue := range issues {
+		fmt.Fprintf(w, "- %s", issue.Name)
+		if issue.Field != "" {
+			fmt.Fprintf(w, " field=%s", issue.Field)
+		}
+		if issue.Actual != "" {
+			fmt.Fprintf(w, " actual=%s", issue.Actual)
+		}
+		if issue.Line != 0 {
+			fmt.Fprintf(w, " line=%d", issue.Line)
+		}
+		fmt.Fprintf(w, ": %s\n", issue.Message)
+	}
 }
 
 func writeLockRecoverResult(w io.Writer, result project.LockRecoveryResult, jsonMode bool) {
@@ -3190,7 +3267,7 @@ func exitCodeForProblem(code string) int {
 		return ExitNotFound
 	case "artifact_baseline_encode_failed", "artifact_json_encode_failed", "schema_encode_failed", "graph_proposal_encode_failed":
 		return ExitInternal
-	case "absolute_path", "empty_path", "path_escape", "repo_root_path", "symlink_escape", "symlink_resolution_failed", "path_inspection_failed", "repo_root_required", "helper_state_exists", "last_event_id_mismatch", "status_invalid_json", "status_last_event_id_invalid", "status_active_run_invalid", "status_project_id_invalid", "project_config_read_failed", "project_config_invalid", "event_log_invalid", "event_log_empty", "event_id_invalid", "event_id_exhausted", "run_metadata_invalid", "run_metadata_invalid_json", "active_run_conflict", "run_transition_invalid", "run_not_found", "run_id_ambiguous", "run_root_read_failed", "run_metadata_read_failed", "run_id_collision", "run_artifact_init_invalid_state", "run_artifact_mutation_invalid_state", "artifact_inspection_failed", "artifact_path_invalid", "artifact_source_missing", "artifact_source_inspection_failed", "artifact_source_invalid", "artifact_source_read_failed", "artifact_read_failed", "artifact_status_invalid", "artifact_reason_required", "artifact_status_unsupported", "artifact_status_not_applicable", "artifact_json_invalid", "status_gate_summary_invalid", "lock_conflict", "lock_stale_recovery_required", "lock_metadata_invalid", "lock_not_found", "lock_identity_mismatch", "lock_release_failed", "schema_validation_read_failed", "schema_reference_invalid", "schema_read_failed", "schema_export_inspection_failed", "schema_export_conflict", "schema_export_read_failed", "schema_migration_path_inspection_failed", "schema_migration_source_version_mismatch", "schema_migration_read_failed", "schema_migration_invalid_json", "schema_migration_invalid_event_log", "schema_migration_version_missing", "schema_migration_backup_failed", "install_manifest_read_failed", "install_manifest_invalid_json", "install_manifest_invalid", "install_manifest_kind_mismatch", "install_source_invalid", "install_source_item_invalid", "install_source_read_failed", "install_checksum_mismatch", "install_duplicate_target", "install_target_inspection_failed", "install_target_read_failed", "install_owner_marker_missing", "install_compatibility_failed", "install_preflight_blocked", "install_apply_failed", "diagnostics_encode_failed", "diagnostics_output_exists", "graph_already_exists", "graph_template_required", "graph_template_unknown", "graph_template_invalid", "graph_output_invalid", "graph_init_invalid", "graph_proposal_invalid", "graph_proposal_inspection_failed", "graph_proposal_id_exhausted":
+	case "absolute_path", "empty_path", "path_escape", "repo_root_path", "symlink_escape", "symlink_resolution_failed", "path_inspection_failed", "repo_root_required", "helper_state_exists", "last_event_id_mismatch", "status_invalid_json", "status_last_event_id_invalid", "status_active_run_invalid", "status_project_id_invalid", "project_config_read_failed", "project_config_invalid", "event_log_invalid", "event_log_empty", "event_id_invalid", "event_id_exhausted", "run_metadata_invalid", "run_metadata_invalid_json", "active_run_conflict", "run_transition_invalid", "run_not_found", "run_id_ambiguous", "run_root_read_failed", "run_metadata_read_failed", "run_id_collision", "run_artifact_init_invalid_state", "run_artifact_mutation_invalid_state", "artifact_inspection_failed", "artifact_path_invalid", "artifact_source_missing", "artifact_source_inspection_failed", "artifact_source_invalid", "artifact_source_read_failed", "artifact_read_failed", "artifact_status_invalid", "artifact_reason_required", "artifact_status_unsupported", "artifact_status_not_applicable", "artifact_json_invalid", "status_gate_summary_invalid", "lock_conflict", "lock_stale_recovery_required", "lock_metadata_invalid", "lock_not_found", "lock_identity_mismatch", "lock_release_failed", "schema_validation_read_failed", "schema_reference_invalid", "schema_read_failed", "schema_export_inspection_failed", "schema_export_conflict", "schema_export_read_failed", "schema_migration_path_inspection_failed", "schema_migration_source_version_mismatch", "schema_migration_read_failed", "schema_migration_invalid_json", "schema_migration_invalid_event_log", "schema_migration_version_missing", "schema_migration_backup_failed", "install_manifest_read_failed", "install_manifest_invalid_json", "install_manifest_invalid", "install_manifest_kind_mismatch", "install_source_invalid", "install_source_item_invalid", "install_source_read_failed", "install_checksum_mismatch", "install_duplicate_target", "install_target_inspection_failed", "install_target_read_failed", "install_owner_marker_missing", "install_compatibility_failed", "install_preflight_blocked", "install_apply_failed", "diagnostics_encode_failed", "diagnostics_output_exists", "graph_already_exists", "graph_template_required", "graph_template_unknown", "graph_template_invalid", "graph_output_invalid", "graph_init_invalid", "graph_proposal_invalid", "graph_proposal_inspection_failed", "graph_proposal_id_exhausted", "graph_export_output_invalid", "graph_export_output_inspection_failed", "graph_export_output_exists":
 		return ExitSafety
 	default:
 		return ExitUsage
