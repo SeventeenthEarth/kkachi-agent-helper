@@ -264,7 +264,7 @@ func TestGraphDocsSOTAndReadonlyImplementationContract(t *testing.T) {
 			rel: "README.md",
 			wants: []string{
 				"[Workflow graph SOT](docs/sot/workflow-graph.md)",
-				"init, validation, explanation, semantic diff, proposal records, approval-gated apply, and non-authoritative visualization export are implemented",
+				"init, validation, explanation, semantic diff, proposal records, approval-gated apply, non-authoritative visualization export, and compatibility diagnostics are implemented",
 				"kkachi-agent-helper graph init --from-template <khs-default|repo-relative-template.yaml> [--output .kkachi-workflow.yaml] [--json]",
 				"kkachi-agent-helper graph validate [--file .kkachi-workflow.yaml] [--json]",
 				"kkachi-agent-helper graph diff --from <repo-relative-graph> --to <repo-relative-graph> [--semantic] [--json]",
@@ -280,7 +280,7 @@ func TestGraphDocsSOTAndReadonlyImplementationContract(t *testing.T) {
 			rel: "docs/sot/workflow-graph.md",
 			wants: []string{
 				"# KAH workflow graph SOT",
-				"init, validation/explanation, semantic diff, proposal records, approval-gated apply, and non-authoritative export implemented",
+				"init, validation/explanation, semantic diff, proposal records, approval-gated apply, non-authoritative export, and graph compatibility diagnostics implemented",
 				"`.kkachi-workflow.yaml` is the project-level workflow graph instance",
 				"`phase-plan.yaml` remains run-local execution state/evidence for one KHS run",
 				"Helper config only; never workflow graph SOT",
@@ -298,7 +298,7 @@ func TestGraphDocsSOTAndReadonlyImplementationContract(t *testing.T) {
 				`required_role: "responsible-approver|required-reviewer|external-approver"`,
 				"Prior role examples that used personal or internal codenames are superseded by generic role placeholders",
 				"Generated Mermaid/PlantUML diagrams for visualization only",
-				"Next implementation work is graph compatibility diagnostics",
+				"`diagnostics export` includes top-level `graph_compatibility` evidence",
 			},
 		},
 		{
@@ -319,21 +319,22 @@ func TestGraphDocsSOTAndReadonlyImplementationContract(t *testing.T) {
 				"KAH policy-mutation command category is empty",
 				"kah graph init --profile ...",
 				"## Planning graph record appendix",
-				"Next record action: implement graph compatibility diagnostics",
+				"diagnostics now publish `graph_compatibility`",
 			},
 		},
 		{
 			rel: "docs/compatibility.md",
 			wants: []string{
-				"graph init, validation/explanation, semantic diff, proposal records, approval-gated apply, and non-authoritative graph export implemented",
+				"graph init, validation/explanation, semantic diff, proposal records, approval-gated apply, non-authoritative graph export, and compatibility diagnostics implemented",
 				"Workflow graph compatibility: `.kkachi-workflow.yaml` plus `kkachi-agent-helper graph init`",
 				"KHS must not silently edit `.kkachi-workflow.yaml` as fallback when graph apply support is missing",
 				"Graph source precedence must fail closed",
 				"`kkachi-agent-helper graph init/validate/explain/diff/propose/apply/export` | Implemented graph evidence and visualization surface",
 				"`kah graph` | Planned/candidate shorthand",
 				"Direct YAML edit fallback | Forbidden as normal operation",
+				"`diagnostics export` `graph_compatibility` | Implemented graph support/state diagnostic evidence",
 				"## Planning graph record appendix",
-				"Status: graph init/validation/explanation/diff/proposal/apply/export compatibility implemented",
+				"Status: graph init/validation/explanation/diff/proposal/apply/export diagnostics compatibility implemented",
 			},
 		},
 		{
@@ -350,7 +351,9 @@ func TestGraphDocsSOTAndReadonlyImplementationContract(t *testing.T) {
 				"workflow_graph_init",
 				"workflow_graph_apply",
 				"workflow_graph_export",
-				"Next record action: start `graph-007` compatibility diagnostics",
+				"workflow_graph_diagnostics",
+				"workflow_graph_no_direct_yaml_fallback",
+				"| graph-007 | KHS compatibility diagnostics/capabilities for graph support and no direct YAML fallback | Completed |",
 				"## Planning graph record appendix",
 			},
 		},
@@ -361,7 +364,7 @@ func TestGraphDocsSOTAndReadonlyImplementationContract(t *testing.T) {
 				"Authority for implemented graph init/validation/explanation/diff/proposal/apply/export records",
 				"`.kkachi-workflow.yaml` is documented as project-level workflow graph state with implemented init",
 				"`kkachi-agent-helper graph init`, `graph validate`, `graph explain`, `graph diff`, `graph propose`, `graph apply`, and `graph export` are implemented",
-				"Use `docs/roadmap.md` `graph-007` as the next implementation slice",
+				"graph compatibility diagnostics",
 			},
 		},
 	} {
@@ -923,19 +926,47 @@ func TestDiagnosticsExportRedaction(t *testing.T) {
 	requireFailCLI(t, r, "gate", "check", runID, "intake", "--json")
 	bundle := requireCLI(t, r, "diagnostics", "export", "--run", runID, "--json")
 	requireContains(t, bundle.stdout, `"schema_versions":`, "diagnostics JSON")
+	requireContains(t, bundle.stdout, `"graph_compatibility":`, "diagnostics JSON")
+	requireContains(t, bundle.stdout, `"state_status":"missing"`, "diagnostics JSON")
+	requireContains(t, bundle.stdout, `"no_direct_yaml_fallback":true`, "diagnostics JSON")
 	requireContains(t, bundle.stdout, `"path":".kkachi/runs/`+runID+`/phase-plan.yaml"`, "diagnostics JSON")
 	requireContains(t, bundle.stdout, `"api_token":"[REDACTED]"`, "diagnostics JSON")
 	requireNotContains(t, bundle.stdout, secret, "diagnostics JSON")
 	human := requireCLI(t, r, "diagnostics", "export", "--run", runID, "--output", "diagnostics/pilot-002.json")
 	requireContains(t, human.stdout, "diagnostics bundle exported: diagnostics/pilot-002.json", "diagnostics human")
+	requireContains(t, human.stdout, "graph_compatibility: missing", "diagnostics human")
 	written := mustRead(t, filepath.Join(r, "diagnostics/pilot-002.json"))
 	requireContains(t, written, `"run_id": "`+runID+`"`, "written diagnostics")
+	requireContains(t, written, `"graph_compatibility": {`, "written diagnostics")
 	requireContains(t, written, `"api_token": "[REDACTED]"`, "written diagnostics")
 	requireNotContains(t, written, secret, "written diagnostics")
 	redacted := requireFailCLI(t, r, "diagnostics", "export", "--output", "../api_token="+secret, "--json")
 	requireContains(t, redacted.stderr, `"code":"path_escape"`, "redacted diagnostics error")
 	requireContains(t, redacted.stderr, `[REDACTED]`, "redacted diagnostics error")
 	requireNotContains(t, redacted.stderr, secret, "redacted diagnostics error")
+}
+
+func TestDiagnosticsGraphCompatibilityPassesAfterGraphInit(t *testing.T) {
+	r := repo(t, "diagnostics-graph-pass")
+	requireCLI(t, r, "project", "init", "--json")
+	requireCLI(t, r, "graph", "init", "--from-template", "khs-default", "--json")
+
+	bundle := requireCLI(t, r, "diagnostics", "export", "--json")
+	requireContains(t, bundle.stdout, `"graph_compatibility":`, "diagnostics graph compatibility")
+	requireContains(t, bundle.stdout, `"support_status":"supported"`, "diagnostics graph compatibility")
+	requireContains(t, bundle.stdout, `"state_status":"pass"`, "diagnostics graph compatibility")
+	requireContains(t, bundle.stdout, `"no_direct_yaml_fallback":true`, "diagnostics graph compatibility")
+	requireContains(t, bundle.stdout, `"schema_version":"workflow-graph/v1"`, "diagnostics graph compatibility")
+	requireContains(t, bundle.stdout, `"file":".kkachi-workflow.yaml"`, "diagnostics graph compatibility")
+	requireContains(t, bundle.stdout, `"effective_source":"project_file"`, "diagnostics graph compatibility")
+	requireContains(t, bundle.stdout, `"forbidden_fallback_sources":`, "diagnostics graph compatibility")
+	requireContains(t, bundle.stdout, `"source":".kkachi/config.yaml"`, "diagnostics graph compatibility")
+
+	human := requireCLI(t, r, "diagnostics", "export", "--output", "diagnostics/graph-pass.json")
+	requireContains(t, human.stdout, "graph_compatibility: pass", "diagnostics graph compatibility human")
+	written := mustRead(t, filepath.Join(r, "diagnostics/graph-pass.json"))
+	requireContains(t, written, `"state_status": "pass"`, "written graph compatibility diagnostics")
+	requireContains(t, written, `"no_direct_yaml_fallback": true`, "written graph compatibility diagnostics")
 }
 
 func TestGraphInitApplyAndReadonlyFlow(t *testing.T) {
@@ -1164,6 +1195,8 @@ func TestReleasePackaging(t *testing.T) {
 	requireContains(t, string(out), `"workflow_graph_init":true`, "capabilities graph init flag")
 	requireContains(t, string(out), `"workflow_graph_apply":true`, "capabilities graph apply flag")
 	requireContains(t, string(out), `"workflow_graph_export":true`, "capabilities graph export flag")
+	requireContains(t, string(out), `"workflow_graph_diagnostics":true`, "capabilities graph diagnostics flag")
+	requireContains(t, string(out), `"workflow_graph_no_direct_yaml_fallback":true`, "capabilities graph no fallback flag")
 	requireContains(t, string(out), `"name":"install"`, "capabilities omitted install")
 	help := exec.Command(artifact, "run", "create", "--help")
 	out, err = help.Output()

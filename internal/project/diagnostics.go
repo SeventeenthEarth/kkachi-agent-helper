@@ -34,17 +34,18 @@ type DiagnosticsExportOptions struct {
 }
 
 type DiagnosticsBundle struct {
-	Version           string               `json:"version"`
-	GeneratedAt       string               `json:"generated_at"`
-	RootPath          string               `json:"root_path"`
-	Redaction         DiagnosticsRedaction `json:"redaction"`
-	Project           DiagnosticsProject   `json:"project"`
-	SchemaVersions    []DiagnosticsSchema  `json:"schema_versions"`
-	RunID             string               `json:"run_id,omitempty"`
-	GateReports       []DiagnosticsFile    `json:"gate_reports"`
-	SelectedArtifacts []DiagnosticsFile    `json:"selected_artifacts"`
-	ApprovalRecords   []ApprovalRecord     `json:"approval_records,omitempty"`
-	OutputPath        string               `json:"output_path,omitempty"`
+	Version            string                        `json:"version"`
+	GeneratedAt        string                        `json:"generated_at"`
+	RootPath           string                        `json:"root_path"`
+	Redaction          DiagnosticsRedaction          `json:"redaction"`
+	Project            DiagnosticsProject            `json:"project"`
+	SchemaVersions     []DiagnosticsSchema           `json:"schema_versions"`
+	GraphCompatibility DiagnosticsGraphCompatibility `json:"graph_compatibility"`
+	RunID              string                        `json:"run_id,omitempty"`
+	GateReports        []DiagnosticsFile             `json:"gate_reports"`
+	SelectedArtifacts  []DiagnosticsFile             `json:"selected_artifacts"`
+	ApprovalRecords    []ApprovalRecord              `json:"approval_records,omitempty"`
+	OutputPath         string                        `json:"output_path,omitempty"`
 }
 
 type DiagnosticsRedaction struct {
@@ -64,6 +65,21 @@ type DiagnosticsSchema struct {
 	Status  string `json:"status"`
 	Version string `json:"version,omitempty"`
 	Error   string `json:"error,omitempty"`
+}
+
+type DiagnosticsGraphCompatibility struct {
+	SupportStatus            string                               `json:"support_status"`
+	StateStatus              string                               `json:"state_status"`
+	NoDirectYAMLFallback     bool                                 `json:"no_direct_yaml_fallback"`
+	Validation               GraphValidationResult                `json:"validation"`
+	ForbiddenFallbackSources []DiagnosticsForbiddenFallbackSource `json:"forbidden_fallback_sources"`
+	NextAction               string                               `json:"next_action"`
+}
+
+type DiagnosticsForbiddenFallbackSource struct {
+	Source string `json:"source"`
+	Status string `json:"status"`
+	Reason string `json:"reason"`
 }
 
 type DiagnosticsFile struct {
@@ -106,6 +122,7 @@ func ExportDiagnostics(root Root, options DiagnosticsExportOptions) (Diagnostics
 		Events: diagnosticEventsFile(root),
 	}
 	bundle.SchemaVersions = diagnosticSchemaVersions(root)
+	bundle.GraphCompatibility = diagnosticGraphCompatibility(root)
 	if runID != "" {
 		bundle.GateReports = diagnosticGateReports(root, runID)
 		bundle.SelectedArtifacts = diagnosticSelectedArtifacts(root, runID)
@@ -140,6 +157,74 @@ func ExportDiagnostics(root Root, options DiagnosticsExportOptions) (Diagnostics
 		bundle.OutputPath = path.Relative
 	}
 	return bundle, nil
+}
+
+func diagnosticGraphCompatibility(root Root) DiagnosticsGraphCompatibility {
+	validation := redactedGraphValidation(ValidateWorkflowGraph(root, GraphOptions{}))
+	stateStatus, nextAction := diagnosticGraphCompatibilityState(validation)
+	return DiagnosticsGraphCompatibility{
+		SupportStatus:        "supported",
+		StateStatus:          stateStatus,
+		NoDirectYAMLFallback: true,
+		Validation:           validation,
+		ForbiddenFallbackSources: []DiagnosticsForbiddenFallbackSource{
+			{Source: ".kkachi/config.yaml", Status: "forbidden", Reason: "helper config is never workflow graph authority"},
+			{Source: ".kkachi/config/workflows/", Status: "forbidden", Reason: "Kkachi v2 workflow runtime config is outside KAH/KHS graph authority"},
+			{Source: "generated diagrams", Status: "forbidden", Reason: "Mermaid and PlantUML exports are non-authoritative visualization artifacts"},
+			{Source: "KHS defaults", Status: "forbidden", Reason: "defaults are explicit init/proposal inputs only, never silent graph authority"},
+			{Source: "stale .kkachi/ runtime state", Status: "forbidden", Reason: "runtime state is evidence/cache only and cannot replace .kkachi-workflow.yaml"},
+		},
+		NextAction: nextAction,
+	}
+}
+
+func diagnosticGraphCompatibilityState(validation GraphValidationResult) (string, string) {
+	if validation.Status == GraphStatusPass {
+		return GraphStatusPass, "Graph support is available and .kkachi-workflow.yaml validates; KHS may use graph explain --json as read-only projection evidence."
+	}
+	if graphValidationMissing(validation) {
+		return "missing", "Fail closed if workflow graph support is required; create .kkachi-workflow.yaml through graph init --from-template or preserve proposal/apply evidence."
+	}
+	return GraphStatusFail, "Fail closed if workflow graph support is required; repair .kkachi-workflow.yaml through graph propose/apply evidence before use."
+}
+
+func graphValidationMissing(validation GraphValidationResult) bool {
+	for _, issue := range validation.Errors {
+		if issue.Name == graphIssueGraphFile && issue.Actual == graphIssueActualMissing {
+			return true
+		}
+	}
+	return false
+}
+
+func redactedGraphValidation(validation GraphValidationResult) GraphValidationResult {
+	validation.File = RedactString(validation.File)
+	validation.EffectiveSource = RedactString(validation.EffectiveSource)
+	validation.NextAction = RedactString(validation.NextAction)
+	validation.Errors = redactedGraphIssues(validation.Errors)
+	validation.Warnings = redactedGraphIssues(validation.Warnings)
+	validation.Conflicts = redactedGraphIssues(validation.Conflicts)
+	return validation
+}
+
+func redactedGraphIssues(issues []GraphIssue) []GraphIssue {
+	if len(issues) == 0 {
+		return issues
+	}
+	redacted := make([]GraphIssue, len(issues))
+	for i, issue := range issues {
+		redacted[i] = GraphIssue{
+			Name:     RedactString(issue.Name),
+			Path:     RedactString(issue.Path),
+			Message:  RedactString(issue.Message),
+			Hint:     RedactString(issue.Hint),
+			Field:    RedactString(issue.Field),
+			Expected: RedactString(issue.Expected),
+			Actual:   RedactString(issue.Actual),
+			Line:     issue.Line,
+		}
+	}
+	return redacted
 }
 
 func redactedApprovalRecords(records []ApprovalRecord) []ApprovalRecord {

@@ -53,6 +53,15 @@ func TestExportDiagnosticsProjectLevelWhenNoRunAndOutputOverwriteRefused(t *test
 	if bundle.RunID != "" || len(bundle.GateReports) != 0 || len(bundle.SelectedArtifacts) != 0 {
 		t.Fatalf("bundle = %#v, want project-level diagnostics only", bundle)
 	}
+	if bundle.GraphCompatibility.SupportStatus != "supported" || bundle.GraphCompatibility.StateStatus != "missing" || !bundle.GraphCompatibility.NoDirectYAMLFallback {
+		t.Fatalf("graph compatibility = %#v, want supported missing no-fallback state", bundle.GraphCompatibility)
+	}
+	if bundle.GraphCompatibility.Validation.Status != GraphStatusFail || !graphValidationMissing(bundle.GraphCompatibility.Validation) {
+		t.Fatalf("graph validation = %#v, want missing graph validation evidence", bundle.GraphCompatibility.Validation)
+	}
+	if len(bundle.GraphCompatibility.ForbiddenFallbackSources) != 5 {
+		t.Fatalf("forbidden fallback sources = %#v, want deterministic source list", bundle.GraphCompatibility.ForbiddenFallbackSources)
+	}
 
 	outputPath := filepath.Join(repo, "diagnostics", "bundle.json")
 	mustMkdir(t, filepath.Dir(outputPath))
@@ -122,6 +131,48 @@ func TestExportDiagnosticsRedactsMalformedAndNestedContent(t *testing.T) {
 	}
 	if strings.Contains(string(approvalRecords), secret) || !strings.Contains(string(approvalRecords), RedactedPlaceholder) {
 		t.Fatalf("approval records = %s, want redacted secret", approvalRecords)
+	}
+}
+
+func TestExportDiagnosticsReportsGraphCompatibilityState(t *testing.T) {
+	repo, root := newInitializedDiagnosticsRoot(t)
+	writeWorkflowGraph(t, repo, validWorkflowGraph())
+
+	bundle, err := ExportDiagnostics(root, DiagnosticsExportOptions{Now: fixedDiagnosticsTime})
+	if err != nil {
+		t.Fatalf("ExportDiagnostics() error = %v", err)
+	}
+	graph := bundle.GraphCompatibility
+	if graph.SupportStatus != "supported" || graph.StateStatus != GraphStatusPass || !graph.NoDirectYAMLFallback {
+		t.Fatalf("graph compatibility = %#v, want passing supported no-fallback state", graph)
+	}
+	if graph.Validation.Status != GraphStatusPass || graph.Validation.File != WorkflowGraphDefaultPath || graph.Validation.Checksum == "" {
+		t.Fatalf("graph validation = %#v, want passing default graph evidence", graph.Validation)
+	}
+	if !strings.Contains(graph.NextAction, "graph explain --json") {
+		t.Fatalf("next action = %q, want KHS read-only graph projection guidance", graph.NextAction)
+	}
+}
+
+func TestExportDiagnosticsRedactsInvalidGraphCompatibilityEvidence(t *testing.T) {
+	repo, root := newInitializedDiagnosticsRoot(t)
+	secret := "sk-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
+	writeWorkflowGraph(t, repo, "api_token="+secret+"\n")
+
+	bundle, err := ExportDiagnostics(root, DiagnosticsExportOptions{Now: fixedDiagnosticsTime})
+	if err != nil {
+		t.Fatalf("ExportDiagnostics() error = %v", err)
+	}
+	graph := bundle.GraphCompatibility
+	if graph.StateStatus != GraphStatusFail || graph.Validation.Status != GraphStatusFail {
+		t.Fatalf("graph compatibility = %#v, want failing graph state", graph)
+	}
+	payload, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatalf("marshal graph compatibility: %v", err)
+	}
+	if strings.Contains(string(payload), secret) || !strings.Contains(string(payload), RedactedPlaceholder) {
+		t.Fatalf("graph compatibility = %s, want redacted invalid graph evidence", payload)
 	}
 }
 

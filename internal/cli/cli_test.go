@@ -109,7 +109,7 @@ func TestCapabilitiesJSONOutputIsProjectIndependent(t *testing.T) {
 		t.Fatalf("project schema version = %q, want %q", payload.ProjectSchemaVersion, project.SchemaVersion)
 	}
 	flags := payload.CompatibilityFlags
-	if !flags.ProjectInit || !flags.RunLifecycle || !flags.ArtifactInit || !flags.ArtifactList || !flags.ArtifactValidate || !flags.ArtifactMutation || !flags.Gates || !flags.BackendEvidenceRequirements || !flags.DiagnosticsExport || !flags.PhasePlan || !flags.ApprovalRecords || !flags.WorkflowGraphReadonly || !flags.WorkflowGraphInit || !flags.WorkflowGraphApply || !flags.WorkflowGraphExport {
+	if !flags.ProjectInit || !flags.RunLifecycle || !flags.ArtifactInit || !flags.ArtifactList || !flags.ArtifactValidate || !flags.ArtifactMutation || !flags.Gates || !flags.BackendEvidenceRequirements || !flags.DiagnosticsExport || !flags.PhasePlan || !flags.ApprovalRecords || !flags.WorkflowGraphReadonly || !flags.WorkflowGraphInit || !flags.WorkflowGraphApply || !flags.WorkflowGraphExport || !flags.WorkflowGraphDiagnostics || !flags.WorkflowGraphNoDirectYAMLFallback {
 		t.Fatalf("compatibility flags = %#v, want implemented surfaces enabled", flags)
 	}
 	if flags.InstallCommand {
@@ -2354,12 +2354,15 @@ func TestDiagnosticsExportRedactsBundleAndWritesOutput(t *testing.T) {
 	if strings.Contains(stdout.String(), secret) {
 		t.Fatalf("diagnostics bundle leaked secret: %s", stdout.String())
 	}
-	var bundle diagnosticsExportOutput
+	var bundle project.DiagnosticsBundle
 	if err := json.Unmarshal(stdout.Bytes(), &bundle); err != nil {
 		t.Fatalf("diagnostics stdout is not JSON: %v\n%s", err, stdout.String())
 	}
 	if bundle.RunID != created.RunID || len(bundle.SchemaVersions) != 6 || len(bundle.GateReports) == 0 || len(bundle.SelectedArtifacts) == 0 {
 		t.Fatalf("bundle = %#v, want run, schemas, gate reports, and selected artifacts", bundle)
+	}
+	if bundle.GraphCompatibility.SupportStatus != "supported" || bundle.GraphCompatibility.StateStatus != "missing" || !bundle.GraphCompatibility.NoDirectYAMLFallback {
+		t.Fatalf("graph compatibility = %#v, want supported missing no-fallback state", bundle.GraphCompatibility)
 	}
 	foundSelectedCLI := false
 	for _, artifact := range bundle.SelectedArtifacts {
@@ -2383,8 +2386,11 @@ func TestDiagnosticsExportRedactsBundleAndWritesOutput(t *testing.T) {
 	if !strings.Contains(stdout.String(), "diagnostics bundle exported: diagnostics/bundle.json") {
 		t.Fatalf("human diagnostics output = %q", stdout.String())
 	}
+	if !strings.Contains(stdout.String(), "graph_compatibility: missing") {
+		t.Fatalf("human diagnostics output = %q, want graph compatibility summary", stdout.String())
+	}
 	written := readCLIText(t, filepath.Join(repo, "diagnostics", "bundle.json"))
-	if strings.Contains(written, secret) || !strings.Contains(written, project.RedactedPlaceholder) {
+	if strings.Contains(written, secret) || !strings.Contains(written, project.RedactedPlaceholder) || !strings.Contains(written, `"graph_compatibility"`) {
 		t.Fatalf("written diagnostics redaction mismatch: %s", written)
 	}
 }
@@ -2546,7 +2552,7 @@ func TestPhasePlanCLIInitSetValidateAndDiagnostics(t *testing.T) {
 	if code := runWithOptions([]string{"diagnostics", "export", "--run", created.RunID, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("diagnostics export exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
 	}
-	var bundle diagnosticsExportOutput
+	var bundle project.DiagnosticsBundle
 	if err := json.Unmarshal(stdout.Bytes(), &bundle); err != nil {
 		t.Fatalf("diagnostics stdout is not JSON: %v\n%s", err, stdout.String())
 	}

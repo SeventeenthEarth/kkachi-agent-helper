@@ -2,12 +2,12 @@
 
 `kkachi-agent-helper` is the deterministic local CLI helper for Kkachi project state, run artifacts, locks, schemas, events, diagnostics, and project bootstrap scaffolding. It stays local-first and scriptable: it does not choose a backend, plan work, review code, call network services, or store secrets.
 
-The current implementation covers `corex-001` through `corex-005`, `runwf-001` through `runwf-004`, `gates-001` through `gates-005`, `packg-001` through `packg-004`, `pilot-001` through `pilot-005`, `align-001` through `align-008`, and `graph-001` through `graph-006`.
+The current implementation covers `corex-001` through `corex-005`, `runwf-001` through `runwf-004`, `gates-001` through `gates-005`, `packg-001` through `packg-004`, `pilot-001` through `pilot-005`, `align-001` through `align-008`, and `graph-001` through `graph-007`.
 
 ## Source of truth
 
 - [Specs](docs/specs.md) — canonical behavior and schema contracts.
-- [Workflow graph SOT](docs/sot/workflow-graph.md) — authority for `.kkachi-workflow.yaml`; init, validation, explanation, semantic diff, proposal records, approval-gated apply, and non-authoritative visualization export are implemented.
+- [Workflow graph SOT](docs/sot/workflow-graph.md) — authority for `.kkachi-workflow.yaml`; init, validation, explanation, semantic diff, proposal records, approval-gated apply, non-authoritative visualization export, and compatibility diagnostics are implemented.
 - [Roadmap](docs/roadmap.md) — delivery order and task scope.
 - [Compatibility matrix](docs/compatibility.md) — helper/bridge/skills version contract.
 - [Release notes template](docs/release-notes-template.md) — release note format and verification checklist.
@@ -109,7 +109,7 @@ kkachi-agent-helper --help
 kkachi-agent-helper [--json] <command>
 ```
 
-`capabilities --json` is the stable machine-readable command-surface report for KHS activation checks. It includes helper build info, the embedded project schema version, supported command groups, compatibility flags such as artifact mutation, phase-plan support, approval records, read-only workflow graph support, workflow graph init/apply/export support, and explicit omitted surfaces such as the removed `install` command.
+`capabilities --json` is the stable machine-readable command-surface report for KHS activation checks. It includes helper build info, the embedded project schema version, supported command groups, compatibility flags such as artifact mutation, phase-plan support, approval records, read-only workflow graph support, workflow graph init/apply/export/diagnostics support, explicit no-direct-YAML-fallback graph support, and explicit omitted surfaces such as the removed `install` command.
 
 Help is project-independent and exits `0`. Use `kkachi-agent-helper <command> --help`, supported subcommand topics such as `kkachi-agent-helper project init --help` and `kkachi-agent-helper run create --help`, or `kkachi-agent-helper help <command> [subcommand]` for required arguments, options, and JSON behavior. Implemented command groups have group help pages, including `schema`, `event`, `lock`, `phase-plan`, `approval`, and `graph`. `--json` with help emits structured help JSON; compatibility automation should still prefer `capabilities --json`.
 
@@ -223,6 +223,8 @@ Diagnostics:
 kkachi-agent-helper diagnostics export [--run <run_id>] [--output <repo-relative-path>] [--json]
 ```
 
+Diagnostics bundles include top-level `graph_compatibility` evidence with graph support status, `.kkachi-workflow.yaml` validation state, forbidden fallback sources, and `no_direct_yaml_fallback: true`. Missing or invalid graph state is reported inside the support-safe bundle so KHS can fail closed when graph support is required; diagnostics export itself still succeeds unless the export path or run selection is invalid.
+
 ## KHS/KAH compatibility contract
 
 KAH owns deterministic helper state after KHS or a user chooses to apply the Kkachi workflow. It validates declared state, artifacts, schemas, gates, events, locks, diagnostics, command surfaces, phase plans, backend evidence, and approval records. KHS owns workflow policy: whether to trigger the workflow, phase applicability and ordering, checklist normalization, backend-use decisions, and any commander reasoning. KAH must not promote itself into planner, backend selector, reviewer, Hermes skill installer, or workflow-policy owner.
@@ -231,7 +233,7 @@ KHS `main` may install KAH with `go install github.com/SeventeenthEarth/kkachi-a
 
 Project bootstrap remains `project init` / `project init --force`: KAH creates or reconfigures helper-managed project state, schemas, overlays, and docs maps, but never installs Hermes/KHS skill content. Hermes skill installation belongs to Hermes native tooling.
 
-Workflow graph support is implemented for `graph init`, `graph validate`, `graph explain`, `graph diff`, `graph propose`, `graph apply`, and `graph export`, advertised through `capabilities --json` command inventory and command help. `.kkachi-workflow.yaml` is the project-level graph file for initialized/validated/explained/diffed/applied graph state; graph proposals are helper-managed evidence until approval-gated apply records `graph.applied`; graph exports are generated visualization artifacts only. KHS must fail closed instead of silently editing YAML or using generated diagrams, `.kkachi/config.yaml`, stale `.kkachi/` state, KHS defaults, or Kkachi v2 `.kkachi/config/workflows/` as fallback graph authority.
+Workflow graph support is implemented for `graph init`, `graph validate`, `graph explain`, `graph diff`, `graph propose`, `graph apply`, `graph export`, and graph compatibility diagnostics, advertised through `capabilities --json` command inventory, compatibility flags, diagnostics bundles, and command help. `.kkachi-workflow.yaml` is the project-level graph file for initialized/validated/explained/diffed/applied graph state; graph proposals are helper-managed evidence until approval-gated apply records `graph.applied`; graph exports are generated visualization artifacts only. KHS must fail closed instead of silently editing YAML or using generated diagrams, `.kkachi/config.yaml`, stale `.kkachi/` state, KHS defaults, or Kkachi v2 `.kkachi/config/workflows/` as fallback graph authority.
 
 Capability records follow the same boundary. KAH owns project-local `.kkachi/` persistence, evidence, and audit surfaces for accepted capability snapshots and reports, but it does not discover backend-native inventories and does not make a KHS semantic catalog callable. KAB owns raw backend-native discovery/verification; KHS owns workflow/prompt/semantic guidance; the responsible operator owns final active prompt selection.
 
@@ -246,5 +248,5 @@ Capability records follow the same boundary. KAH owns project-local `.kkachi/` p
 - `artifact write`, `artifact append`, and markdown `artifact set-status` safely mutate canonical run artifacts with atomic writes and audit events; direct file reads remain compatible during migration. Schema-owned backend JSON artifacts reject generic lifecycle `set-status` and must be rewritten with valid JSON evidence.
 - `phase-plan` stores and validates KHS-declared `phase-plan.yaml` state only; KHS owns phase applicability and workflow policy. `--approval-required true` makes final phase-plan validation require an approved KAH approval record for that phase.
 - `approval` records KHS-declared approval requests and decisions as strict events; KAH does not decide whether approval is needed.
-- `diagnostics export` redacts token-like values and exports only a selected support-safe artifact set.
+- `diagnostics export` redacts token-like values, exports only a selected support-safe artifact set, and includes `graph_compatibility` so KHS can fail closed without directly parsing fallback YAML.
 - Canonical exit codes are `0` success, `1` internal failure, `2` usage/unsupported command state, `3` fail-closed state or validation problems, and `4` missing repository root.

@@ -33,15 +33,17 @@ func TestCapabilitiesJSONAtBinaryBoundary(t *testing.T) {
 		} `json:"helper"`
 		ProjectSchemaVersion string `json:"project_schema_version"`
 		CompatibilityFlags   struct {
-			BackendEvidenceRequirements bool `json:"backend_evidence_requirements"`
-			PhasePlan                   bool `json:"phase_plan"`
-			ArtifactMutation            bool `json:"artifact_mutation"`
-			ApprovalRecords             bool `json:"approval_records"`
-			WorkflowGraphReadonly       bool `json:"workflow_graph_readonly"`
-			WorkflowGraphInit           bool `json:"workflow_graph_init"`
-			WorkflowGraphApply          bool `json:"workflow_graph_apply"`
-			WorkflowGraphExport         bool `json:"workflow_graph_export"`
-			InstallCommand              bool `json:"install_command"`
+			BackendEvidenceRequirements       bool `json:"backend_evidence_requirements"`
+			PhasePlan                         bool `json:"phase_plan"`
+			ArtifactMutation                  bool `json:"artifact_mutation"`
+			ApprovalRecords                   bool `json:"approval_records"`
+			WorkflowGraphReadonly             bool `json:"workflow_graph_readonly"`
+			WorkflowGraphInit                 bool `json:"workflow_graph_init"`
+			WorkflowGraphApply                bool `json:"workflow_graph_apply"`
+			WorkflowGraphExport               bool `json:"workflow_graph_export"`
+			WorkflowGraphDiagnostics          bool `json:"workflow_graph_diagnostics"`
+			WorkflowGraphNoDirectYAMLFallback bool `json:"workflow_graph_no_direct_yaml_fallback"`
+			InstallCommand                    bool `json:"install_command"`
 		} `json:"compatibility_flags"`
 		OmittedSurfaces []struct {
 			Name   string `json:"name"`
@@ -54,7 +56,7 @@ func TestCapabilitiesJSONAtBinaryBoundary(t *testing.T) {
 	if payload.Helper.Version != "0.1.0" || payload.ProjectSchemaVersion != "0.1" {
 		t.Fatalf("payload versions = %#v, want helper 0.1.0 and schema 0.1", payload)
 	}
-	if !payload.CompatibilityFlags.BackendEvidenceRequirements || !payload.CompatibilityFlags.PhasePlan || !payload.CompatibilityFlags.ArtifactMutation || !payload.CompatibilityFlags.ApprovalRecords || !payload.CompatibilityFlags.WorkflowGraphReadonly || !payload.CompatibilityFlags.WorkflowGraphInit || !payload.CompatibilityFlags.WorkflowGraphApply || !payload.CompatibilityFlags.WorkflowGraphExport || payload.CompatibilityFlags.InstallCommand {
+	if !payload.CompatibilityFlags.BackendEvidenceRequirements || !payload.CompatibilityFlags.PhasePlan || !payload.CompatibilityFlags.ArtifactMutation || !payload.CompatibilityFlags.ApprovalRecords || !payload.CompatibilityFlags.WorkflowGraphReadonly || !payload.CompatibilityFlags.WorkflowGraphInit || !payload.CompatibilityFlags.WorkflowGraphApply || !payload.CompatibilityFlags.WorkflowGraphExport || !payload.CompatibilityFlags.WorkflowGraphDiagnostics || !payload.CompatibilityFlags.WorkflowGraphNoDirectYAMLFallback || payload.CompatibilityFlags.InstallCommand {
 		t.Fatalf("compatibility flags = %#v, want current align support matrix", payload.CompatibilityFlags)
 	}
 	foundInstall := false
@@ -1990,6 +1992,9 @@ func TestPilot002DiagnosticsExportActiveRunAndOverwriteSafety(t *testing.T) {
 	bundleOutput := runHelper(t, binary, repo, "diagnostics", "export", "--json")
 	assertOutputContains(t, bundleOutput, `"run_id":"`+created.RunID+`"`, "active diagnostics bundle")
 	assertOutputContains(t, bundleOutput, `"schema_versions":`, "active diagnostics bundle")
+	assertOutputContains(t, bundleOutput, `"graph_compatibility":`, "active diagnostics bundle")
+	assertOutputContains(t, bundleOutput, `"state_status":"missing"`, "active diagnostics bundle")
+	assertOutputContains(t, bundleOutput, `"no_direct_yaml_fallback":true`, "active diagnostics bundle")
 	assertOutputContains(t, bundleOutput, `"selected_artifacts":`, "active diagnostics bundle")
 	assertOutputContains(t, bundleOutput, `"api_token":"[REDACTED]"`, "active diagnostics bundle")
 	if strings.Contains(string(bundleOutput), secret) {
@@ -1999,6 +2004,8 @@ func TestPilot002DiagnosticsExportActiveRunAndOverwriteSafety(t *testing.T) {
 	runHelper(t, binary, repo, "diagnostics", "export", "--output", "diagnostics/pilot-002.json")
 	written := readFile(t, filepath.Join(repo, "diagnostics", "pilot-002.json"))
 	assertOutputContains(t, written, `"run_id": "`+created.RunID+`"`, "written diagnostics bundle")
+	assertOutputContains(t, written, `"graph_compatibility": {`, "written diagnostics bundle")
+	assertOutputContains(t, written, `"state_status": "missing"`, "written diagnostics bundle")
 	assertOutputContains(t, written, `"api_token": "[REDACTED]"`, "written diagnostics bundle")
 	if strings.Contains(string(written), secret) {
 		t.Fatalf("written diagnostics bundle leaked secret: %s", string(written))

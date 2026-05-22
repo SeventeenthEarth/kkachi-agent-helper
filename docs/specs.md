@@ -131,11 +131,11 @@ Light mode may use the same artifact names with shorter content or explicit not-
 
 ### Project workflow graph note
 
-Status: `graph-006` non-authoritative graph export implemented. `docs/sot/workflow-graph.md` is the narrower SOT for `.kkachi-workflow.yaml` and the graph command surface.
+Status: `graph-007` graph compatibility diagnostics implemented. `docs/sot/workflow-graph.md` is the narrower SOT for `.kkachi-workflow.yaml`, the graph command surface, and graph compatibility diagnostics.
 
 | Path / artifact | Meaning | Owner | Authority |
 |---|---|---|---|
-| `.kkachi-workflow.yaml` | Project-level workflow graph instance | KHS proposes policy/templates; KAH initializes/validates/explains/diffs, records proposal evidence, and applies approved proposal records | Project graph file for implemented init/validation/explanation/diff/proposal/apply evidence |
+| `.kkachi-workflow.yaml` | Project-level workflow graph instance | KHS proposes policy/templates; KAH initializes/validates/explains/diffs, records proposal evidence, applies approved proposal records, and reports compatibility diagnostics | Project graph file for implemented init/validation/explanation/diff/proposal/apply evidence |
 | `.kkachi/config.yaml` | KAH helper runtime/configuration | KAH | Helper config only; never workflow graph SOT |
 | `.kkachi/` | Runtime state, evidence, events, locks, schemas, run artifacts | KAH | Runtime/evidence substrate |
 | `.kkachi/runs/<run_id>/phase-plan.yaml` | Run-local execution state/evidence for a KHS run | KHS content stored/validated by KAH | Run-local workflow/execution state; not project graph replacement |
@@ -423,7 +423,7 @@ kkachi-agent-helper run create --help
 
 `align-003` introduces a project-independent capabilities report for KHS activation checks. The command exits `0` on a healthy binary and does not require `.kkachi/` project state. JSON output is the compatibility contract; human output is informational only.
 
-Stable JSON output includes helper build info, `capabilities_schema_version`, embedded `project_schema_version`, supported command groups/subcommands, compatibility booleans, deprecated surfaces, and omitted surfaces. Current compatibility flags report project init/status/doctor, run lifecycle, artifact init/list/validate/mutation, gates, declared backend evidence requirements, diagnostics export, phase-plan support, approval records, read-only workflow graph support, workflow graph init support, workflow graph apply support, and workflow graph export support as supported; the graph command inventory advertises implemented `init`, `validate`, `explain`, `diff`, `propose`, `apply`, and `export` subcommands. The removed `install` command is reported as an omitted surface because Hermes/KHS skill installation belongs to Hermes native tooling. KHS `main` may use KAH `@latest` when this report advertises all required surfaces, while KHS release tags should publish tested/recommended KAH versions for reproducible historical runs.
+Stable JSON output includes helper build info, `capabilities_schema_version`, embedded `project_schema_version`, supported command groups/subcommands, compatibility booleans, deprecated surfaces, and omitted surfaces. Current compatibility flags report project init/status/doctor, run lifecycle, artifact init/list/validate/mutation, gates, declared backend evidence requirements, diagnostics export, phase-plan support, approval records, read-only workflow graph support, workflow graph init support, workflow graph apply support, workflow graph export support, workflow graph diagnostics support, and workflow graph no-direct-YAML-fallback support as supported; the graph command inventory advertises implemented `init`, `validate`, `explain`, `diff`, `propose`, `apply`, and `export` subcommands. The removed `install` command is reported as an omitted surface because Hermes/KHS skill installation belongs to Hermes native tooling. KHS `main` may use KAH `@latest` when this report advertises all required surfaces, while KHS release tags should publish tested/recommended KAH versions for reproducible historical runs.
 
 ### Help UX
 
@@ -881,12 +881,12 @@ The following items remain open until roadmap tasks close them:
 Date: 2026-05-21
 Owner: KAH deterministic helper boundary
 Confirming role: Responsible approver / governance evidence record
-Status: graph init, validation/explanation, semantic diff, proposal records, approval-gated apply, and non-authoritative export implemented
+Status: graph init, validation/explanation, semantic diff, proposal records, approval-gated apply, non-authoritative export, and compatibility diagnostics implemented
 Authority level: `docs/specs.md` remains authoritative for implemented helper behavior and generated visualization export boundaries
 Scope: KAH helper docs only
 Related docs: `README.md`, `sot/workflow-graph.md`, `roadmap.md`, `compatibility.md`, KHS `docs/sot/workflow-graph-integration.md`
-Decision summary: add `.kkachi-workflow.yaml` as candidate project-level graph state while preserving `.kkachi/config.yaml` as helper config and `phase-plan.yaml` as run-local execution evidence.
+Decision summary: add `.kkachi-workflow.yaml` as candidate project-level graph state while preserving `.kkachi/config.yaml` as helper config and `phase-plan.yaml` as run-local execution evidence; diagnostics now publish `graph_compatibility` so KHS can fail closed without direct YAML fallback.
 Evidence/source paths: governance evidence record in kanban task `t_2fb00394`
 Stale/conflict markers: older wording that treats `phase-plan.yaml` as the whole workflow SOT is narrowed to run-local state; prior root-level kkachi config YAML/JSON graph phrasing is superseded by `.kkachi-workflow.yaml` if encountered.
-Open questions: command alias and graph compatibility diagnostics remain implementation tasks.
-Next record action: implement graph compatibility diagnostics without widening export into generated-artifact authority or alias behavior.
+Open questions: command alias remains an implementation task.
+Next record action: keep graph compatibility diagnostics aligned with capabilities and release evidence without widening export into generated-artifact authority or alias behavior.

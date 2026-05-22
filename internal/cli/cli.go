@@ -70,24 +70,26 @@ type capabilityCommandGroup struct {
 }
 
 type compatibilityFlagsOutput struct {
-	ProjectInit                 bool `json:"project_init"`
-	ProjectStatus               bool `json:"project_status"`
-	ProjectDoctor               bool `json:"project_doctor"`
-	RunLifecycle                bool `json:"run_lifecycle"`
-	ArtifactInit                bool `json:"artifact_init"`
-	ArtifactList                bool `json:"artifact_list"`
-	ArtifactValidate            bool `json:"artifact_validate"`
-	ArtifactMutation            bool `json:"artifact_mutation"`
-	Gates                       bool `json:"gates"`
-	BackendEvidenceRequirements bool `json:"backend_evidence_requirements"`
-	DiagnosticsExport           bool `json:"diagnostics_export"`
-	PhasePlan                   bool `json:"phase_plan"`
-	ApprovalRecords             bool `json:"approval_records"`
-	WorkflowGraphReadonly       bool `json:"workflow_graph_readonly"`
-	WorkflowGraphInit           bool `json:"workflow_graph_init"`
-	WorkflowGraphApply          bool `json:"workflow_graph_apply"`
-	WorkflowGraphExport         bool `json:"workflow_graph_export"`
-	InstallCommand              bool `json:"install_command"`
+	ProjectInit                       bool `json:"project_init"`
+	ProjectStatus                     bool `json:"project_status"`
+	ProjectDoctor                     bool `json:"project_doctor"`
+	RunLifecycle                      bool `json:"run_lifecycle"`
+	ArtifactInit                      bool `json:"artifact_init"`
+	ArtifactList                      bool `json:"artifact_list"`
+	ArtifactValidate                  bool `json:"artifact_validate"`
+	ArtifactMutation                  bool `json:"artifact_mutation"`
+	Gates                             bool `json:"gates"`
+	BackendEvidenceRequirements       bool `json:"backend_evidence_requirements"`
+	DiagnosticsExport                 bool `json:"diagnostics_export"`
+	PhasePlan                         bool `json:"phase_plan"`
+	ApprovalRecords                   bool `json:"approval_records"`
+	WorkflowGraphReadonly             bool `json:"workflow_graph_readonly"`
+	WorkflowGraphInit                 bool `json:"workflow_graph_init"`
+	WorkflowGraphApply                bool `json:"workflow_graph_apply"`
+	WorkflowGraphExport               bool `json:"workflow_graph_export"`
+	WorkflowGraphDiagnostics          bool `json:"workflow_graph_diagnostics"`
+	WorkflowGraphNoDirectYAMLFallback bool `json:"workflow_graph_no_direct_yaml_fallback"`
+	InstallCommand                    bool `json:"install_command"`
 }
 
 type capabilitySurfaceOutput struct {
@@ -265,20 +267,6 @@ type schemaMigrationOutput struct {
 	Migrated     []string `json:"migrated"`
 	Unchanged    []string `json:"unchanged"`
 	EventID      string   `json:"event_id,omitempty"`
-}
-
-type diagnosticsExportOutput struct {
-	Version           string                       `json:"version"`
-	GeneratedAt       string                       `json:"generated_at"`
-	RootPath          string                       `json:"root_path"`
-	Redaction         project.DiagnosticsRedaction `json:"redaction"`
-	Project           project.DiagnosticsProject   `json:"project"`
-	SchemaVersions    []project.DiagnosticsSchema  `json:"schema_versions"`
-	RunID             string                       `json:"run_id,omitempty"`
-	GateReports       []project.DiagnosticsFile    `json:"gate_reports"`
-	SelectedArtifacts []project.DiagnosticsFile    `json:"selected_artifacts"`
-	ApprovalRecords   []project.ApprovalRecord     `json:"approval_records,omitempty"`
-	OutputPath        string                       `json:"output_path,omitempty"`
 }
 
 type phasePlanInitOutput struct {
@@ -2259,24 +2247,26 @@ func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
 			{Name: "graph", Status: capabilityStatusSupported, Subcommands: []string{"init", "validate", "explain", "diff", "propose", "apply", "export"}},
 		},
 		CompatibilityFlags: compatibilityFlagsOutput{
-			ProjectInit:                 true,
-			ProjectStatus:               true,
-			ProjectDoctor:               true,
-			RunLifecycle:                true,
-			ArtifactInit:                true,
-			ArtifactList:                true,
-			ArtifactValidate:            true,
-			ArtifactMutation:            true,
-			Gates:                       true,
-			BackendEvidenceRequirements: true,
-			DiagnosticsExport:           true,
-			PhasePlan:                   true,
-			ApprovalRecords:             true,
-			WorkflowGraphReadonly:       true,
-			WorkflowGraphInit:           true,
-			WorkflowGraphApply:          true,
-			WorkflowGraphExport:         true,
-			InstallCommand:              false,
+			ProjectInit:                       true,
+			ProjectStatus:                     true,
+			ProjectDoctor:                     true,
+			RunLifecycle:                      true,
+			ArtifactInit:                      true,
+			ArtifactList:                      true,
+			ArtifactValidate:                  true,
+			ArtifactMutation:                  true,
+			Gates:                             true,
+			BackendEvidenceRequirements:       true,
+			DiagnosticsExport:                 true,
+			PhasePlan:                         true,
+			ApprovalRecords:                   true,
+			WorkflowGraphReadonly:             true,
+			WorkflowGraphInit:                 true,
+			WorkflowGraphApply:                true,
+			WorkflowGraphExport:               true,
+			WorkflowGraphDiagnostics:          true,
+			WorkflowGraphNoDirectYAMLFallback: true,
+			InstallCommand:                    false,
 		},
 		DeprecatedSurfaces: []capabilitySurfaceOutput{},
 		OmittedSurfaces: []capabilitySurfaceOutput{
@@ -2611,17 +2601,17 @@ func writeSchemaMigrationResult(w io.Writer, result project.SchemaMigrationResul
 }
 
 func writeDiagnosticsExportResult(w io.Writer, result project.DiagnosticsBundle, jsonMode bool) {
-	payload := diagnosticsExportOutput{Version: result.Version, GeneratedAt: result.GeneratedAt, RootPath: result.RootPath, Redaction: result.Redaction, Project: result.Project, SchemaVersions: result.SchemaVersions, RunID: result.RunID, GateReports: result.GateReports, SelectedArtifacts: result.SelectedArtifacts, ApprovalRecords: result.ApprovalRecords, OutputPath: result.OutputPath}
-	if jsonMode || payload.OutputPath == "" {
-		_ = json.NewEncoder(w).Encode(payload)
+	if jsonMode || result.OutputPath == "" {
+		_ = json.NewEncoder(w).Encode(result)
 		return
 	}
-	fmt.Fprintf(w, "diagnostics bundle exported: %s\n", payload.OutputPath)
-	fmt.Fprintf(w, "run_id: %s\n", payload.RunID)
-	fmt.Fprintf(w, "schema_versions: %d\n", len(payload.SchemaVersions))
-	fmt.Fprintf(w, "gate_reports: %d\n", len(payload.GateReports))
-	fmt.Fprintf(w, "selected_artifacts: %d\n", len(payload.SelectedArtifacts))
-	fmt.Fprintf(w, "approval_records: %d\n", len(payload.ApprovalRecords))
+	fmt.Fprintf(w, "diagnostics bundle exported: %s\n", result.OutputPath)
+	fmt.Fprintf(w, "run_id: %s\n", result.RunID)
+	fmt.Fprintf(w, "schema_versions: %d\n", len(result.SchemaVersions))
+	fmt.Fprintf(w, "graph_compatibility: %s\n", result.GraphCompatibility.StateStatus)
+	fmt.Fprintf(w, "gate_reports: %d\n", len(result.GateReports))
+	fmt.Fprintf(w, "selected_artifacts: %d\n", len(result.SelectedArtifacts))
+	fmt.Fprintf(w, "approval_records: %d\n", len(result.ApprovalRecords))
 }
 
 func writePhasePlanInitResult(w io.Writer, result project.PhasePlanInitResult, jsonMode bool) {

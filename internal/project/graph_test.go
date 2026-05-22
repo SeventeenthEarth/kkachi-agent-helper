@@ -236,7 +236,7 @@ func TestValidateWorkflowGraphMissingAndForbiddenSources(t *testing.T) {
 	root, _ := DiscoverRoot(repo)
 
 	missing := ValidateWorkflowGraph(root, GraphOptions{})
-	if missing.Status != GraphStatusFail || !graphIssueNamed(missing.Errors, "graph_file") {
+	if missing.Status != GraphStatusFail || !graphIssueNamed(missing.Errors, graphIssueGraphFile) {
 		t.Fatalf("missing validation = %#v, want graph_file failure", missing)
 	}
 

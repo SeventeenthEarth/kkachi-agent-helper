@@ -39,7 +39,7 @@ This directory is the project archive for `kkachi-agent-helper` docs. It separat
 
 ## Decision summary
 
-- `.kkachi-workflow.yaml` is documented as project-level workflow graph state with implemented init, validation/explanation, semantic diff, proposal records, and approval-gated apply.
+- `.kkachi-workflow.yaml` is documented as project-level workflow graph state with implemented init, validation/explanation, semantic diff, proposal records, approval-gated apply, and compatibility diagnostics.
 - `.kkachi/config.yaml` remains helper runtime/configuration only.
 - `.kkachi/runs/<run_id>/phase-plan.yaml` remains run-local execution state/evidence and is not deprecated.
 - Kkachi v2 `.kkachi/config/workflows/` is outside KAH/KHS graph scope and must not be used as fallback graph authority.
@@ -53,10 +53,10 @@ This directory is the project archive for `kkachi-agent-helper` docs. It separat
 
 ## Open questions
 
-- The `.kkachi-workflow.yaml` schema is implemented for init/validation/explanation/diff/proposal/apply records; export details remain open until a later task closes.
+- The `.kkachi-workflow.yaml` schema is implemented for init/validation/explanation/diff/proposal/apply records and graph compatibility diagnostics; export is implemented as non-authoritative generated artifacts only.
 - The real command name is `kkachi-agent-helper graph`; alias policy for `kah graph` remains unimplemented and current binary evidence must be checked before use.
-- Graph export authority still requires capability/help evidence and any required review gates.
+- Generated graph exports are implemented as non-authoritative artifacts; future graph slices should not promote export output into graph authority.
 
 ## Next record action
 
-Use `docs/roadmap.md` `graph-007` as the next implementation slice for graph compatibility diagnostics. Do not widen graph export into generated-artifact authority or alias behavior.
+Use future `docs/roadmap.md` graph slices for separately scoped release or KHS consumption work. Do not widen graph export into generated-artifact authority or alias behavior.

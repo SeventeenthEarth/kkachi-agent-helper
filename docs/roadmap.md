@@ -123,7 +123,7 @@ Status values: `Planned`, `In Progress`, `Blocked`, `Completed`, `Deferred`.
 | graph-004 | `init --from-template` template ingestion and initial graph write | Completed | Accept explicit KHS template id/path, validate input, write initial `.kkachi-workflow.yaml` only when no graph exists. | Implemented `kkachi-agent-helper graph init --from-template` with built-in `khs-default`, explicit template paths, canonical initial graph write, `graph.initialized` audit event, checksum evidence, `workflow_graph_init` capability, and fail-closed existing-graph behavior. Use `init --from-template`, not `init --profile`; approved replacement is graph apply. |
 | graph-005 | Approval-gated apply with audit events and fail-closed source precedence | Completed | Apply approved proposals atomically, record checksum/version and graph audit event ids, and fail closed on invalid/missing/conflicting sources. | Implemented `kkachi-agent-helper graph apply --proposal ... --approval ...` with proposal/base/candidate checksum checks, canonical graph replacement, `last_applied_event_id`, `graph.applied` audit event, `workflow_graph_apply` capability, and no KAH policy decision. |
 | graph-006 | Visualization export to Mermaid/PlantUML as generated artifacts only | Completed | Export non-authoritative diagrams with source checksum and `authoritative: false` in JSON output. | Implemented `kkachi-agent-helper graph export --format mermaid|plantuml [--output <path>]` with generated diagram output, source checksum evidence, `workflow_graph_export` capability, and fail-closed validation/output path checks. Exports never become graph source of truth. |
-| graph-007 | KHS compatibility diagnostics/capabilities for graph support and no direct YAML fallback | Planned | Advertise graph support through capabilities, publish compatibility diagnostics, and make KHS fail closed when graph support is required but absent. | No silent direct YAML edit fallback. |
+| graph-007 | KHS compatibility diagnostics/capabilities for graph support and no direct YAML fallback | Completed | Advertise graph support through capabilities, publish compatibility diagnostics, and make KHS fail closed when graph support is required but absent. | Implemented `workflow_graph_diagnostics` and `workflow_graph_no_direct_yaml_fallback` capability flags plus diagnostics `graph_compatibility` evidence with graph validation state, forbidden fallback sources, and support-safe missing/invalid graph reporting. No silent direct YAML edit fallback. |
 
 ## Backlog and review points
 
@@ -138,12 +138,12 @@ Status values: `Planned`, `In Progress`, `Blocked`, `Completed`, `Deferred`.
 Date: 2026-05-21
 Owner: KAH roadmap archive
 Confirming role: Responsible approver / governance evidence record
-Status: graph-006 non-authoritative visualization export evidence recorded
+Status: graph-007 compatibility diagnostics evidence recorded
 Authority level: active roadmap planning record; not implementation authorization by itself
 Scope: KAH docs roadmap only
 Related docs: `README.md`, `sot/workflow-graph.md`, `specs.md`, `compatibility.md`
-Decision summary: add `graph — Command-managed workflow graph` as PR-candidate roadmap epic, complete read-only `graph-002` validation/explanation, complete `graph-003` semantic diff/proposal records, complete `graph-004` initial graph init, complete `graph-005` approval-gated apply, complete `graph-006` non-authoritative visualization export, and mark the deleted `docs/TODO-ALIGN.md` pointer stale.
+Decision summary: add `graph — Command-managed workflow graph` as PR-candidate roadmap epic, complete read-only `graph-002` validation/explanation, complete `graph-003` semantic diff/proposal records, complete `graph-004` initial graph init, complete `graph-005` approval-gated apply, complete `graph-006` non-authoritative visualization export, complete `graph-007` compatibility diagnostics/no-direct-YAML-fallback capability evidence, and mark the deleted `docs/TODO-ALIGN.md` pointer stale.
 Evidence/source paths: governance evidence record in kanban task `t_2fb00394`
 Stale/conflict markers: `docs/TODO-ALIGN.md` is deleted in the current working tree and is not active authority; the `kah graph` shorthand remains candidate until capabilities/help prove it.
-Open questions: `graph-007+` implementation details must be refined one PR at a time with capability/help evidence.
-Next record action: start `graph-007` compatibility diagnostics without widening graph export into generated-artifact authority or alias behavior.
+Open questions: `graph-008+` implementation details must be refined one PR at a time with capability/help evidence.
+Next record action: keep graph compatibility diagnostics aligned with release evidence without widening graph export into generated-artifact authority or alias behavior.

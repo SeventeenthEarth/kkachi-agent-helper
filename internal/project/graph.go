@@ -40,6 +40,8 @@ const (
 	graphTemplateSourcePath     = "path"
 	graphExportFormatMermaid    = "mermaid"
 	graphExportFormatPlantUML   = "plantuml"
+	graphIssueGraphFile         = "graph_file"
+	graphIssueActualMissing     = "missing"
 )
 
 var graphProposalIDPattern = regexp.MustCompile(`^gprop-(\d{6})\.json$`)
@@ -1344,18 +1346,18 @@ func loadWorkflowGraph(root Root, options GraphOptions) loadedWorkflowGraph {
 	data, err := os.ReadFile(path.Absolute)
 	if os.IsNotExist(err) {
 		return loadedWorkflowGraph{validation: failedGraphValidation(path.Relative, []GraphIssue{{
-			Name:     "graph_file",
+			Name:     graphIssueGraphFile,
 			Path:     path.Relative,
 			Message:  "workflow graph file is missing",
 			Hint:     "Create .kkachi-workflow.yaml through an approved graph init/apply flow before relying on graph support.",
 			Field:    "file",
 			Expected: "existing workflow graph file",
-			Actual:   "missing",
+			Actual:   graphIssueActualMissing,
 		}})}
 	}
 	if err != nil {
 		return loadedWorkflowGraph{validation: failedGraphValidation(path.Relative, []GraphIssue{{
-			Name:     "graph_file",
+			Name:     graphIssueGraphFile,
 			Path:     path.Relative,
 			Message:  "cannot read workflow graph file",
 			Hint:     "Check file permissions before validating the workflow graph.",
