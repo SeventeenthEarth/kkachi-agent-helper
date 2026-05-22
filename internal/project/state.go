@@ -66,7 +66,19 @@ func AppendEvent(root Root, options AppendEventOptions) (AppendEventResult, erro
 	return result, err
 }
 
+type preparedEventStatusMutation struct {
+	Payload      map[string]any
+	BeforeAppend func() error
+	MutateStatus func(map[string]any, string) error
+}
+
 func appendEventWithStatusMutation(root Root, options AppendEventOptions, mutateStatus func(map[string]any, string) error) (AppendEventResult, error) {
+	return appendEventWithPreparedStatusMutation(root, options, func(map[string]any, string, string) (preparedEventStatusMutation, error) {
+		return preparedEventStatusMutation{Payload: options.Payload, MutateStatus: mutateStatus}, nil
+	})
+}
+
+func appendEventWithPreparedStatusMutation(root Root, options AppendEventOptions, prepare func(map[string]any, string, string) (preparedEventStatusMutation, error)) (AppendEventResult, error) {
 	if strings.TrimSpace(root.Path) == "" {
 		return AppendEventResult{}, problem("repo_root_required", "repository root is required", "Discover the repository root before appending an event.")
 	}
@@ -132,6 +144,16 @@ func appendEventWithStatusMutation(root Root, options AppendEventOptions, mutate
 		return AppendEventResult{}, err
 	}
 	occurredAt := options.Now().UTC().Format(time.RFC3339)
+	prepared := preparedEventStatusMutation{Payload: options.Payload}
+	if prepare != nil {
+		prepared, err = prepare(status, nextID, occurredAt)
+		if err != nil {
+			return AppendEventResult{}, err
+		}
+	}
+	if prepared.Payload == nil {
+		prepared.Payload = map[string]any{}
+	}
 	event := Event{
 		Version:    EventVersion,
 		EventID:    nextID,
@@ -139,7 +161,7 @@ func appendEventWithStatusMutation(root Root, options AppendEventOptions, mutate
 		RunID:      runID,
 		Type:       strings.TrimSpace(options.Type),
 		Actor:      options.Actor,
-		Payload:    options.Payload,
+		Payload:    prepared.Payload,
 	}
 	if isApprovalEventType(event.Type) {
 		record, err := approvalRecordFromEvent(event)
@@ -173,12 +195,17 @@ func appendEventWithStatusMutation(root Root, options AppendEventOptions, mutate
 	if len(line) > MaxEventLineBytes {
 		return AppendEventResult{}, eventLineTooLargeProblem(eventsPath.Relative, len(line))
 	}
+	if prepared.BeforeAppend != nil {
+		if err := prepared.BeforeAppend(); err != nil {
+			return AppendEventResult{}, err
+		}
+	}
 	if err := appendEventLine(eventsPath, line); err != nil {
 		return AppendEventResult{}, err
 	}
 
-	if mutateStatus != nil {
-		if err := mutateStatus(status, occurredAt); err != nil {
+	if prepared.MutateStatus != nil {
+		if err := prepared.MutateStatus(status, occurredAt); err != nil {
 			return AppendEventResult{}, err
 		}
 	}

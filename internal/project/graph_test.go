@@ -1,6 +1,8 @@
 package project
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -99,6 +101,133 @@ func TestExplainWorkflowGraphNormalizesNestedArrays(t *testing.T) {
 	if !strings.Contains(string(payload), `"requires":[]`) {
 		t.Fatalf("explanation JSON = %s, want gate requires []", payload)
 	}
+}
+
+func TestInitWorkflowGraphFromKHSDefault(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+
+	result, err := InitWorkflowGraph(root, GraphInitOptions{
+		FromTemplate: graphTemplateKHSDefault,
+		Now:          func() time.Time { return time.Date(2026, 5, 22, 1, 2, 3, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatalf("InitWorkflowGraph() error = %v", err)
+	}
+	if result.Status != GraphStatusPass || result.TemplateID != graphTemplateKHSDefault || result.TemplateSource != graphTemplateSourceBuiltin || result.GraphPath != WorkflowGraphDefaultPath || result.EventID != "evt-000002" || result.Checksum == "" {
+		t.Fatalf("result = %#v, want initialized graph result", result)
+	}
+	graphPath := filepath.Join(repo, WorkflowGraphDefaultPath)
+	graphBytes, err := os.ReadFile(graphPath)
+	if err != nil {
+		t.Fatalf("read graph: %v", err)
+	}
+	sum := sha256.Sum256(graphBytes)
+	if result.Checksum != hex.EncodeToString(sum[:]) {
+		t.Fatalf("checksum = %s, want actual graph checksum", result.Checksum)
+	}
+	loaded := loadWorkflowGraph(root, GraphOptions{})
+	if loaded.validation.Status != GraphStatusPass {
+		t.Fatalf("validation = %#v, want pass", loaded.validation)
+	}
+	if loaded.graph.GraphID != "graph-kkachi-project-kkachi-test-abcdef123456" || loaded.graph.Metadata.Project != "kkachi-test" || loaded.graph.Metadata.SourceTemplate != graphTemplateKHSDefault || loaded.graph.Metadata.LastAppliedEventID != result.EventID {
+		t.Fatalf("metadata = graph_id:%s metadata:%#v, want stamped project metadata", loaded.graph.GraphID, loaded.graph.Metadata)
+	}
+	if len(loaded.graph.Phases) != len(defaultPhaseIDs) || len(loaded.graph.Edges) != len(defaultPhaseIDs)-1 || len(loaded.graph.Gates) != 0 || len(loaded.graph.Approvals) != 0 {
+		t.Fatalf("graph = phases:%d edges:%d gates:%d approvals:%d, want khs-default spine only", len(loaded.graph.Phases), len(loaded.graph.Edges), len(loaded.graph.Gates), len(loaded.graph.Approvals))
+	}
+	for i, id := range defaultPhaseIDs {
+		if loaded.graph.Phases[i].ID != id {
+			t.Fatalf("phase[%d] = %s, want %s", i, loaded.graph.Phases[i].ID, id)
+		}
+	}
+	lines := runEventLines(t, repo)
+	if !strings.Contains(lines[len(lines)-1], graphInitEventType) || !strings.Contains(lines[len(lines)-1], result.Checksum) {
+		t.Fatalf("last event = %s, want graph initialized event with checksum", lines[len(lines)-1])
+	}
+}
+
+func TestInitWorkflowGraphFromTemplatePathStampsProjectMetadata(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	templatePath := "docs/workflows/template.yaml"
+	writeGraphFile(t, repo, templatePath, strings.Replace(strings.Replace(validWorkflowGraph(), `graph_id: "graph-test"`, `graph_id: "foreign-graph"`, 1), `project: "kkachi-test"`, `project: "foreign-project"`, 1))
+
+	result, err := InitWorkflowGraph(root, GraphInitOptions{FromTemplate: templatePath})
+	if err != nil {
+		t.Fatalf("InitWorkflowGraph() error = %v", err)
+	}
+	loaded := loadWorkflowGraph(root, GraphOptions{})
+	if loaded.validation.Status != GraphStatusPass {
+		t.Fatalf("validation = %#v, want pass", loaded.validation)
+	}
+	if result.TemplateID != templatePath || result.TemplateSource != graphTemplateSourcePath {
+		t.Fatalf("result = %#v, want path template source", result)
+	}
+	if loaded.graph.GraphID != "graph-kkachi-project-kkachi-test-abcdef123456" || loaded.graph.Metadata.Project != "kkachi-test" || loaded.graph.Metadata.SourceTemplate != templatePath || loaded.graph.Metadata.ManagedBy != "kah" {
+		t.Fatalf("stamped graph = graph_id:%s metadata:%#v, want current project metadata", loaded.graph.GraphID, loaded.graph.Metadata)
+	}
+	if len(loaded.graph.Gates) != 1 || len(loaded.graph.Approvals) != 1 || loaded.graph.Proposals.Policy != "proposal-first" {
+		t.Fatalf("stamped graph = %#v, want template graph policy content preserved", loaded.graph)
+	}
+}
+
+func TestInitWorkflowGraphFailsClosedWhenGraphAlreadyExists(t *testing.T) {
+	cases := []struct {
+		name         string
+		fromTemplate string
+		setup        func(t *testing.T, repo string)
+	}{
+		{name: "valid file", setup: func(t *testing.T, repo string) { writeWorkflowGraph(t, repo, validWorkflowGraph()) }},
+		{name: "invalid file", setup: func(t *testing.T, repo string) { writeWorkflowGraph(t, repo, "not yaml\n") }},
+		{name: "invalid file before unknown template", fromTemplate: "foo", setup: func(t *testing.T, repo string) { writeWorkflowGraph(t, repo, "not yaml\n") }},
+		{name: "directory", setup: func(t *testing.T, repo string) { mustMkdir(t, filepath.Join(repo, WorkflowGraphDefaultPath)) }},
+		{name: "symlink", setup: func(t *testing.T, repo string) {
+			target := filepath.Join(repo, "target-workflow.yaml")
+			if err := os.WriteFile(target, []byte(validWorkflowGraph()), 0o600); err != nil {
+				t.Fatalf("write symlink target: %v", err)
+			}
+			if err := os.Symlink("target-workflow.yaml", filepath.Join(repo, WorkflowGraphDefaultPath)); err != nil {
+				t.Fatalf("symlink graph: %v", err)
+			}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := initializedRepo(t)
+			root, _ := DiscoverRoot(repo)
+			beforeEvents := runEventLines(t, repo)
+			tc.setup(t, repo)
+
+			fromTemplate := tc.fromTemplate
+			if fromTemplate == "" {
+				fromTemplate = graphTemplateKHSDefault
+			}
+			_, err := InitWorkflowGraph(root, GraphInitOptions{FromTemplate: fromTemplate})
+			assertProblemCode(t, err, "graph_already_exists")
+			if afterEvents := runEventLines(t, repo); len(afterEvents) != len(beforeEvents) {
+				t.Fatalf("events changed after existing graph rejection: before=%d after=%d", len(beforeEvents), len(afterEvents))
+			}
+		})
+	}
+}
+
+func TestInitWorkflowGraphRejectsInvalidTemplateInputs(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+
+	_, err := InitWorkflowGraph(root, GraphInitOptions{FromTemplate: "foo"})
+	assertProblemCode(t, err, "graph_template_unknown")
+
+	writeGraphFile(t, repo, "graphs/invalid.yaml", strings.Replace(validWorkflowGraph(), `to: "implement"`, `to: "missing"`, 1))
+	_, err = InitWorkflowGraph(root, GraphInitOptions{FromTemplate: "graphs/invalid.yaml"})
+	assertProblemCode(t, err, "graph_template_invalid")
+
+	_, err = InitWorkflowGraph(root, GraphInitOptions{FromTemplate: ".kkachi/config/workflows/templates/default.yaml"})
+	assertProblemCode(t, err, "graph_template_invalid")
+
+	_, err = InitWorkflowGraph(root, GraphInitOptions{FromTemplate: graphTemplateKHSDefault, Output: "docs/workflow.yaml"})
+	assertProblemCode(t, err, "graph_output_invalid")
 }
 
 func TestValidateWorkflowGraphMissingAndForbiddenSources(t *testing.T) {

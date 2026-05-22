@@ -38,6 +38,7 @@ func TestCapabilitiesJSONAtBinaryBoundary(t *testing.T) {
 			ArtifactMutation            bool `json:"artifact_mutation"`
 			ApprovalRecords             bool `json:"approval_records"`
 			WorkflowGraphReadonly       bool `json:"workflow_graph_readonly"`
+			WorkflowGraphInit           bool `json:"workflow_graph_init"`
 			InstallCommand              bool `json:"install_command"`
 		} `json:"compatibility_flags"`
 		OmittedSurfaces []struct {
@@ -51,7 +52,7 @@ func TestCapabilitiesJSONAtBinaryBoundary(t *testing.T) {
 	if payload.Helper.Version != "0.1.0" || payload.ProjectSchemaVersion != "0.1" {
 		t.Fatalf("payload versions = %#v, want helper 0.1.0 and schema 0.1", payload)
 	}
-	if !payload.CompatibilityFlags.BackendEvidenceRequirements || !payload.CompatibilityFlags.PhasePlan || !payload.CompatibilityFlags.ArtifactMutation || !payload.CompatibilityFlags.ApprovalRecords || !payload.CompatibilityFlags.WorkflowGraphReadonly || payload.CompatibilityFlags.InstallCommand {
+	if !payload.CompatibilityFlags.BackendEvidenceRequirements || !payload.CompatibilityFlags.PhasePlan || !payload.CompatibilityFlags.ArtifactMutation || !payload.CompatibilityFlags.ApprovalRecords || !payload.CompatibilityFlags.WorkflowGraphReadonly || !payload.CompatibilityFlags.WorkflowGraphInit || payload.CompatibilityFlags.InstallCommand {
 		t.Fatalf("compatibility flags = %#v, want current align support matrix", payload.CompatibilityFlags)
 	}
 	foundInstall := false
@@ -80,6 +81,7 @@ func TestHelpAtBinaryBoundaryDoesNotRequireProjectState(t *testing.T) {
 
 	output = runHelper(t, binary, t.TempDir(), "graph", "--help")
 	assertOutputContains(t, output, "kkachi-agent-helper graph", "graph help")
+	assertOutputContains(t, output, "graph init --from-template <template-id-or-path>", "graph help")
 	assertOutputContains(t, output, "graph validate [--file .kkachi-workflow.yaml]", "graph help")
 	assertOutputContains(t, output, "graph diff --from <repo-relative-graph>", "graph help")
 	assertOutputContains(t, output, "graph propose --patch <repo-relative-candidate-graph>", "graph help")
@@ -106,7 +108,10 @@ func TestGraphReadonlyBinaryFlow(t *testing.T) {
 		t.Fatalf("mkdir .git: %v", err)
 	}
 	runHelper(t, binary, repo, "project", "init", "--json")
-	writeIntegrationTarget(t, repo, ".kkachi-workflow.yaml", integrationValidWorkflowGraph())
+
+	initOutput := runHelper(t, binary, repo, "graph", "init", "--from-template", "khs-default", "--json")
+	assertOutputContains(t, initOutput, `"template_id":"khs-default"`, "graph init")
+	assertOutputContains(t, initOutput, `"event_id":"evt-000002"`, "graph init")
 
 	validateOutput := runHelper(t, binary, repo, "graph", "validate", "--json")
 	var validation struct {
@@ -136,10 +141,28 @@ func TestGraphReadonlyBinaryFlow(t *testing.T) {
 	if err := json.Unmarshal(explainOutput, &explained); err != nil {
 		t.Fatalf("graph explain output is not JSON: %v\n%s", err, string(explainOutput))
 	}
-	if explained.Status != "pass" || len(explained.Phases) != 2 || explained.Phases[0].ID != "plan" || len(explained.Edges) != 1 || explained.Edges[0].To != "implement" {
+	if explained.Status != "pass" || len(explained.Phases) != 13 || explained.Phases[0].ID != "intake" || len(explained.Edges) != 12 || explained.Edges[0].To != "sot" {
 		t.Fatalf("explained = %#v, want graph projection", explained)
 	}
 
+	templateRepo := t.TempDir()
+	if err := os.Mkdir(filepath.Join(templateRepo, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir template repo .git: %v", err)
+	}
+	runHelper(t, binary, templateRepo, "project", "init", "--json")
+	template := "docs/graphs/template-workflow.yaml"
+	writeIntegrationTarget(t, templateRepo, template, integrationValidWorkflowGraph())
+	templateInitOutput := runHelper(t, binary, templateRepo, "graph", "init", "--from-template", template, "--json")
+	assertOutputContains(t, templateInitOutput, `"template_id":"`+template+`"`, "template graph init")
+	assertOutputContains(t, templateInitOutput, `"template_source":"path"`, "template graph init")
+	assertOutputContains(t, templateInitOutput, `"event_id":"evt-000002"`, "template graph init")
+	assertFileContains(t, filepath.Join(templateRepo, ".kkachi-workflow.yaml"), `graph_id: "graph-kkachi-project-kkachi-test-`, "template initialized graph")
+	assertFileContains(t, filepath.Join(templateRepo, ".kkachi-workflow.yaml"), `project: "kkachi-test"`, "template initialized graph")
+	assertFileContains(t, filepath.Join(templateRepo, ".kkachi-workflow.yaml"), `source_template: "docs/graphs/template-workflow.yaml"`, "template initialized graph")
+	templateValidation := runHelper(t, binary, templateRepo, "graph", "validate", "--json")
+	assertOutputContains(t, templateValidation, `"status":"pass"`, "template graph validation")
+
+	writeIntegrationTarget(t, repo, ".kkachi-workflow.yaml", integrationValidWorkflowGraph())
 	alternate := "docs/graphs/candidate-workflow.yaml"
 	writeIntegrationTarget(t, repo, alternate, integrationValidWorkflowGraph())
 	alternateOutput := runHelper(t, binary, repo, "graph", "validate", "--file", alternate, "--json")

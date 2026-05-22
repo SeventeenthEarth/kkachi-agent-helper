@@ -120,7 +120,7 @@ Status values: `Planned`, `In Progress`, `Blocked`, `Completed`, `Deferred`.
 | graph-001 | Docs/SOT and schema v1 outline for `.kkachi-workflow.yaml` | Completed | Confirm `docs/sot/workflow-graph.md`, authority tables, source precedence, command classification, JSON/human output expectations, and schema outline. | SOT closure completed as docs-only planning authority; runtime implementation still requires capability/help evidence. |
 | graph-002 | Read-only graph validation and explanation commands | Completed | Implement capability-advertised `graph validate` and `graph explain` with fail-closed schema/source checks and compact human/JSON output. | Implemented read-only `kkachi-agent-helper graph validate/explain`, `workflow_graph_readonly` capability evidence, help/docs coverage, fail-closed source/schema validation, and unit/CLI/integration/E2E regressions. |
 | graph-003 | Semantic diff and proposal record format | Completed | Implement semantic graph diff plus proposal record storage that preserves changed phases, edges, gates, approvals, risk flags, and next action. | Implemented `kkachi-agent-helper graph diff` and `graph propose` with proposal records under `.kkachi/graph/proposals/`; proposal records do not apply graph changes. |
-| graph-004 | `init --from-template` template ingestion and initial graph write | Planned | Accept explicit KHS template id/path, validate input, write initial `.kkachi-workflow.yaml` only when no graph exists or through approved replacement. | Use `init --from-template`, not `init --profile`. |
+| graph-004 | `init --from-template` template ingestion and initial graph write | Completed | Accept explicit KHS template id/path, validate input, write initial `.kkachi-workflow.yaml` only when no graph exists. | Implemented `kkachi-agent-helper graph init --from-template` with built-in `khs-default`, explicit template paths, canonical initial graph write, `graph.initialized` audit event, checksum evidence, `workflow_graph_init` capability, and fail-closed existing-graph behavior. Use `init --from-template`, not `init --profile`; approved replacement remains graph-005. |
 | graph-005 | Approval-gated apply with audit events and fail-closed source precedence | Planned | Apply approved proposals atomically, record checksum/version and graph audit event ids, and fail closed on invalid/missing/conflicting sources. | KAH still does not decide policy. |
 | graph-006 | Visualization export to Mermaid/PlantUML as generated artifacts only | Planned | Export non-authoritative diagrams with source checksum and `authoritative: false` in JSON output. | Exports never become graph source of truth. |
 | graph-007 | KHS compatibility diagnostics/capabilities for graph support and no direct YAML fallback | Planned | Advertise graph support through capabilities, publish compatibility diagnostics, and make KHS fail closed when graph support is required but absent. | No silent direct YAML edit fallback. |
@@ -138,12 +138,12 @@ Status values: `Planned`, `In Progress`, `Blocked`, `Completed`, `Deferred`.
 Date: 2026-05-21
 Owner: KAH roadmap archive
 Confirming role: Responsible approver / governance evidence record
-Status: graph-003 semantic diff/proposal evidence recorded; graph apply/init/export evidence pending
+Status: graph-004 template ingestion/initial graph write evidence recorded; graph apply/export evidence pending
 Authority level: active roadmap planning record; not implementation authorization by itself
 Scope: KAH docs roadmap only
 Related docs: `README.md`, `sot/workflow-graph.md`, `specs.md`, `compatibility.md`
-Decision summary: add `graph — Command-managed workflow graph` as PR-candidate roadmap epic, complete read-only `graph-002` validation/explanation, complete `graph-003` semantic diff/proposal records, and mark the deleted `docs/TODO-ALIGN.md` pointer stale.
+Decision summary: add `graph — Command-managed workflow graph` as PR-candidate roadmap epic, complete read-only `graph-002` validation/explanation, complete `graph-003` semantic diff/proposal records, complete `graph-004` initial graph init, and mark the deleted `docs/TODO-ALIGN.md` pointer stale.
 Evidence/source paths: governance evidence record in kanban task `t_2fb00394`
-Stale/conflict markers: `docs/TODO-ALIGN.md` is deleted in the current working tree and is not active authority; graph apply/init/export commands and the `kah graph` shorthand remain candidate until capabilities/help prove them.
-Open questions: `graph-004+` implementation details must be refined one PR at a time with capability/help evidence.
-Next record action: start `graph-004` template ingestion/initial graph write without widening into graph apply/export behavior.
+Stale/conflict markers: `docs/TODO-ALIGN.md` is deleted in the current working tree and is not active authority; graph apply/export commands and the `kah graph` shorthand remain candidate until capabilities/help prove them.
+Open questions: `graph-005+` implementation details must be refined one PR at a time with capability/help evidence.
+Next record action: start `graph-005` approval-gated apply without widening graph init into replacement/export behavior.

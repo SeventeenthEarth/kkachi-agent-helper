@@ -64,6 +64,7 @@ Every changed line should trace directly to the user's request, the active roadm
 - Never revert existing user changes.
 - Do not touch unrelated dirty files.
 - Never run `git add`, `git commit`, or `git push`.
+- Do not directly stage files, create commits, or push branches from this repository. Leave all staging, commit creation, and pushing to the user.
 
 ## Goal-Driven Execution
 

@@ -28,8 +28,13 @@ const (
 	graphNextActionRepair       = "Repair .kkachi-workflow.yaml, then rerun graph validate."
 	graphNextActionDiffReady    = "Review the semantic diff; record a proposal before applying graph changes."
 	graphNextActionProposal     = "Record required approval evidence before graph apply; proposal storage does not apply graph changes."
+	graphNextActionInitialized  = "Graph is initialized; run graph validate or graph explain for read-only evidence."
+	graphInitEventType          = "graph.initialized"
 	graphProposalEventType      = "graph.proposal_recorded"
 	graphProposalDir            = ".kkachi/graph/proposals"
+	graphTemplateKHSDefault     = "khs-default"
+	graphTemplateSourceBuiltin  = "built_in"
+	graphTemplateSourcePath     = "path"
 )
 
 var graphProposalIDPattern = regexp.MustCompile(`^gprop-(\d{6})\.json$`)
@@ -47,6 +52,12 @@ type GraphProposeOptions struct {
 	Patch  string
 	Reason string
 	Now    func() time.Time
+}
+
+type GraphInitOptions struct {
+	FromTemplate string
+	Output       string
+	Now          func() time.Time
 }
 
 type GraphIssue struct {
@@ -177,6 +188,17 @@ type GraphProposalResult struct {
 	NextAction        string                         `json:"next_action"`
 }
 
+type GraphInitResult struct {
+	SchemaVersion  string `json:"schema_version"`
+	Status         string `json:"status"`
+	TemplateID     string `json:"template_id"`
+	TemplateSource string `json:"template_source"`
+	GraphPath      string `json:"graph_path"`
+	Checksum       string `json:"checksum"`
+	EventID        string `json:"event_id"`
+	NextAction     string `json:"next_action"`
+}
+
 type WorkflowGraphProposalRecord struct {
 	SchemaVersion     string                         `json:"schema_version"`
 	Status            string                         `json:"status"`
@@ -294,6 +316,82 @@ func DiffWorkflowGraph(root Root, options GraphDiffOptions) GraphDiffResult {
 	return diffLoadedWorkflowGraphs(from, to)
 }
 
+func InitWorkflowGraph(root Root, options GraphInitOptions) (GraphInitResult, error) {
+	var result GraphInitResult
+	err := withProjectWriteLock(root, "graph init", "", func() error {
+		var err error
+		result, err = initWorkflowGraphUnlocked(root, options)
+		return err
+	})
+	return result, err
+}
+
+func initWorkflowGraphUnlocked(root Root, options GraphInitOptions) (GraphInitResult, error) {
+	output := strings.TrimSpace(options.Output)
+	if output == "" {
+		output = WorkflowGraphDefaultPath
+	}
+	if output != WorkflowGraphDefaultPath {
+		return GraphInitResult{}, &Problem{Code: "graph_output_invalid", Message: "graph init output is not supported", Hint: "graph-004 only writes the initial .kkachi-workflow.yaml source of truth.", Field: "output", Expected: WorkflowGraphDefaultPath, Actual: output}
+	}
+	outputPath, err := ResolveRelativePath(root, output)
+	if err != nil {
+		return GraphInitResult{}, err
+	}
+	if err := rejectExistingWorkflowGraph(outputPath); err != nil {
+		return GraphInitResult{}, err
+	}
+	template, err := resolveGraphTemplate(root, options.FromTemplate)
+	if err != nil {
+		return GraphInitResult{}, err
+	}
+	if options.Now == nil {
+		options.Now = func() time.Time { return time.Now().UTC() }
+	}
+
+	var rendered []byte
+	var checksum string
+	appendResult, err := appendEventWithPreparedStatusMutation(root, AppendEventOptions{Type: graphInitEventType, Now: options.Now}, func(status map[string]any, nextID string, _ string) (preparedEventStatusMutation, error) {
+		projectID, projectName, err := graphInitProjectFacts(root, status)
+		if err != nil {
+			return preparedEventStatusMutation{}, err
+		}
+		graph := template.Graph
+		stampWorkflowGraph(&graph, projectID, projectName, template.ID, nextID)
+		rendered = encodeWorkflowGraph(graph)
+		validation := validateRenderedWorkflowGraph(rendered, outputPath.Relative)
+		if validation.Status != GraphStatusPass {
+			return preparedEventStatusMutation{}, graphInitValidationProblem(validation)
+		}
+		checksum = validation.Checksum
+		payload := map[string]any{
+			"template_id":     template.ID,
+			"template_source": template.Source,
+			"graph_path":      outputPath.Relative,
+			"checksum":        checksum,
+		}
+		return preparedEventStatusMutation{
+			Payload: payload,
+			BeforeAppend: func() error {
+				return writeNewFileAtomically(outputPath, rendered)
+			},
+		}, nil
+	})
+	if err != nil {
+		return GraphInitResult{}, err
+	}
+	return GraphInitResult{
+		SchemaVersion:  WorkflowGraphSchemaVersion,
+		Status:         GraphStatusPass,
+		TemplateID:     template.ID,
+		TemplateSource: template.Source,
+		GraphPath:      outputPath.Relative,
+		Checksum:       checksum,
+		EventID:        appendResult.EventID,
+		NextAction:     graphNextActionInitialized,
+	}, nil
+}
+
 func ProposeWorkflowGraph(root Root, options GraphProposeOptions) (GraphProposalResult, error) {
 	var result GraphProposalResult
 	err := withProjectWriteLock(root, "graph propose", "", func() error {
@@ -394,6 +492,235 @@ func normalizeWorkflowGraphGates(gates []WorkflowGraphGate) []WorkflowGraphGate 
 		}
 	}
 	return result
+}
+
+type workflowGraphTemplate struct {
+	ID     string
+	Source string
+	Graph  WorkflowGraph
+}
+
+func resolveGraphTemplate(root Root, value string) (workflowGraphTemplate, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return workflowGraphTemplate{}, &Problem{Code: "graph_template_required", Message: "graph init template is required", Hint: "Pass --from-template khs-default or a repository-relative workflow graph YAML template.", Field: "from_template", Expected: "template id or repository-relative YAML path", Actual: "empty"}
+	}
+	if value == graphTemplateKHSDefault {
+		return workflowGraphTemplate{ID: graphTemplateKHSDefault, Source: graphTemplateSourceBuiltin, Graph: builtInKHSDefaultWorkflowGraph()}, nil
+	}
+	lower := strings.ToLower(value)
+	if strings.Contains(value, "/") || strings.HasSuffix(lower, ".yaml") || strings.HasSuffix(lower, ".yml") {
+		loaded := loadWorkflowGraph(root, GraphOptions{File: value})
+		if loaded.validation.Status != GraphStatusPass {
+			return workflowGraphTemplate{}, graphTemplateValidationProblem(loaded.validation)
+		}
+		return workflowGraphTemplate{ID: loaded.validation.File, Source: graphTemplateSourcePath, Graph: loaded.graph}, nil
+	}
+	return workflowGraphTemplate{}, &Problem{Code: "graph_template_unknown", Message: "graph init template is unknown", Hint: "Use built-in template khs-default or pass a repository-relative .yaml/.yml template path.", Field: "from_template", Expected: graphTemplateKHSDefault + " or repository-relative YAML path", Actual: value}
+}
+
+func builtInKHSDefaultWorkflowGraph() WorkflowGraph {
+	phases := make([]WorkflowGraphPhase, 0, len(defaultPhaseIDs))
+	for _, id := range defaultPhaseIDs {
+		phases = append(phases, WorkflowGraphPhase{ID: id, Title: graphPhaseTitle(id), OwnerLayer: "khs", Required: true, Evidence: []string{}})
+	}
+	edges := make([]WorkflowGraphEdge, 0, len(defaultPhaseIDs)-1)
+	for i := 0; i+1 < len(defaultPhaseIDs); i++ {
+		edges = append(edges, WorkflowGraphEdge{From: defaultPhaseIDs[i], To: defaultPhaseIDs[i+1]})
+	}
+	return WorkflowGraph{
+		Version: WorkflowGraphSchemaVersion,
+		Metadata: WorkflowGraphMetadata{
+			CreatedBy: "khs",
+			ManagedBy: "kah",
+		},
+		Phases:    phases,
+		Edges:     edges,
+		Gates:     []WorkflowGraphGate{},
+		Approvals: []WorkflowGraphApproval{},
+		Proposals: WorkflowGraphProposals{Policy: "proposal-first"},
+	}
+}
+
+func graphPhaseTitle(id string) string {
+	parts := strings.Split(id, "-")
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+		parts[i] = strings.ToUpper(part[:1]) + part[1:]
+	}
+	return strings.Join(parts, " ")
+}
+
+func stampWorkflowGraph(graph *WorkflowGraph, projectID string, projectName string, sourceTemplate string, eventID string) {
+	graph.Version = WorkflowGraphSchemaVersion
+	graph.GraphID = "graph-" + projectID
+	graph.Metadata.Project = projectName
+	if strings.TrimSpace(graph.Metadata.CreatedBy) == "" {
+		graph.Metadata.CreatedBy = "khs"
+	}
+	graph.Metadata.ManagedBy = "kah"
+	graph.Metadata.SourceTemplate = sourceTemplate
+	graph.Metadata.LastAppliedEventID = eventID
+}
+
+func graphInitProjectFacts(root Root, status map[string]any) (string, string, error) {
+	projectID, ok := status["project_id"].(string)
+	projectID = strings.TrimSpace(projectID)
+	if !ok || projectID == "" {
+		return "", "", &Problem{Code: "status_project_id_invalid", Message: "project status is missing a project id", Hint: "Restore status.json before initializing workflow graph state.", Path: StatusPath, Field: "project_id", Expected: "non-empty string", Actual: "missing"}
+	}
+	configPath, err := ResolveRelativePath(root, ConfigPath)
+	if err != nil {
+		return "", "", err
+	}
+	data, err := os.ReadFile(configPath.Absolute)
+	if err != nil {
+		return "", "", &Problem{Code: "project_config_read_failed", Message: "cannot read project config", Hint: "Run project init first or restore .kkachi/config.yaml from backup.", Path: configPath.Relative, Field: "path", Expected: "readable project config", Actual: err.Error()}
+	}
+	values := parseSimpleConfig(data)
+	projectName := strings.TrimSpace(values["project.name"])
+	if projectName == "" {
+		return "", "", &Problem{Code: "project_config_invalid", Message: "project config is missing project name", Hint: "Restore the config generated by project init before initializing workflow graph state.", Path: configPath.Relative, Field: "project.name", Expected: "non-empty project name", Actual: "missing"}
+	}
+	return projectID, projectName, nil
+}
+
+func rejectExistingWorkflowGraph(path SafePath) error {
+	info, err := os.Lstat(path.Absolute)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return &Problem{Code: "path_inspection_failed", Message: "cannot inspect workflow graph path", Hint: "Check repository permissions before initializing workflow graph state.", Path: path.Relative, Field: "path", Expected: "inspectable workflow graph path", Actual: err.Error()}
+	}
+	actual := "file exists"
+	if info.IsDir() {
+		actual = "directory exists"
+	} else if info.Mode()&os.ModeSymlink != 0 {
+		actual = "symlink exists"
+	}
+	return &Problem{Code: "graph_already_exists", Message: "workflow graph already exists", Hint: "Use graph propose/apply in graph-005, or remove/repair manually with explicit governance.", Path: path.Relative, Field: "path", Expected: WorkflowGraphDefaultPath + " does not exist", Actual: actual}
+}
+
+func validateRenderedWorkflowGraph(data []byte, path string) GraphValidationResult {
+	doc := parseWorkflowGraph(data, path)
+	errors := append([]GraphIssue{}, doc.errors...)
+	errors = append(errors, validateWorkflowGraph(doc.graph, path)...)
+	sum := sha256.Sum256(data)
+	status := GraphStatusPass
+	nextAction := graphNextActionValid
+	if len(errors) > 0 {
+		status = GraphStatusFail
+		nextAction = graphNextActionRepair
+	}
+	return GraphValidationResult{SchemaVersion: WorkflowGraphSchemaVersion, Status: status, File: path, Checksum: hex.EncodeToString(sum[:]), EffectiveSource: graphEffectiveSourceProject, Errors: errors, Warnings: []GraphIssue{}, Conflicts: []GraphIssue{}, NextAction: nextAction}
+}
+
+func encodeWorkflowGraph(graph WorkflowGraph) []byte {
+	var builder strings.Builder
+	builder.WriteString("version: ")
+	builder.WriteString(yamlQuotedScalar(graph.Version))
+	builder.WriteString("\n")
+	builder.WriteString("graph_id: ")
+	builder.WriteString(yamlQuotedScalar(graph.GraphID))
+	builder.WriteString("\n")
+	builder.WriteString("metadata:\n")
+	builder.WriteString("  project: ")
+	builder.WriteString(yamlQuotedScalar(graph.Metadata.Project))
+	builder.WriteString("\n")
+	builder.WriteString("  created_by: ")
+	builder.WriteString(yamlQuotedScalar(graph.Metadata.CreatedBy))
+	builder.WriteString("\n")
+	builder.WriteString("  managed_by: ")
+	builder.WriteString(yamlQuotedScalar(graph.Metadata.ManagedBy))
+	builder.WriteString("\n")
+	if graph.Metadata.SourceTemplate != "" {
+		builder.WriteString("  source_template: ")
+		builder.WriteString(yamlQuotedScalar(graph.Metadata.SourceTemplate))
+		builder.WriteString("\n")
+	}
+	if graph.Metadata.LastAppliedEventID != "" {
+		builder.WriteString("  last_applied_event_id: ")
+		builder.WriteString(yamlQuotedScalar(graph.Metadata.LastAppliedEventID))
+		builder.WriteString("\n")
+	}
+	builder.WriteString("phases:\n")
+	for _, phase := range graph.Phases {
+		builder.WriteString("  - id: ")
+		builder.WriteString(yamlQuotedScalar(phase.ID))
+		builder.WriteString("\n")
+		if phase.Title != "" {
+			builder.WriteString("    title: ")
+			builder.WriteString(yamlQuotedScalar(phase.Title))
+			builder.WriteString("\n")
+		}
+		if phase.OwnerLayer != "" {
+			builder.WriteString("    owner_layer: ")
+			builder.WriteString(yamlQuotedScalar(phase.OwnerLayer))
+			builder.WriteString("\n")
+		}
+		builder.WriteString("    required: ")
+		builder.WriteString(strconv.FormatBool(phase.Required))
+		builder.WriteString("\n")
+		if len(phase.Evidence) > 0 {
+			builder.WriteString("    evidence: ")
+			builder.WriteString(graphYAMLStringList(phase.Evidence))
+			builder.WriteString("\n")
+		}
+	}
+	if len(graph.Edges) > 0 {
+		builder.WriteString("edges:\n")
+		for _, edge := range graph.Edges {
+			builder.WriteString("  - from: ")
+			builder.WriteString(yamlQuotedScalar(edge.From))
+			builder.WriteString("\n")
+			builder.WriteString("    to: ")
+			builder.WriteString(yamlQuotedScalar(edge.To))
+			builder.WriteString("\n")
+		}
+	}
+	if len(graph.Gates) > 0 {
+		builder.WriteString("gates:\n")
+		for _, gate := range graph.Gates {
+			builder.WriteString("  - id: ")
+			builder.WriteString(yamlQuotedScalar(gate.ID))
+			builder.WriteString("\n")
+			builder.WriteString("    requires: ")
+			builder.WriteString(graphYAMLStringList(gate.Requires))
+			builder.WriteString("\n")
+		}
+	}
+	if len(graph.Approvals) > 0 {
+		builder.WriteString("approvals:\n")
+		for _, approval := range graph.Approvals {
+			builder.WriteString("  - scope: ")
+			builder.WriteString(yamlQuotedScalar(approval.Scope))
+			builder.WriteString("\n")
+			builder.WriteString("    required_role: ")
+			builder.WriteString(yamlQuotedScalar(approval.RequiredRole))
+			builder.WriteString("\n")
+		}
+	}
+	if graph.Proposals.Policy != "" {
+		builder.WriteString("proposals:\n")
+		builder.WriteString("  policy: ")
+		builder.WriteString(yamlQuotedScalar(graph.Proposals.Policy))
+		builder.WriteString("\n")
+	}
+	return []byte(builder.String())
+}
+
+func graphYAMLStringList(values []string) string {
+	if len(values) == 0 {
+		return "[]"
+	}
+	quoted := make([]string, 0, len(values))
+	for _, value := range values {
+		quoted = append(quoted, yamlQuotedScalar(value))
+	}
+	return "[" + strings.Join(quoted, ", ") + "]"
 }
 
 func diffLoadedWorkflowGraphs(from loadedWorkflowGraph, to loadedWorkflowGraph) GraphDiffResult {
@@ -1350,4 +1677,20 @@ func graphValidationProblem(code string, message string, hint string, summary Gr
 		}
 	}
 	return &Problem{Code: code, Message: message, Hint: hint, Field: "validation", Expected: "passing base and candidate workflow graphs", Actual: actual}
+}
+
+func graphTemplateValidationProblem(validation GraphValidationResult) *Problem {
+	actual := "invalid template"
+	if len(validation.Errors) > 0 {
+		actual = validation.Errors[0].Name + ":" + validation.File
+	}
+	return &Problem{Code: "graph_template_invalid", Message: "graph init template is invalid", Hint: "Repair the workflow graph template, then rerun graph init.", Path: validation.File, Field: "from_template", Expected: "valid workflow graph template", Actual: actual}
+}
+
+func graphInitValidationProblem(validation GraphValidationResult) *Problem {
+	actual := "invalid rendered graph"
+	if len(validation.Errors) > 0 {
+		actual = validation.Errors[0].Name + ":" + validation.File
+	}
+	return &Problem{Code: "graph_init_invalid", Message: "rendered workflow graph is invalid", Hint: "Inspect the selected template and preserve stderr for diagnosis.", Path: validation.File, Field: "graph", Expected: "valid initialized workflow graph", Actual: actual}
 }

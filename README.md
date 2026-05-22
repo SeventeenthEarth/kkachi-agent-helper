@@ -2,12 +2,12 @@
 
 `kkachi-agent-helper` is the deterministic local CLI helper for Kkachi project state, run artifacts, locks, schemas, events, diagnostics, and project bootstrap scaffolding. It stays local-first and scriptable: it does not choose a backend, plan work, review code, call network services, or store secrets.
 
-The current implementation covers `corex-001` through `corex-005`, `runwf-001` through `runwf-004`, `gates-001` through `gates-005`, `packg-001` through `packg-004`, `pilot-001` through `pilot-005`, `align-001` through `align-008`, and `graph-001` through `graph-003`.
+The current implementation covers `corex-001` through `corex-005`, `runwf-001` through `runwf-004`, `gates-001` through `gates-005`, `packg-001` through `packg-004`, `pilot-001` through `pilot-005`, `align-001` through `align-008`, and `graph-001` through `graph-004`.
 
 ## Source of truth
 
 - [Specs](docs/specs.md) — canonical behavior and schema contracts.
-- [Workflow graph SOT](docs/sot/workflow-graph.md) — authority for `.kkachi-workflow.yaml`; validation, explanation, semantic diff, and proposal records are implemented, while apply/init/export remain planned.
+- [Workflow graph SOT](docs/sot/workflow-graph.md) — authority for `.kkachi-workflow.yaml`; init, validation, explanation, semantic diff, and proposal records are implemented, while apply/export remain planned.
 - [Roadmap](docs/roadmap.md) — delivery order and task scope.
 - [Compatibility matrix](docs/compatibility.md) — helper/bridge/skills version contract.
 - [Release notes template](docs/release-notes-template.md) — release note format and verification checklist.
@@ -190,13 +190,14 @@ kkachi-agent-helper approval show <run_id> [--phase <phase-id>] [--json]
 Workflow graph:
 
 ```sh
+kkachi-agent-helper graph init --from-template <khs-default|repo-relative-template.yaml> [--output .kkachi-workflow.yaml] [--json]
 kkachi-agent-helper graph validate [--file .kkachi-workflow.yaml] [--json]
 kkachi-agent-helper graph explain [--file .kkachi-workflow.yaml] [--json]
 kkachi-agent-helper graph diff --from <repo-relative-graph> --to <repo-relative-graph> [--semantic] [--json]
 kkachi-agent-helper graph propose --patch <repo-relative-candidate-graph> --reason <text> [--json]
 ```
 
-`graph validate`, `graph explain`, and `graph diff` do not write graph state. `graph propose` records `.kkachi/graph/proposals/gprop-*.json` evidence and a `graph.proposal_recorded` event for a complete candidate workflow graph, but it does not apply changes to `.kkachi-workflow.yaml`. Graph init, apply, and export surfaces remain planned.
+`graph init` writes the initial `.kkachi-workflow.yaml` only when no graph exists, using built-in `khs-default` or an explicit repository-relative YAML template path; existing graph replacement remains a later approval-gated apply behavior. `graph validate`, `graph explain`, and `graph diff` do not write graph state. `graph propose` records `.kkachi/graph/proposals/gprop-*.json` evidence and a `graph.proposal_recorded` event for a complete candidate workflow graph, but it does not apply changes to `.kkachi-workflow.yaml`. Graph apply and export surfaces remain planned.
 
 Schemas and migrations:
 
@@ -228,13 +229,13 @@ KHS `main` may install KAH with `go install github.com/SeventeenthEarth/kkachi-a
 
 Project bootstrap remains `project init` / `project init --force`: KAH creates or reconfigures helper-managed project state, schemas, overlays, and docs maps, but never installs Hermes/KHS skill content. Hermes skill installation belongs to Hermes native tooling.
 
-Workflow graph support is implemented for `graph validate`, `graph explain`, `graph diff`, and `graph propose`, advertised through `capabilities --json` command inventory and command help. `.kkachi-workflow.yaml` is the project-level graph file for validated/explained/diffed graph state; graph proposals are helper-managed evidence only until a later apply command exists. Graph init, apply, and export remain planned. KHS must fail closed instead of silently editing YAML or using generated diagrams, `.kkachi/config.yaml`, stale `.kkachi/` state, KHS defaults, or Kkachi v2 `.kkachi/config/workflows/` as fallback graph authority.
+Workflow graph support is implemented for `graph init`, `graph validate`, `graph explain`, `graph diff`, and `graph propose`, advertised through `capabilities --json` command inventory and command help. `.kkachi-workflow.yaml` is the project-level graph file for initialized/validated/explained/diffed graph state; graph proposals are helper-managed evidence only until a later apply command exists. Graph apply and export remain planned. KHS must fail closed instead of silently editing YAML or using generated diagrams, `.kkachi/config.yaml`, stale `.kkachi/` state, KHS defaults, or Kkachi v2 `.kkachi/config/workflows/` as fallback graph authority.
 
 Capability records follow the same boundary. KAH owns project-local `.kkachi/` persistence, evidence, and audit surfaces for accepted capability snapshots and reports, but it does not discover backend-native inventories and does not make a KHS semantic catalog callable. KAB owns raw backend-native discovery/verification; KHS owns workflow/prompt/semantic guidance; the responsible operator owns final active prompt selection.
 
 ## Operational notes
 
-- `.kkachi-workflow.yaml` is the project-level workflow graph file validated, explained, and diffed by the `graph` command surface; `graph propose` stores proposal evidence without applying graph changes.
+- `.kkachi-workflow.yaml` is the project-level workflow graph file initialized, validated, explained, and diffed by the `graph` command surface; `graph propose` stores proposal evidence without applying graph changes.
 - `.kkachi/config.yaml`, `.kkachi/project-overlay.yaml`, `docs/kkachi-docs-map.yaml`, `.kkachi/status.json`, `.kkachi/events.jsonl`, `.kkachi/schemas/*.schema.json`, `.kkachi/capabilities/...`, and `.kkachi/runs/<run_id>/...` are the local helper state and evidence surfaces.
 - Planned capability cache layout is `.kkachi/capabilities/current.json`, `snapshots/<id>.json`, `reports/<id>.json`, `fingerprints/<id>.json`, and `drift/<id>.json`, plus run-local `capability-snapshot.json` / `capability-check.md`. These are cache/evidence records, not backend-native inventory SOT.
 - Mutating commands fail closed when `status.last_event_id` and the event log tail diverge.

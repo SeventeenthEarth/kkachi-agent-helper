@@ -68,6 +68,90 @@ func TestGraphValidateExplicitFileJSON(t *testing.T) {
 	}
 }
 
+func TestGraphInitJSONAndHumanOutput(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	exitCode := runWithOptions([]string{"graph", "init", "--from-template", "khs-default", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	if exitCode != ExitOK {
+		t.Fatalf("exitCode = %d, want %d stderr=%s stdout=%s", exitCode, ExitOK, stderr.String(), stdout.String())
+	}
+	var initialized project.GraphInitResult
+	if err := json.Unmarshal(stdout.Bytes(), &initialized); err != nil {
+		t.Fatalf("graph init output is not JSON: %v\n%s", err, stdout.String())
+	}
+	if initialized.TemplateID != "khs-default" || initialized.TemplateSource != "built_in" || initialized.GraphPath != project.WorkflowGraphDefaultPath || initialized.Checksum == "" || initialized.EventID != "evt-000002" {
+		t.Fatalf("initialized = %#v, want khs-default init result", initialized)
+	}
+	graph := readCLITestText(t, filepath.Join(repo, project.WorkflowGraphDefaultPath))
+	for _, want := range []string{`graph_id: "graph-kkachi-project-kkachi-test-`, `project: "kkachi-test"`, `source_template: "khs-default"`, `last_applied_event_id: "evt-000002"`, `id: "request-feedback-1"`} {
+		if !strings.Contains(graph, want) {
+			t.Fatalf("graph = %s, want %s", graph, want)
+		}
+	}
+
+	repo = tempGitRepo(t)
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	exitCode = runWithOptions([]string{"graph", "init", "--from-template", "khs-default"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	if exitCode != ExitOK {
+		t.Fatalf("human exitCode = %d, want %d stderr=%s", exitCode, ExitOK, stderr.String())
+	}
+	for _, want := range []string{"graph init: pass", "template_id: khs-default", "template_source: built_in", "graph_path: .kkachi-workflow.yaml", "event_id: evt-000002"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("human init output = %q, want %q", stdout.String(), want)
+		}
+	}
+}
+
+func TestGraphInitRejectsExistingGraphAndInvalidOutput(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	writeCLIGraph(t, repo, "not yaml\n")
+	stdout.Reset()
+	stderr.Reset()
+	exitCode := runWithOptions([]string{"graph", "init", "--from-template", "khs-default", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	if exitCode != ExitSafety {
+		t.Fatalf("exitCode = %d, want %d stdout=%s stderr=%s", exitCode, ExitSafety, stdout.String(), stderr.String())
+	}
+	env := decodeErrorEnvelope(t, stderr.Bytes())
+	if env.Error.Code != "graph_already_exists" {
+		t.Fatalf("error code = %q, want graph_already_exists", env.Error.Code)
+	}
+
+	repo = tempGitRepo(t)
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	exitCode = runWithOptions([]string{"graph", "init", "--from-template", "khs-default", "--output", "docs/workflow.yaml", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	if exitCode != ExitSafety {
+		t.Fatalf("exitCode = %d, want %d stdout=%s stderr=%s", exitCode, ExitSafety, stdout.String(), stderr.String())
+	}
+	env = decodeErrorEnvelope(t, stderr.Bytes())
+	if env.Error.Code != "graph_output_invalid" {
+		t.Fatalf("error code = %q, want graph_output_invalid", env.Error.Code)
+	}
+}
+
 func TestGraphDiffJSONAndHumanOutput(t *testing.T) {
 	repo := tempGitRepo(t)
 	from := "graphs/from.yaml"
@@ -210,6 +294,13 @@ func TestGraphRejectsUsageErrorsOnStderr(t *testing.T) {
 	}{
 		{name: "missing subcommand", args: []string{"graph", "--json"}, wantCode: "graph_subcommand_required"},
 		{name: "unknown subcommand", args: []string{"graph", "render", "--json"}, wantCode: "graph_subcommand_unknown"},
+		{name: "missing init template", args: []string{"graph", "init", "--json"}, wantCode: "missing_required_option"},
+		{name: "missing init template value", args: []string{"graph", "init", "--from-template", "--json"}, wantCode: "missing_option_value"},
+		{name: "empty init template", args: []string{"graph", "init", "--from-template", "", "--json"}, wantCode: "missing_option_value"},
+		{name: "duplicate init template", args: []string{"graph", "init", "--from-template", "khs-default", "--from-template", "other.yaml", "--json"}, wantCode: "duplicate_option"},
+		{name: "duplicate init output", args: []string{"graph", "init", "--from-template", "khs-default", "--output", ".kkachi-workflow.yaml", "--output", ".kkachi-workflow.yaml", "--json"}, wantCode: "duplicate_option"},
+		{name: "profile rejected", args: []string{"graph", "init", "--from-template", "khs-default", "--profile", "khs-default", "--json"}, wantCode: "unknown_option"},
+		{name: "unknown init option", args: []string{"graph", "init", "--from-template", "khs-default", "--patch", "x", "--json"}, wantCode: "unknown_option"},
 		{name: "unknown option", args: []string{"graph", "validate", "--unknown", "--json"}, wantCode: "unknown_option"},
 		{name: "missing file value", args: []string{"graph", "validate", "--file", "--json"}, wantCode: "missing_option_value"},
 		{name: "empty file value", args: []string{"graph", "validate", "--file", "", "--json"}, wantCode: "missing_option_value"},
