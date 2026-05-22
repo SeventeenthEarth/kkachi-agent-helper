@@ -651,8 +651,34 @@ func runGraphCommand(args []string, root project.Root, stdout io.Writer, stderr 
 			return ExitOK
 		}
 		return ExitSafety
+	case "diff":
+		options, cliErr := parseGraphDiffArgs(args)
+		if cliErr != nil {
+			writeError(stderr, jsonMode, *cliErr)
+			return cliErr.ExitCode
+		}
+		result := project.DiffWorkflowGraph(root, options)
+		writeGraphDiffResult(stdout, result, jsonMode)
+		if result.Status == project.GraphStatusPass {
+			return ExitOK
+		}
+		return ExitSafety
+	case "propose":
+		options, cliErr := parseGraphProposeArgs(args)
+		if cliErr != nil {
+			writeError(stderr, jsonMode, *cliErr)
+			return cliErr.ExitCode
+		}
+		result, err := project.ProposeWorkflowGraph(root, options)
+		if err != nil {
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writeGraphProposalResult(stdout, result, jsonMode)
+		return ExitOK
 	default:
-		writeError(stderr, jsonMode, cliError{Code: "graph_subcommand_unknown", Message: "graph subcommand is not supported", Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "subcommand", Expected: "validate or explain", Actual: args[0]})
+		writeError(stderr, jsonMode, cliError{Code: "graph_subcommand_unknown", Message: "graph subcommand is not supported", Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "subcommand", Expected: "validate, explain, diff, or propose", Actual: args[0]})
 		return ExitUsage
 	}
 }
@@ -666,23 +692,109 @@ func parseGraphArgs(args []string, subcommand string) (project.GraphOptions, *cl
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
 		case "--file":
-			if i+1 >= len(args) {
-				return options, &cliError{Code: "missing_option_value", Message: "--file requires a value", Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "--file", Expected: "repository-relative workflow graph path", Actual: "missing"}
-			}
-			if strings.TrimSpace(args[i+1]) == "" {
-				return options, &cliError{Code: "missing_option_value", Message: "--file requires a non-empty value", Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "--file", Expected: "repository-relative workflow graph path", Actual: "empty"}
-			}
 			if seenFile {
 				return options, &cliError{Code: "duplicate_option", Message: "duplicate graph option \"--file\"", Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: "--file"}
 			}
+			value, next, cliErr := parseGraphValueOption(args, i, "--file", "repository-relative workflow graph path")
+			if cliErr != nil {
+				return options, cliErr
+			}
 			seenFile = true
-			options.File = args[i+1]
-			i++
+			options.File = value
+			i = next
 		default:
 			return options, &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown graph %s option %q", subcommand, args[i]), Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "--file", Actual: args[i]}
 		}
 	}
 	return options, nil
+}
+
+func parseGraphDiffArgs(args []string) (project.GraphDiffOptions, *cliError) {
+	options := project.GraphDiffOptions{}
+	if len(args) == 0 || args[0] != "diff" {
+		return options, &cliError{Code: "graph_subcommand_required", Message: "graph subcommand is required", Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "subcommand", Expected: "diff", Actual: "missing"}
+	}
+	seen := map[string]bool{}
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--semantic":
+			if seen["--semantic"] {
+				return options, &cliError{Code: "duplicate_option", Message: "duplicate graph option \"--semantic\"", Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: "--semantic"}
+			}
+			seen["--semantic"] = true
+		case "--from", "--to":
+			option := args[i]
+			if seen[option] {
+				return options, &cliError{Code: "duplicate_option", Message: "duplicate graph option \"" + option + "\"", Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: option}
+			}
+			value, next, cliErr := parseGraphValueOption(args, i, option, "repository-relative workflow graph path")
+			if cliErr != nil {
+				return options, cliErr
+			}
+			seen[option] = true
+			if option == "--from" {
+				options.From = value
+			} else {
+				options.To = value
+			}
+			i = next
+		default:
+			return options, &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown graph diff option %q", args[i]), Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "--from, --to, or --semantic", Actual: args[i]}
+		}
+	}
+	for _, required := range []string{"--from", "--to"} {
+		if !seen[required] {
+			return options, &cliError{Code: "missing_required_option", Message: "graph diff requires " + required, Hint: graphUsageHint(), ExitCode: ExitUsage, Field: required, Expected: "required graph diff option", Actual: "missing"}
+		}
+	}
+	return options, nil
+}
+
+func parseGraphProposeArgs(args []string) (project.GraphProposeOptions, *cliError) {
+	options := project.GraphProposeOptions{}
+	if len(args) == 0 || args[0] != "propose" {
+		return options, &cliError{Code: "graph_subcommand_required", Message: "graph subcommand is required", Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "subcommand", Expected: "propose", Actual: "missing"}
+	}
+	seen := map[string]bool{}
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--patch", "--reason":
+			option := args[i]
+			if seen[option] {
+				return options, &cliError{Code: "duplicate_option", Message: "duplicate graph option \"" + option + "\"", Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: option}
+			}
+			value, next, cliErr := parseGraphValueOption(args, i, option, "non-empty value")
+			if cliErr != nil {
+				return options, cliErr
+			}
+			seen[option] = true
+			if option == "--patch" {
+				options.Patch = value
+			} else {
+				options.Reason = value
+			}
+			i = next
+		default:
+			return options, &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown graph propose option %q", args[i]), Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "--patch or --reason", Actual: args[i]}
+		}
+	}
+	for _, required := range []string{"--patch", "--reason"} {
+		if !seen[required] {
+			return options, &cliError{Code: "missing_required_option", Message: "graph propose requires " + required, Hint: graphUsageHint(), ExitCode: ExitUsage, Field: required, Expected: "required graph propose option", Actual: "missing"}
+		}
+	}
+	return options, nil
+}
+
+func parseGraphValueOption(args []string, index int, option string, expected string) (string, int, *cliError) {
+	if index+1 >= len(args) {
+		return "", index, &cliError{Code: "missing_option_value", Message: option + " requires a value", Hint: graphUsageHint(), ExitCode: ExitUsage, Field: option, Expected: expected, Actual: "missing"}
+	}
+	value := args[index+1]
+	if strings.TrimSpace(value) == "" {
+		return "", index, &cliError{Code: "missing_option_value", Message: option + " requires a non-empty value", Hint: graphUsageHint(), ExitCode: ExitUsage, Field: option, Expected: expected, Actual: "empty"}
+	}
+	return value, index + 1, nil
 }
 
 func runApprovalCommand(args []string, root project.Root, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
@@ -1828,7 +1940,7 @@ func phasePlanUsageHint() string {
 }
 
 func graphUsageHint() string {
-	return "Use graph validate [--file .kkachi-workflow.yaml] or graph explain [--file .kkachi-workflow.yaml] with optional global --json."
+	return "Use graph validate [--file .kkachi-workflow.yaml], graph explain [--file .kkachi-workflow.yaml], graph diff --from <graph> --to <graph> [--semantic], or graph propose --patch <candidate-graph> --reason <text> with optional global --json."
 }
 
 func approvalUsageHint() string {
@@ -1981,7 +2093,7 @@ func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
 			{Name: "diagnostics", Status: capabilityStatusSupported, Subcommands: []string{"export"}},
 			{Name: "phase-plan", Status: capabilityStatusSupported, Subcommands: []string{"init", "show", "set", "validate"}},
 			{Name: "approval", Status: capabilityStatusSupported, Subcommands: []string{"request", "record", "show"}},
-			{Name: "graph", Status: capabilityStatusSupported, Subcommands: []string{"validate", "explain"}},
+			{Name: "graph", Status: capabilityStatusSupported, Subcommands: []string{"validate", "explain", "diff", "propose"}},
 		},
 		CompatibilityFlags: compatibilityFlagsOutput{
 			ProjectInit:                 true,
@@ -2142,12 +2254,12 @@ var helpPages = map[string]helpOutput{
 	"graph": {
 		Command:      "kkachi-agent-helper graph",
 		Status:       capabilityStatusSupported,
-		Usage:        "kkachi-agent-helper graph validate [--file .kkachi-workflow.yaml] [--json]\n  kkachi-agent-helper graph explain [--file .kkachi-workflow.yaml] [--json]",
-		Summary:      "Read-only validation and explanation for project-level .kkachi-workflow.yaml graph state.",
-		Subcommands:  []helpItem{{Name: "validate", Description: "Validate workflow graph schema, source authority, and graph references."}, {Name: "explain", Description: "Show the effective graph phases, edges, gates, approvals, and validation summary."}},
-		Options:      []helpItem{{Name: "--file <repo-relative-path>", Description: "Workflow graph file to inspect; defaults to .kkachi-workflow.yaml."}, {Name: "--json", Description: "Emit structured graph output."}, {Name: "--help", Description: "Show graph help and exit 0."}},
-		JSONBehavior: "Graph validate/explain support global --json for structured output. Failing graph validation exits 3 while emitting the graph result on stdout.",
-		Notes:        []string{"This surface is read-only: it does not initialize, write, propose, apply, export, lock, or append events.", "KAH validates declared graph state only; KHS remains responsible for workflow policy and templates."},
+		Usage:        "kkachi-agent-helper graph validate [--file .kkachi-workflow.yaml] [--json]\n  kkachi-agent-helper graph explain [--file .kkachi-workflow.yaml] [--json]\n  kkachi-agent-helper graph diff --from <repo-relative-graph> --to <repo-relative-graph> [--semantic] [--json]\n  kkachi-agent-helper graph propose --patch <repo-relative-candidate-graph> --reason <text> [--json]",
+		Summary:      "Validate, explain, diff, and record proposals for project-level .kkachi-workflow.yaml graph state.",
+		Subcommands:  []helpItem{{Name: "validate", Description: "Validate workflow graph schema, source authority, and graph references."}, {Name: "explain", Description: "Show the effective graph phases, edges, gates, approvals, and validation summary."}, {Name: "diff", Description: "Compare two valid workflow graph files semantically without writing graph state."}, {Name: "propose", Description: "Record a proposal for a complete candidate workflow graph without applying it."}},
+		Options:      []helpItem{{Name: "--file <repo-relative-path>", Description: "Workflow graph file to inspect; defaults to .kkachi-workflow.yaml for validate/explain."}, {Name: "--from <repo-relative-graph>", Description: "Base graph file for graph diff."}, {Name: "--to <repo-relative-graph>", Description: "Candidate graph file for graph diff."}, {Name: "--semantic", Description: "Accepted for graph diff; semantic comparison is always used."}, {Name: "--patch <repo-relative-candidate-graph>", Description: "Complete candidate workflow graph file for graph propose."}, {Name: "--reason <text>", Description: "Required reason recorded in the graph proposal."}, {Name: "--json", Description: "Emit structured graph output."}, {Name: "--help", Description: "Show graph help and exit 0."}},
+		JSONBehavior: "Graph validate/explain/diff/propose support global --json for structured output. Failing graph validation or diff exits 3 while emitting graph result data on stdout.",
+		Notes:        []string{"graph propose records .kkachi/graph/proposals evidence and an event; it does not edit .kkachi-workflow.yaml.", "graph apply, graph init, graph export, and kah alias behavior remain unimplemented.", "KAH validates declared graph state only; KHS remains responsible for workflow policy and templates."},
 	},
 }
 
@@ -2537,6 +2649,78 @@ func writeGraphExplainResult(w io.Writer, result project.GraphExplanationResult,
 	fmt.Fprintf(w, "next_action: %s\n", result.NextAction)
 }
 
+func writeGraphDiffResult(w io.Writer, result project.GraphDiffResult, jsonMode bool) {
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(result)
+		return
+	}
+	fmt.Fprintf(w, "graph diff: %s\n", result.Status)
+	fmt.Fprintf(w, "from: %s\n", result.From.File)
+	if result.From.Checksum != "" {
+		fmt.Fprintf(w, "from_checksum: %s\n", result.From.Checksum)
+	}
+	fmt.Fprintf(w, "to: %s\n", result.To.File)
+	if result.To.Checksum != "" {
+		fmt.Fprintf(w, "to_checksum: %s\n", result.To.Checksum)
+	}
+	fmt.Fprintf(w, "changed_phases: added=%d removed=%d modified=%d\n", len(result.ChangedPhases.Added), len(result.ChangedPhases.Removed), len(result.ChangedPhases.Modified))
+	for _, phase := range result.ChangedPhases.Added {
+		fmt.Fprintf(w, "- phase added %s\n", phase.ID)
+	}
+	for _, phase := range result.ChangedPhases.Removed {
+		fmt.Fprintf(w, "- phase removed %s\n", phase.ID)
+	}
+	for _, change := range result.ChangedPhases.Modified {
+		fmt.Fprintf(w, "- phase modified %s\n", change.Key)
+	}
+	fmt.Fprintf(w, "changed_edges: added=%d removed=%d modified=%d\n", len(result.ChangedEdges.Added), len(result.ChangedEdges.Removed), len(result.ChangedEdges.Modified))
+	for _, edge := range result.ChangedEdges.Added {
+		fmt.Fprintf(w, "- edge added %s -> %s\n", edge.From, edge.To)
+	}
+	for _, edge := range result.ChangedEdges.Removed {
+		fmt.Fprintf(w, "- edge removed %s -> %s\n", edge.From, edge.To)
+	}
+	fmt.Fprintf(w, "changed_gates: added=%d removed=%d modified=%d\n", len(result.ChangedGates.Added), len(result.ChangedGates.Removed), len(result.ChangedGates.Modified))
+	for _, gate := range result.ChangedGates.Added {
+		fmt.Fprintf(w, "- gate added %s\n", gate.ID)
+	}
+	for _, gate := range result.ChangedGates.Removed {
+		fmt.Fprintf(w, "- gate removed %s\n", gate.ID)
+	}
+	for _, change := range result.ChangedGates.Modified {
+		fmt.Fprintf(w, "- gate modified %s\n", change.Key)
+	}
+	fmt.Fprintf(w, "changed_approvals: added=%d removed=%d modified=%d\n", len(result.ChangedApprovals.Added), len(result.ChangedApprovals.Removed), len(result.ChangedApprovals.Modified))
+	for _, approval := range result.ChangedApprovals.Added {
+		fmt.Fprintf(w, "- approval added %s\n", approval.Scope)
+	}
+	for _, approval := range result.ChangedApprovals.Removed {
+		fmt.Fprintf(w, "- approval removed %s\n", approval.Scope)
+	}
+	for _, change := range result.ChangedApprovals.Modified {
+		fmt.Fprintf(w, "- approval modified %s\n", change.Key)
+	}
+	fmt.Fprintf(w, "risk_flags: %s\n", strings.Join(result.RiskFlags, ","))
+	fmt.Fprintf(w, "requires_approval: %t\n", result.RequiresApproval)
+	fmt.Fprintf(w, "next_action: %s\n", result.NextAction)
+}
+
+func writeGraphProposalResult(w io.Writer, result project.GraphProposalResult, jsonMode bool) {
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(result)
+		return
+	}
+	fmt.Fprintf(w, "graph proposal: %s\n", result.Status)
+	fmt.Fprintf(w, "proposal_id: %s\n", result.ProposalID)
+	fmt.Fprintf(w, "proposal_path: %s\n", result.ProposalPath)
+	fmt.Fprintf(w, "semantic_diff_ref: %s\n", result.SemanticDiffRef)
+	fmt.Fprintf(w, "approval_required: %t\n", result.ApprovalRequired)
+	if result.EventID != "" {
+		fmt.Fprintf(w, "event_id: %s\n", result.EventID)
+	}
+	fmt.Fprintf(w, "next_action: %s\n", result.NextAction)
+}
+
 func writeLockRecoverResult(w io.Writer, result project.LockRecoveryResult, jsonMode bool) {
 	payload := lockRecoverOutput{Recovered: result.Recovered}
 	if jsonMode {
@@ -2870,9 +3054,9 @@ func exitCodeForProblem(code string) int {
 	switch code {
 	case "repo_root_not_found":
 		return ExitNotFound
-	case "artifact_baseline_encode_failed", "artifact_json_encode_failed", "schema_encode_failed":
+	case "artifact_baseline_encode_failed", "artifact_json_encode_failed", "schema_encode_failed", "graph_proposal_encode_failed":
 		return ExitInternal
-	case "absolute_path", "empty_path", "path_escape", "repo_root_path", "symlink_escape", "symlink_resolution_failed", "path_inspection_failed", "repo_root_required", "helper_state_exists", "last_event_id_mismatch", "status_invalid_json", "status_last_event_id_invalid", "status_active_run_invalid", "event_log_invalid", "event_log_empty", "event_id_invalid", "event_id_exhausted", "run_metadata_invalid", "run_metadata_invalid_json", "active_run_conflict", "run_transition_invalid", "run_not_found", "run_id_ambiguous", "run_root_read_failed", "run_metadata_read_failed", "run_id_collision", "run_artifact_init_invalid_state", "run_artifact_mutation_invalid_state", "artifact_inspection_failed", "artifact_path_invalid", "artifact_source_missing", "artifact_source_inspection_failed", "artifact_source_invalid", "artifact_source_read_failed", "artifact_read_failed", "artifact_status_invalid", "artifact_reason_required", "artifact_status_unsupported", "artifact_status_not_applicable", "artifact_json_invalid", "status_gate_summary_invalid", "lock_conflict", "lock_stale_recovery_required", "lock_metadata_invalid", "lock_not_found", "lock_identity_mismatch", "lock_release_failed", "schema_validation_read_failed", "schema_reference_invalid", "schema_read_failed", "schema_export_inspection_failed", "schema_export_conflict", "schema_export_read_failed", "schema_migration_path_inspection_failed", "schema_migration_source_version_mismatch", "schema_migration_read_failed", "schema_migration_invalid_json", "schema_migration_invalid_event_log", "schema_migration_version_missing", "schema_migration_backup_failed", "install_manifest_read_failed", "install_manifest_invalid_json", "install_manifest_invalid", "install_manifest_kind_mismatch", "install_source_invalid", "install_source_item_invalid", "install_source_read_failed", "install_checksum_mismatch", "install_duplicate_target", "install_target_inspection_failed", "install_target_read_failed", "install_owner_marker_missing", "install_compatibility_failed", "install_preflight_blocked", "install_apply_failed", "diagnostics_encode_failed", "diagnostics_output_exists":
+	case "absolute_path", "empty_path", "path_escape", "repo_root_path", "symlink_escape", "symlink_resolution_failed", "path_inspection_failed", "repo_root_required", "helper_state_exists", "last_event_id_mismatch", "status_invalid_json", "status_last_event_id_invalid", "status_active_run_invalid", "event_log_invalid", "event_log_empty", "event_id_invalid", "event_id_exhausted", "run_metadata_invalid", "run_metadata_invalid_json", "active_run_conflict", "run_transition_invalid", "run_not_found", "run_id_ambiguous", "run_root_read_failed", "run_metadata_read_failed", "run_id_collision", "run_artifact_init_invalid_state", "run_artifact_mutation_invalid_state", "artifact_inspection_failed", "artifact_path_invalid", "artifact_source_missing", "artifact_source_inspection_failed", "artifact_source_invalid", "artifact_source_read_failed", "artifact_read_failed", "artifact_status_invalid", "artifact_reason_required", "artifact_status_unsupported", "artifact_status_not_applicable", "artifact_json_invalid", "status_gate_summary_invalid", "lock_conflict", "lock_stale_recovery_required", "lock_metadata_invalid", "lock_not_found", "lock_identity_mismatch", "lock_release_failed", "schema_validation_read_failed", "schema_reference_invalid", "schema_read_failed", "schema_export_inspection_failed", "schema_export_conflict", "schema_export_read_failed", "schema_migration_path_inspection_failed", "schema_migration_source_version_mismatch", "schema_migration_read_failed", "schema_migration_invalid_json", "schema_migration_invalid_event_log", "schema_migration_version_missing", "schema_migration_backup_failed", "install_manifest_read_failed", "install_manifest_invalid_json", "install_manifest_invalid", "install_manifest_kind_mismatch", "install_source_invalid", "install_source_item_invalid", "install_source_read_failed", "install_checksum_mismatch", "install_duplicate_target", "install_target_inspection_failed", "install_target_read_failed", "install_owner_marker_missing", "install_compatibility_failed", "install_preflight_blocked", "install_apply_failed", "diagnostics_encode_failed", "diagnostics_output_exists", "graph_proposal_invalid", "graph_proposal_inspection_failed", "graph_proposal_id_exhausted":
 		return ExitSafety
 	default:
 		return ExitUsage

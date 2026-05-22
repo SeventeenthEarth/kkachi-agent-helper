@@ -81,6 +81,8 @@ func TestHelpAtBinaryBoundaryDoesNotRequireProjectState(t *testing.T) {
 	output = runHelper(t, binary, t.TempDir(), "graph", "--help")
 	assertOutputContains(t, output, "kkachi-agent-helper graph", "graph help")
 	assertOutputContains(t, output, "graph validate [--file .kkachi-workflow.yaml]", "graph help")
+	assertOutputContains(t, output, "graph diff --from <repo-relative-graph>", "graph help")
+	assertOutputContains(t, output, "graph propose --patch <repo-relative-candidate-graph>", "graph help")
 	assertOutputContains(t, output, "--file <repo-relative-path>", "graph help")
 
 	output = runHelper(t, binary, t.TempDir(), "--json", "phase-plan", "--help")
@@ -103,6 +105,7 @@ func TestGraphReadonlyBinaryFlow(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
 		t.Fatalf("mkdir .git: %v", err)
 	}
+	runHelper(t, binary, repo, "project", "init", "--json")
 	writeIntegrationTarget(t, repo, ".kkachi-workflow.yaml", integrationValidWorkflowGraph())
 
 	validateOutput := runHelper(t, binary, repo, "graph", "validate", "--json")
@@ -150,6 +153,34 @@ func TestGraphReadonlyBinaryFlow(t *testing.T) {
 	if alternateValidation.Status != "pass" || alternateValidation.File != alternate {
 		t.Fatalf("alternate validation = %#v, want explicit graph candidate", alternateValidation)
 	}
+
+	candidate := "docs/graphs/proposed-workflow.yaml"
+	writeIntegrationTarget(t, repo, candidate, integrationCandidateWorkflowGraph())
+	diffOutput := runHelper(t, binary, repo, "graph", "diff", "--from", ".kkachi-workflow.yaml", "--to", candidate, "--semantic", "--json")
+	assertOutputContains(t, diffOutput, `"status":"pass"`, "graph diff")
+	assertOutputContains(t, diffOutput, `"changed_phases":{"added":[{"id":"ask"`, "graph diff")
+	assertOutputContains(t, diffOutput, `"risk_flags":["approvals_changed","dependencies_changed","gates_changed"]`, "graph diff")
+	assertOutputContains(t, diffOutput, `"requires_approval":true`, "graph diff")
+
+	proposeOutput := runHelper(t, binary, repo, "graph", "propose", "--patch", candidate, "--reason", "add ask phase", "--json")
+	assertOutputContains(t, proposeOutput, `"proposal_id":"gprop-000001"`, "graph propose")
+	assertOutputContains(t, proposeOutput, `"semantic_diff_ref":".kkachi/graph/proposals/gprop-000001.json#semantic_diff"`, "graph propose")
+	assertFileContains(t, filepath.Join(repo, ".kkachi", "graph", "proposals", "gprop-000001.json"), `"semantic_diff": {`, "graph proposal record")
+	assertFileContains(t, filepath.Join(repo, ".kkachi", "events.jsonl"), `"type":"graph.proposal_recorded"`, "graph proposal event")
+
+	invalidGraph := "docs/graphs/invalid-workflow.yaml"
+	writeIntegrationTarget(t, repo, invalidGraph, strings.Replace(integrationValidWorkflowGraph(), `to: "implement"`, `to: "missing"`, 1))
+	invalidDiffOutput, err := runHelperAllowError(binary, repo, "graph", "diff", "--from", invalidGraph, "--to", candidate, "--json")
+	if err == nil {
+		t.Fatalf("graph diff with invalid --from unexpectedly passed: %s", string(invalidDiffOutput))
+	}
+	assertOutputContains(t, invalidDiffOutput, `"status":"fail"`, "invalid graph diff")
+	assertOutputContains(t, invalidDiffOutput, `"name":"edge_to"`, "invalid graph diff")
+	invalidProposeOutput, err := runHelperAllowError(binary, repo, "graph", "propose", "--patch", invalidGraph, "--reason", "invalid candidate", "--json")
+	if err == nil {
+		t.Fatalf("graph propose with invalid patch unexpectedly passed: %s", string(invalidProposeOutput))
+	}
+	assertOutputContains(t, invalidProposeOutput, `"code":"graph_proposal_invalid"`, "invalid graph propose")
 
 	writeIntegrationTarget(t, repo, ".kkachi-workflow.yaml", strings.Replace(integrationValidWorkflowGraph(), `to: "implement"`, `to: "missing"`, 1))
 	failedOutput, err := runHelperAllowError(binary, repo, "graph", "validate", "--json")
@@ -1669,6 +1700,45 @@ gates:
 approvals:
   - scope: "sot-change"
     required_role: "responsible-approver"
+proposals:
+  policy: "proposal-first"
+	`
+}
+
+func integrationCandidateWorkflowGraph() string {
+	return `version: "workflow-graph/v1"
+graph_id: "graph-integration"
+metadata:
+  project: "kkachi-integration"
+  created_by: "human"
+  managed_by: "kah"
+phases:
+  - id: "plan"
+    title: "Plan"
+    owner_layer: "khs"
+    required: true
+    evidence: ["plan.md"]
+  - id: "ask"
+    title: "Ask"
+    owner_layer: "khs"
+    required: true
+    evidence: ["feedback-request.md"]
+  - id: "implement"
+    title: "Implement"
+    owner_layer: "khs"
+    required: true
+    evidence: ["diff.patch"]
+edges:
+  - from: "plan"
+    to: "ask"
+  - from: "ask"
+    to: "implement"
+gates:
+  - id: "pre-implementation"
+    requires: ["plan", "ask"]
+approvals:
+  - scope: "sot-change"
+    required_role: "required-reviewer"
 proposals:
   policy: "proposal-first"
 `

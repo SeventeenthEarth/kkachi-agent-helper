@@ -2,7 +2,7 @@
 
 Date: 2026-04-30
 Owner: KAH maintainers
-Status: source of truth for implemented helper behavior; read-only graph validation/explanation is implemented, graph mutation remains planned
+Status: source of truth for implemented helper behavior; graph validation/explanation, semantic diff, and proposal records are implemented; graph apply/init/export remain planned
 Planning graph update date: 2026-05-21
 Planning graph evidence: governance evidence record in kanban task `t_2fb00394`
 
@@ -55,7 +55,7 @@ The helper must not:
 Default target-project layout:
 
 ```text
-.kkachi-workflow.yaml          # project-level workflow graph artifact; read-only validate/explain implemented, mutation planned
+.kkachi-workflow.yaml          # project-level workflow graph artifact; validate/explain/diff implemented, proposal records stored under .kkachi/graph/proposals
 .kkachi/
   config.yaml                  # helper runtime/config only; never workflow graph SOT
   status.json
@@ -131,11 +131,11 @@ Light mode may use the same artifact names with shorter content or explicit not-
 
 ### Project workflow graph note
 
-Status: `graph-002` read-only validation/explanation implemented; graph mutation evidence pending. `docs/sot/workflow-graph.md` is the narrower SOT for `.kkachi-workflow.yaml` and the graph command surface.
+Status: `graph-003` semantic diff/proposal records implemented; graph apply/init/export evidence pending. `docs/sot/workflow-graph.md` is the narrower SOT for `.kkachi-workflow.yaml` and the graph command surface.
 
 | Path / artifact | Meaning | Owner | Authority |
 |---|---|---|---|
-| `.kkachi-workflow.yaml` | Project-level workflow graph instance | KHS proposes policy/templates; KAH validates/explains read-only today; future tasks write/apply approved graph changes | Project graph file for implemented read-only validation/explanation; mutation authority requires later audit evidence |
+| `.kkachi-workflow.yaml` | Project-level workflow graph instance | KHS proposes policy/templates; KAH validates/explains/diffs today and records proposal evidence; future tasks write/apply approved graph changes | Project graph file for implemented validation/explanation/diff/proposal evidence; graph mutation authority requires later apply evidence |
 | `.kkachi/config.yaml` | KAH helper runtime/configuration | KAH | Helper config only; never workflow graph SOT |
 | `.kkachi/` | Runtime state, evidence, events, locks, schemas, run artifacts | KAH | Runtime/evidence substrate |
 | `.kkachi/runs/<run_id>/phase-plan.yaml` | Run-local execution state/evidence for a KHS run | KHS content stored/validated by KAH | Run-local workflow/execution state; not project graph replacement |
@@ -423,7 +423,7 @@ kkachi-agent-helper run create --help
 
 `align-003` introduces a project-independent capabilities report for KHS activation checks. The command exits `0` on a healthy binary and does not require `.kkachi/` project state. JSON output is the compatibility contract; human output is informational only.
 
-Stable JSON output includes helper build info, `capabilities_schema_version`, embedded `project_schema_version`, supported command groups/subcommands, compatibility booleans, deprecated surfaces, and omitted surfaces. Current compatibility flags report project init/status/doctor, run lifecycle, artifact init/list/validate/mutation, gates, declared backend evidence requirements, diagnostics export, phase-plan support, approval records, and read-only workflow graph support as supported. The removed `install` command is reported as an omitted surface because Hermes/KHS skill installation belongs to Hermes native tooling. KHS `main` may use KAH `@latest` when this report advertises all required surfaces, while KHS release tags should publish tested/recommended KAH versions for reproducible historical runs.
+Stable JSON output includes helper build info, `capabilities_schema_version`, embedded `project_schema_version`, supported command groups/subcommands, compatibility booleans, deprecated surfaces, and omitted surfaces. Current compatibility flags report project init/status/doctor, run lifecycle, artifact init/list/validate/mutation, gates, declared backend evidence requirements, diagnostics export, phase-plan support, approval records, and read-only workflow graph support as supported; the graph command inventory also advertises implemented `diff` and `propose` subcommands. The removed `install` command is reported as an omitted surface because Hermes/KHS skill installation belongs to Hermes native tooling. KHS `main` may use KAH `@latest` when this report advertises all required surfaces, while KHS release tags should publish tested/recommended KAH versions for reproducible historical runs.
 
 ### Help UX
 
@@ -630,21 +630,21 @@ kkachi-agent-helper phase-plan validate <run_id> [--final] [--json]
 
 ### `graph` surface
 
-Status: `kkachi-agent-helper graph validate` and `kkachi-agent-helper graph explain` are implemented read-only commands. Mutation commands remain planned/candidate. If the real command remains `kkachi-agent-helper`, `kah graph` is shorthand and not evidence that a `kah` alias exists.
+Status: `kkachi-agent-helper graph validate`, `graph explain`, `graph diff`, and `graph propose` are implemented. `graph propose` records proposal evidence only and does not apply graph changes. Graph init, apply, export, and `kah graph` alias behavior remain planned/candidate.
 
 Implemented commands:
 
 ```text
 kkachi-agent-helper graph validate [--file .kkachi-workflow.yaml] [--json]
 kkachi-agent-helper graph explain [--file .kkachi-workflow.yaml] [--json]
+kkachi-agent-helper graph diff --from <repo-relative-graph> --to <repo-relative-graph> [--semantic] [--json]
+kkachi-agent-helper graph propose --patch <repo-relative-candidate-graph> --reason <text> [--json]
 ```
 
 Planned mutation and generated-artifact commands:
 
 ```text
 kah graph init --from-template <template-id-or-path> [--output .kkachi-workflow.yaml] [--json]
-kah graph diff --from <file-or-ref> --to <file-or-ref> [--semantic] [--json]
-kah graph propose --patch <patch-file> --reason <text> [--json]
 kah graph apply --proposal <proposal-id> --approval <evidence-ref> [--json]
 kah graph export --format mermaid|plantuml [--output <path>] [--json]
 ```
@@ -654,6 +654,10 @@ kah graph export --format mermaid|plantuml [--output <path>] [--json]
 The accepted graph YAML subset is intentionally narrower than full YAML: top-level fields use `key: value`, sections use a single `section:` header, list rows use inline `- key: value` items followed by indented fields, indentation is spaces-only, string lists are inline (`["item"]`), and scalars are plain or double-quoted. Anchors, aliases, block scalars, nested maps beyond the documented shape, tab indentation, bare `-` list rows, and unquoted inline comments (`value # comment`) are rejected. Quote scalar values when a literal `#` is part of the value.
 
 `graph explain` reuses validation and emits graph version, effective source, phases, edges, gates, approval requirements, pending proposals, validation summary, and next action. It is read-only and does not append events, acquire locks, write graph files, create proposals, apply changes, or export diagrams.
+
+`graph diff` validates both `--from` and `--to` graph files with the same fail-closed source/schema checks, then emits deterministic semantic changes by stable keys: phases by `id`, edges by `from -> to`, gates by `id`, and approvals by `scope`. It reports added, removed, and modified records plus `risk_flags`, `requires_approval`, `validation_summary`, and `next_action`. `--semantic` is accepted for command clarity; semantic comparison is the only implemented diff mode. Diff does not write graph files, proposal records, events, locks, or exports.
+
+`graph propose` requires initialized helper state, project event coherence, `--patch <repo-relative-candidate-graph>`, and `--reason <text>`. The patch file is a complete candidate workflow graph, not a partial patch DSL. KAH validates the current `.kkachi-workflow.yaml` and the candidate, computes the semantic diff, writes `.kkachi/graph/proposals/gprop-000001.json` style proposal records atomically under the project write lock, and appends `graph.proposal_recorded`. Proposal records include proposal id/path, timestamp, reason, base/candidate file and checksum, validation summary, embedded semantic diff, approval requirement, and next action. Successful CLI output also includes the appended event id. They never apply changes to `.kkachi-workflow.yaml`.
 
 KAH policy-mutation command category is empty. Do not document policy-setting surfaces as normal commands; this excludes workflow subcommands under the `kah` prefix, profile-driven graph initialization, gate-setting commands, review-policy setters, and graph policy setters.
 
@@ -876,12 +880,12 @@ The following items remain open until roadmap tasks close them:
 Date: 2026-05-21
 Owner: KAH deterministic helper boundary
 Confirming role: Responsible approver / governance evidence record
-Status: read-only graph validation/explanation implemented; mutation planning retained
-Authority level: `docs/specs.md` remains authoritative for implemented helper behavior; graph mutation content is planning authority until implemented
+Status: graph validation/explanation, semantic diff, and proposal records implemented; apply/init/export planning retained
+Authority level: `docs/specs.md` remains authoritative for implemented helper behavior; graph apply/init/export content is planning authority until implemented
 Scope: KAH helper docs only
 Related docs: `README.md`, `sot/workflow-graph.md`, `roadmap.md`, `compatibility.md`, KHS `docs/sot/workflow-graph-integration.md`
 Decision summary: add `.kkachi-workflow.yaml` as candidate project-level graph state while preserving `.kkachi/config.yaml` as helper config and `phase-plan.yaml` as run-local execution evidence.
 Evidence/source paths: governance evidence record in kanban task `t_2fb00394`
 Stale/conflict markers: older wording that treats `phase-plan.yaml` as the whole workflow SOT is narrowed to run-local state; prior root-level kkachi config YAML/JSON graph phrasing is superseded by `.kkachi-workflow.yaml` if encountered.
-Open questions: proposal storage, audit event schema, mutation checksum/version policy, diff/apply/export behavior, and command alias remain implementation tasks.
-Next record action: implement `graph-003` semantic graph diff plus proposal record storage without widening read-only validation/explanation.
+Open questions: graph apply/init/export behavior, mutation checksum/version policy, and command alias remain implementation tasks.
+Next record action: implement `graph-004` template ingestion/initial graph write without widening proposal records into apply/export behavior.

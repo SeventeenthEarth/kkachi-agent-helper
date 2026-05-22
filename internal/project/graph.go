@@ -3,12 +3,17 @@ package project
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -21,10 +26,27 @@ const (
 	graphEffectiveSourceProject = "project_file"
 	graphNextActionValid        = "Graph is valid; KHS may use this read-only evidence."
 	graphNextActionRepair       = "Repair .kkachi-workflow.yaml, then rerun graph validate."
+	graphNextActionDiffReady    = "Review the semantic diff; record a proposal before applying graph changes."
+	graphNextActionProposal     = "Record required approval evidence before graph apply; proposal storage does not apply graph changes."
+	graphProposalEventType      = "graph.proposal_recorded"
+	graphProposalDir            = ".kkachi/graph/proposals"
 )
+
+var graphProposalIDPattern = regexp.MustCompile(`^gprop-(\d{6})\.json$`)
 
 type GraphOptions struct {
 	File string
+}
+
+type GraphDiffOptions struct {
+	From string
+	To   string
+}
+
+type GraphProposeOptions struct {
+	Patch  string
+	Reason string
+	Now    func() time.Time
 }
 
 type GraphIssue struct {
@@ -62,6 +84,112 @@ type GraphExplanationResult struct {
 	PendingProposals     []string                `json:"pending_proposals"`
 	ValidationSummary    GraphValidationResult   `json:"validation_summary"`
 	NextAction           string                  `json:"next_action"`
+}
+
+type GraphDiffEndpoint struct {
+	File            string `json:"file"`
+	Checksum        string `json:"checksum"`
+	EffectiveSource string `json:"effective_source"`
+}
+
+type GraphDiffValidationSummary struct {
+	From GraphValidationResult `json:"from"`
+	To   GraphValidationResult `json:"to"`
+}
+
+type GraphDiffResult struct {
+	SchemaVersion     string                       `json:"schema_version"`
+	Status            string                       `json:"status"`
+	From              GraphDiffEndpoint            `json:"from"`
+	To                GraphDiffEndpoint            `json:"to"`
+	ChangedPhases     WorkflowGraphPhaseChanges    `json:"changed_phases"`
+	ChangedEdges      WorkflowGraphEdgeChanges     `json:"changed_edges"`
+	ChangedGates      WorkflowGraphGateChanges     `json:"changed_gates"`
+	ChangedApprovals  WorkflowGraphApprovalChanges `json:"changed_approvals"`
+	RiskFlags         []string                     `json:"risk_flags"`
+	RequiresApproval  bool                         `json:"requires_approval"`
+	ValidationSummary GraphDiffValidationSummary   `json:"validation_summary"`
+	NextAction        string                       `json:"next_action"`
+}
+
+type WorkflowGraphPhaseChanges struct {
+	Added    []WorkflowGraphPhase       `json:"added"`
+	Removed  []WorkflowGraphPhase       `json:"removed"`
+	Modified []WorkflowGraphPhaseChange `json:"modified"`
+}
+
+type WorkflowGraphPhaseChange struct {
+	Key    string             `json:"key"`
+	Before WorkflowGraphPhase `json:"before"`
+	After  WorkflowGraphPhase `json:"after"`
+}
+
+type WorkflowGraphEdgeChanges struct {
+	Added    []WorkflowGraphEdge       `json:"added"`
+	Removed  []WorkflowGraphEdge       `json:"removed"`
+	Modified []WorkflowGraphEdgeChange `json:"modified"`
+}
+
+type WorkflowGraphEdgeChange struct {
+	Key    string            `json:"key"`
+	Before WorkflowGraphEdge `json:"before"`
+	After  WorkflowGraphEdge `json:"after"`
+}
+
+type WorkflowGraphGateChanges struct {
+	Added    []WorkflowGraphGate       `json:"added"`
+	Removed  []WorkflowGraphGate       `json:"removed"`
+	Modified []WorkflowGraphGateChange `json:"modified"`
+}
+
+type WorkflowGraphGateChange struct {
+	Key    string            `json:"key"`
+	Before WorkflowGraphGate `json:"before"`
+	After  WorkflowGraphGate `json:"after"`
+}
+
+type WorkflowGraphApprovalChanges struct {
+	Added    []WorkflowGraphApproval       `json:"added"`
+	Removed  []WorkflowGraphApproval       `json:"removed"`
+	Modified []WorkflowGraphApprovalChange `json:"modified"`
+}
+
+type WorkflowGraphApprovalChange struct {
+	Key    string                `json:"key"`
+	Before WorkflowGraphApproval `json:"before"`
+	After  WorkflowGraphApproval `json:"after"`
+}
+
+type GraphProposalValidationSummary struct {
+	Base      GraphValidationResult `json:"base"`
+	Candidate GraphValidationResult `json:"candidate"`
+}
+
+type GraphProposalResult struct {
+	SchemaVersion     string                         `json:"schema_version"`
+	Status            string                         `json:"status"`
+	ProposalID        string                         `json:"proposal_id"`
+	ProposalPath      string                         `json:"proposal_path"`
+	ValidationSummary GraphProposalValidationSummary `json:"validation_summary"`
+	SemanticDiffRef   string                         `json:"semantic_diff_ref"`
+	ApprovalRequired  bool                           `json:"approval_required"`
+	EventID           string                         `json:"event_id,omitempty"`
+	NextAction        string                         `json:"next_action"`
+}
+
+type WorkflowGraphProposalRecord struct {
+	SchemaVersion     string                         `json:"schema_version"`
+	Status            string                         `json:"status"`
+	ProposalID        string                         `json:"proposal_id"`
+	ProposalPath      string                         `json:"proposal_path"`
+	CreatedAt         string                         `json:"created_at"`
+	Reason            string                         `json:"reason"`
+	Base              GraphDiffEndpoint              `json:"base"`
+	Candidate         GraphDiffEndpoint              `json:"candidate"`
+	ValidationSummary GraphProposalValidationSummary `json:"validation_summary"`
+	SemanticDiff      GraphDiffResult                `json:"semantic_diff"`
+	ApprovalRequired  bool                           `json:"approval_required"`
+	NextAction        string                         `json:"next_action"`
 }
 
 type WorkflowGraph struct {
@@ -160,6 +288,104 @@ func ExplainWorkflowGraph(root Root, options GraphOptions) GraphExplanationResul
 	return result
 }
 
+func DiffWorkflowGraph(root Root, options GraphDiffOptions) GraphDiffResult {
+	from := loadWorkflowGraph(root, GraphOptions{File: options.From})
+	to := loadWorkflowGraph(root, GraphOptions{File: options.To})
+	return diffLoadedWorkflowGraphs(from, to)
+}
+
+func ProposeWorkflowGraph(root Root, options GraphProposeOptions) (GraphProposalResult, error) {
+	var result GraphProposalResult
+	err := withProjectWriteLock(root, "graph propose", "", func() error {
+		var err error
+		result, err = proposeWorkflowGraphUnlocked(root, options)
+		return err
+	})
+	return result, err
+}
+
+func proposeWorkflowGraphUnlocked(root Root, options GraphProposeOptions) (GraphProposalResult, error) {
+	patch := strings.TrimSpace(options.Patch)
+	reason := strings.TrimSpace(options.Reason)
+	if patch == "" {
+		return GraphProposalResult{}, &Problem{Code: "graph_patch_required", Message: "graph proposal patch is required", Hint: "Pass --patch with a repository-relative candidate workflow graph file.", Field: "patch", Expected: "non-empty repository-relative graph path", Actual: "empty"}
+	}
+	if reason == "" {
+		return GraphProposalResult{}, &Problem{Code: "graph_proposal_reason_required", Message: "graph proposal reason is required", Hint: "Pass --reason to explain why this graph change is proposed.", Field: "reason", Expected: "non-empty proposal reason", Actual: "empty"}
+	}
+	if options.Now == nil {
+		options.Now = func() time.Time { return time.Now().UTC() }
+	}
+	if err := preflightEventCoherence(root); err != nil {
+		return GraphProposalResult{}, err
+	}
+
+	base := loadWorkflowGraph(root, GraphOptions{File: WorkflowGraphDefaultPath})
+	candidate := loadWorkflowGraph(root, GraphOptions{File: patch})
+	diff := diffLoadedWorkflowGraphs(base, candidate)
+	if diff.Status != GraphStatusPass {
+		return GraphProposalResult{}, graphValidationProblem("graph_proposal_invalid", "cannot record proposal for invalid workflow graph input", "Repair the base graph and candidate patch, then rerun graph propose.", diff.ValidationSummary)
+	}
+
+	proposalID, proposalPath, err := nextGraphProposalPath(root)
+	if err != nil {
+		return GraphProposalResult{}, err
+	}
+	created := options.Now().UTC()
+	createdAt := created.Format(time.RFC3339)
+	semanticDiffRef := proposalPath.Relative + "#semantic_diff"
+	record := WorkflowGraphProposalRecord{
+		SchemaVersion: WorkflowGraphSchemaVersion,
+		Status:        GraphStatusPass,
+		ProposalID:    proposalID,
+		ProposalPath:  proposalPath.Relative,
+		CreatedAt:     createdAt,
+		Reason:        reason,
+		Base:          diff.From,
+		Candidate:     diff.To,
+		ValidationSummary: GraphProposalValidationSummary{
+			Base:      base.validation,
+			Candidate: candidate.validation,
+		},
+		SemanticDiff:     diff,
+		ApprovalRequired: diff.RequiresApproval,
+		NextAction:       graphNextActionProposal,
+	}
+	data, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return GraphProposalResult{}, &Problem{Code: "graph_proposal_encode_failed", Message: "cannot encode graph proposal record", Hint: "Inspect graph proposal fields for unsupported JSON values.", Field: "proposal", Expected: "JSON-encodable proposal record", Actual: err.Error()}
+	}
+	data = append(data, '\n')
+	payload := map[string]any{
+		"proposal_id":        proposalID,
+		"proposal_path":      proposalPath.Relative,
+		"semantic_diff_ref":  semanticDiffRef,
+		"base_checksum":      diff.From.Checksum,
+		"candidate_checksum": diff.To.Checksum,
+		"approval_required":  diff.RequiresApproval,
+		"reason":             reason,
+	}
+	appendResult, err := appendEventWithStatusMutation(root, AppendEventOptions{Type: graphProposalEventType, Payload: payload, Now: func() time.Time {
+		return created
+	}}, func(map[string]any, string) error {
+		return writeNewFileAtomically(proposalPath, data)
+	})
+	if err != nil {
+		return GraphProposalResult{}, err
+	}
+	return GraphProposalResult{
+		SchemaVersion:     WorkflowGraphSchemaVersion,
+		Status:            GraphStatusPass,
+		ProposalID:        proposalID,
+		ProposalPath:      proposalPath.Relative,
+		ValidationSummary: record.ValidationSummary,
+		SemanticDiffRef:   semanticDiffRef,
+		ApprovalRequired:  diff.RequiresApproval,
+		EventID:           appendResult.EventID,
+		NextAction:        graphNextActionProposal,
+	}, nil
+}
+
 func normalizeWorkflowGraphGates(gates []WorkflowGraphGate) []WorkflowGraphGate {
 	result := append([]WorkflowGraphGate{}, gates...)
 	for i := range result {
@@ -168,6 +394,226 @@ func normalizeWorkflowGraphGates(gates []WorkflowGraphGate) []WorkflowGraphGate 
 		}
 	}
 	return result
+}
+
+func diffLoadedWorkflowGraphs(from loadedWorkflowGraph, to loadedWorkflowGraph) GraphDiffResult {
+	result := GraphDiffResult{
+		SchemaVersion:    WorkflowGraphSchemaVersion,
+		Status:           GraphStatusPass,
+		From:             graphDiffEndpoint(from.validation),
+		To:               graphDiffEndpoint(to.validation),
+		ChangedPhases:    WorkflowGraphPhaseChanges{Added: []WorkflowGraphPhase{}, Removed: []WorkflowGraphPhase{}, Modified: []WorkflowGraphPhaseChange{}},
+		ChangedEdges:     WorkflowGraphEdgeChanges{Added: []WorkflowGraphEdge{}, Removed: []WorkflowGraphEdge{}, Modified: []WorkflowGraphEdgeChange{}},
+		ChangedGates:     WorkflowGraphGateChanges{Added: []WorkflowGraphGate{}, Removed: []WorkflowGraphGate{}, Modified: []WorkflowGraphGateChange{}},
+		ChangedApprovals: WorkflowGraphApprovalChanges{Added: []WorkflowGraphApproval{}, Removed: []WorkflowGraphApproval{}, Modified: []WorkflowGraphApprovalChange{}},
+		RiskFlags:        []string{},
+		ValidationSummary: GraphDiffValidationSummary{
+			From: from.validation,
+			To:   to.validation,
+		},
+		NextAction: graphNextActionDiffReady,
+	}
+	if from.validation.Status != GraphStatusPass || to.validation.Status != GraphStatusPass {
+		result.Status = GraphStatusFail
+		result.NextAction = graphNextActionRepair
+		return result
+	}
+
+	result.ChangedPhases = diffWorkflowGraphPhases(from.graph.Phases, to.graph.Phases)
+	result.ChangedEdges = diffWorkflowGraphEdges(from.graph.Edges, to.graph.Edges)
+	result.ChangedGates = diffWorkflowGraphGates(from.graph.Gates, to.graph.Gates)
+	result.ChangedApprovals = diffWorkflowGraphApprovals(from.graph.Approvals, to.graph.Approvals)
+	result.RiskFlags = workflowGraphRiskFlags(from.graph, to.graph, result)
+	result.RequiresApproval = len(result.RiskFlags) > 0
+	return result
+}
+
+func graphDiffEndpoint(validation GraphValidationResult) GraphDiffEndpoint {
+	return GraphDiffEndpoint{File: validation.File, Checksum: validation.Checksum, EffectiveSource: validation.EffectiveSource}
+}
+
+func diffWorkflowGraphPhases(from []WorkflowGraphPhase, to []WorkflowGraphPhase) WorkflowGraphPhaseChanges {
+	added, removed, modified := diffWorkflowGraphEntities(
+		from,
+		to,
+		func(phase WorkflowGraphPhase) string { return phase.ID },
+		cleanWorkflowGraphPhase,
+		func(phase WorkflowGraphPhase) any { return canonicalWorkflowGraphPhase(phase) },
+		func(key string, before WorkflowGraphPhase, after WorkflowGraphPhase) WorkflowGraphPhaseChange {
+			return WorkflowGraphPhaseChange{Key: key, Before: before, After: after}
+		},
+	)
+	return WorkflowGraphPhaseChanges{Added: added, Removed: removed, Modified: modified}
+}
+
+func diffWorkflowGraphEdges(from []WorkflowGraphEdge, to []WorkflowGraphEdge) WorkflowGraphEdgeChanges {
+	added, removed, modified := diffWorkflowGraphEntities(
+		from,
+		to,
+		workflowGraphEdgeKey,
+		cleanWorkflowGraphEdge,
+		func(edge WorkflowGraphEdge) any { return edge },
+		func(key string, before WorkflowGraphEdge, after WorkflowGraphEdge) WorkflowGraphEdgeChange {
+			return WorkflowGraphEdgeChange{Key: key, Before: before, After: after}
+		},
+	)
+	return WorkflowGraphEdgeChanges{Added: added, Removed: removed, Modified: modified}
+}
+
+func diffWorkflowGraphGates(from []WorkflowGraphGate, to []WorkflowGraphGate) WorkflowGraphGateChanges {
+	added, removed, modified := diffWorkflowGraphEntities(
+		from,
+		to,
+		func(gate WorkflowGraphGate) string { return gate.ID },
+		cleanWorkflowGraphGate,
+		func(gate WorkflowGraphGate) any { return canonicalWorkflowGraphGate(gate) },
+		func(key string, before WorkflowGraphGate, after WorkflowGraphGate) WorkflowGraphGateChange {
+			return WorkflowGraphGateChange{Key: key, Before: before, After: after}
+		},
+	)
+	return WorkflowGraphGateChanges{Added: added, Removed: removed, Modified: modified}
+}
+
+func diffWorkflowGraphApprovals(from []WorkflowGraphApproval, to []WorkflowGraphApproval) WorkflowGraphApprovalChanges {
+	added, removed, modified := diffWorkflowGraphEntities(
+		from,
+		to,
+		func(approval WorkflowGraphApproval) string { return approval.Scope },
+		cleanWorkflowGraphApproval,
+		func(approval WorkflowGraphApproval) any { return approval },
+		func(key string, before WorkflowGraphApproval, after WorkflowGraphApproval) WorkflowGraphApprovalChange {
+			return WorkflowGraphApprovalChange{Key: key, Before: before, After: after}
+		},
+	)
+	return WorkflowGraphApprovalChanges{Added: added, Removed: removed, Modified: modified}
+}
+
+func diffWorkflowGraphEntities[T any, C any](
+	from []T,
+	to []T,
+	keyFor func(T) string,
+	clean func(T) T,
+	canonical func(T) any,
+	changeFor func(string, T, T) C,
+) ([]T, []T, []C) {
+	added := []T{}
+	removed := []T{}
+	modified := []C{}
+	fromByKey := map[string]T{}
+	toByKey := map[string]T{}
+	keys := map[string]bool{}
+	for _, item := range from {
+		cleaned := clean(item)
+		key := keyFor(cleaned)
+		fromByKey[key] = cleaned
+		keys[key] = true
+	}
+	for _, item := range to {
+		cleaned := clean(item)
+		key := keyFor(cleaned)
+		toByKey[key] = cleaned
+		keys[key] = true
+	}
+	for _, key := range sortedGraphKeys(keys) {
+		before, hadBefore := fromByKey[key]
+		after, hasAfter := toByKey[key]
+		switch {
+		case !hadBefore && hasAfter:
+			added = append(added, after)
+		case hadBefore && !hasAfter:
+			removed = append(removed, before)
+		case hadBefore && hasAfter && !reflect.DeepEqual(canonical(before), canonical(after)):
+			modified = append(modified, changeFor(key, before, after))
+		}
+	}
+	return added, removed, modified
+}
+
+func workflowGraphRiskFlags(from WorkflowGraph, to WorkflowGraph, diff GraphDiffResult) []string {
+	flags := map[string]bool{}
+	if from.GraphID != to.GraphID || from.Version != to.Version {
+		flags["graph_identity_changed"] = true
+	}
+	if !reflect.DeepEqual(from.Metadata, to.Metadata) {
+		flags["metadata_changed"] = true
+	}
+	if len(diff.ChangedPhases.Removed) > 0 {
+		flags["phase_removed"] = true
+	}
+	for _, change := range diff.ChangedPhases.Modified {
+		if change.Before.Required != change.After.Required {
+			flags["phase_required_changed"] = true
+			break
+		}
+	}
+	if len(diff.ChangedEdges.Added) > 0 || len(diff.ChangedEdges.Removed) > 0 || len(diff.ChangedEdges.Modified) > 0 {
+		flags["dependencies_changed"] = true
+	}
+	if len(diff.ChangedGates.Added) > 0 || len(diff.ChangedGates.Removed) > 0 || len(diff.ChangedGates.Modified) > 0 {
+		flags["gates_changed"] = true
+	}
+	if len(diff.ChangedApprovals.Added) > 0 || len(diff.ChangedApprovals.Removed) > 0 || len(diff.ChangedApprovals.Modified) > 0 {
+		flags["approvals_changed"] = true
+	}
+	return sortedGraphKeys(flags)
+}
+
+func cleanWorkflowGraphPhase(phase WorkflowGraphPhase) WorkflowGraphPhase {
+	phase.requiredSet = false
+	phase.seenFields = nil
+	if phase.Evidence == nil {
+		phase.Evidence = []string{}
+	}
+	return phase
+}
+
+func canonicalWorkflowGraphPhase(phase WorkflowGraphPhase) WorkflowGraphPhase {
+	phase = cleanWorkflowGraphPhase(phase)
+	phase.Evidence = sortedStrings(phase.Evidence)
+	return phase
+}
+
+func cleanWorkflowGraphEdge(edge WorkflowGraphEdge) WorkflowGraphEdge {
+	edge.seenFields = nil
+	return edge
+}
+
+func workflowGraphEdgeKey(edge WorkflowGraphEdge) string {
+	return edge.From + " -> " + edge.To
+}
+
+func cleanWorkflowGraphGate(gate WorkflowGraphGate) WorkflowGraphGate {
+	gate.seenFields = nil
+	if gate.Requires == nil {
+		gate.Requires = []string{}
+	}
+	return gate
+}
+
+func canonicalWorkflowGraphGate(gate WorkflowGraphGate) WorkflowGraphGate {
+	gate = cleanWorkflowGraphGate(gate)
+	gate.Requires = sortedStrings(gate.Requires)
+	return gate
+}
+
+func cleanWorkflowGraphApproval(approval WorkflowGraphApproval) WorkflowGraphApproval {
+	approval.seenFields = nil
+	return approval
+}
+
+func sortedStrings(values []string) []string {
+	result := append([]string{}, values...)
+	sort.Strings(result)
+	return result
+}
+
+func sortedGraphKeys(values map[string]bool) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func loadWorkflowGraph(root Root, options GraphOptions) loadedWorkflowGraph {
@@ -855,4 +1301,53 @@ func firstGraphCycle(edges []WorkflowGraphEdge, phaseIDs map[string]bool) []stri
 		}
 	}
 	return nil
+}
+
+func nextGraphProposalPath(root Root) (string, SafePath, error) {
+	dir, err := ResolveRelativePath(root, graphProposalDir)
+	if err != nil {
+		return "", SafePath{}, err
+	}
+	entries, err := os.ReadDir(dir.Absolute)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "", SafePath{}, &Problem{Code: "graph_proposal_inspection_failed", Message: "cannot inspect graph proposal directory", Hint: "Check .kkachi/graph/proposals permissions before recording a proposal.", Path: dir.Relative, Field: "path", Expected: "inspectable proposal directory", Actual: err.Error()}
+	}
+	next := 1
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		matches := graphProposalIDPattern.FindStringSubmatch(entry.Name())
+		if matches == nil {
+			continue
+		}
+		value, err := strconv.Atoi(matches[1])
+		if err == nil && value >= next {
+			next = value + 1
+		}
+	}
+	if next > 999999 {
+		return "", SafePath{}, &Problem{Code: "graph_proposal_id_exhausted", Message: "cannot allocate next graph proposal id", Hint: "Archive old proposal records through a future migration before recording more proposals.", Path: dir.Relative, Field: "proposal_id", Expected: "available gprop id below gprop-999999", Actual: "exhausted"}
+	}
+	proposalID := fmt.Sprintf("gprop-%06d", next)
+	path, err := ResolveRelativePath(root, filepath.ToSlash(filepath.Join(graphProposalDir, proposalID+".json")))
+	if err != nil {
+		return "", SafePath{}, err
+	}
+	return proposalID, path, nil
+}
+
+func graphValidationProblem(code string, message string, hint string, summary GraphDiffValidationSummary) *Problem {
+	actual := "invalid graph input"
+	if summary.From.Status != GraphStatusPass {
+		actual = "from:" + summary.From.File
+	}
+	if summary.To.Status != GraphStatusPass {
+		if actual == "invalid graph input" {
+			actual = "to:" + summary.To.File
+		} else {
+			actual += ",to:" + summary.To.File
+		}
+	}
+	return &Problem{Code: code, Message: message, Hint: hint, Field: "validation", Expected: "passing base and candidate workflow graphs", Actual: actual}
 }
