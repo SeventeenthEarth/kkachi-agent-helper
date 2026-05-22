@@ -1,10 +1,10 @@
 # kkachi-agent-helper Specs
 
 Date: 2026-04-30
-Owner: Gongmyeong
-Status: source of truth for implemented helper behavior; graph additions below are candidate/planned until Hwangchung confirms and KAH capability/help evidence exists
-Candidate graph update date: 2026-05-21
-Candidate graph evidence: `/Users/draccoon/.hermes/kanban/workspaces/t_81f61495/hwangchung-final-kah-khs-graph-docs-plan.md`
+Owner: KAH maintainers
+Status: source of truth for implemented helper behavior; graph additions below are planning-confirmed but not implemented until KAH capability/help evidence exists
+Planning graph update date: 2026-05-21
+Planning graph evidence: governance evidence record in kanban task `t_2fb00394`
 
 ## 1. Purpose
 
@@ -55,7 +55,7 @@ The helper must not:
 Default target-project layout:
 
 ```text
-.kkachi-workflow.yaml          # candidate/planned project-level workflow graph; outside `.kkachi/`; not implemented until graph support lands
+.kkachi-workflow.yaml          # planned project-level workflow graph artifact; outside `.kkachi/`; not implemented until graph support lands
 .kkachi/
   config.yaml                  # helper runtime/config only; never workflow graph SOT
   status.json
@@ -129,13 +129,13 @@ Default target-project layout:
 
 Light mode may use the same artifact names with shorter content or explicit not-applicable records. It must not introduce an incompatible artifact schema without a versioned migration.
 
-### Candidate project workflow graph note
+### Planning project workflow graph note
 
-Status: candidate/planned pending Blue confirmation and implementation evidence. `docs/sot/workflow-graph.md` is the narrower candidate SOT for `.kkachi-workflow.yaml` and the planned `kah graph` command surface.
+Status: planning-confirmed; implementation evidence pending. `docs/sot/workflow-graph.md` is the narrower planning SOT for `.kkachi-workflow.yaml` and the planned `kah graph` command surface. Planning is confirmed; `.kkachi-workflow.yaml` remains a candidate artifact until graph support is implemented and advertised.
 
 | Path / artifact | Meaning | Owner | Authority |
 |---|---|---|---|
-| `.kkachi-workflow.yaml` | Project-level workflow graph instance | KHS proposes policy/templates; KAH validates/writes/applies | Candidate project graph SOT after graph support lands; not implemented today |
+| `.kkachi-workflow.yaml` | Project-level workflow graph instance | KHS proposes policy/templates; KAH validates/writes/applies | Planned artifact and candidate project graph SOT after graph support lands; not implemented today |
 | `.kkachi/config.yaml` | KAH helper runtime/configuration | KAH | Helper config only; never workflow graph SOT |
 | `.kkachi/` | Runtime state, evidence, events, locks, schemas, run artifacts | KAH | Runtime/evidence substrate |
 | `.kkachi/runs/<run_id>/phase-plan.yaml` | Run-local execution state/evidence for a KHS run | KHS content stored/validated by KAH | Run-local workflow/execution state; not project graph replacement |
@@ -374,8 +374,8 @@ kkachi-agent-helper project init \
   --project-name kkachi-agent-bridge \
   --stack go \
   --repo-path "$PWD" \
-  --commander Gongmyeong \
-  --redteam Macho \
+  --commander responsible-approver \
+  --redteam required-reviewer \
   --docs-map-roadmap docs/roadmap.md \
   --docs-map-spec docs/specs.md \
   --docs-map-architecture docs/architecture.md \
@@ -644,7 +644,17 @@ kah graph apply --proposal <proposal-id> --approval <evidence-ref> [--json]
 kah graph export --format mermaid|plantuml [--output <path>] [--json]
 ```
 
-KAH policy-mutation command category is empty. Do not document `kah workflow ...`, `kah graph init --profile ...`, `kah gate set ...`, `kah review-policy set ...`, or `kah graph set-policy ...` as normal commands.
+KAH policy-mutation command category is empty. Do not document policy-setting surfaces as normal commands; this excludes workflow subcommands under the `kah` prefix, profile-driven graph initialization, gate-setting commands, review-policy setters, and graph policy setters.
+
+Forbidden examples:
+
+```text
+kah workflow ...
+kah graph init --profile ...
+kah gate set ...
+kah review-policy set ...
+kah graph set-policy ...
+```
 
 ### `approval`
 
@@ -850,17 +860,17 @@ The following items remain open until roadmap tasks close them:
 - whether bridge capability registry validation is direct or delegated to `kkachi-hermes-skills` assets;
 - authoritative bridge and skills version sources for enforced compatibility beyond `compat.required_helper`.
 
-## Candidate graph record appendix
+## Planning graph record appendix
 
 Date: 2026-05-21
 Owner: KAH deterministic helper boundary
-Confirming role: Hwangchung / KHC Blue commander
-Status: candidate/planned graph addition to implemented helper behavior SOT
-Authority level: `docs/specs.md` remains authoritative for implemented helper behavior; graph content is candidate until confirmed and implemented
+Confirming role: Responsible approver / governance evidence record
+Status: planning-confirmed graph addition to implemented helper behavior SOT
+Authority level: `docs/specs.md` remains authoritative for implemented helper behavior; graph content is planning authority until implemented
 Scope: KAH helper docs only
 Related docs: `README.md`, `sot/workflow-graph.md`, `roadmap.md`, `compatibility.md`, KHS `docs/sot/workflow-graph-integration.md`
 Decision summary: add `.kkachi-workflow.yaml` as candidate project-level graph state while preserving `.kkachi/config.yaml` as helper config and `phase-plan.yaml` as run-local execution evidence.
-Evidence/source paths: `/Users/draccoon/.hermes/kanban/workspaces/t_81f61495/hwangchung-final-kah-khs-graph-docs-plan.md`, kanban task `t_2fb00394`
-Stale/conflict markers: older wording that treats `phase-plan.yaml` as the whole workflow SOT is narrowed to run-local state; prior `.kkachi-config.yaml/.json` graph phrasing is superseded by `.kkachi-workflow.yaml` if encountered.
+Evidence/source paths: governance evidence record in kanban task `t_2fb00394`
+Stale/conflict markers: older wording that treats `phase-plan.yaml` as the whole workflow SOT is narrowed to run-local state; prior root-level kkachi config YAML/JSON graph phrasing is superseded by `.kkachi-workflow.yaml` if encountered.
 Open questions: exact graph schema, proposal storage, audit event schema, checksum/version policy, and command alias remain implementation tasks.
-Next record action: Hwangchung confirmation before this candidate graph content becomes final KAH authority.
+Next record action: implement `graph validate` and `graph explain` in `graph-002`, then provide capability/help evidence before treating graph behavior as implemented.

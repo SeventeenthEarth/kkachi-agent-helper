@@ -7,6 +7,7 @@ The current implementation covers `corex-001` through `corex-005`, `runwf-001` t
 ## Source of truth
 
 - [Specs](docs/specs.md) — canonical behavior and schema contracts.
+- [Workflow graph planning SOT](docs/sot/workflow-graph.md) — planning authority for future `.kkachi-workflow.yaml` support; not implemented until capabilities/help evidence exists.
 - [Roadmap](docs/roadmap.md) — delivery order and task scope.
 - [Compatibility matrix](docs/compatibility.md) — helper/bridge/skills version contract.
 - [Release notes template](docs/release-notes-template.md) — release note format and verification checklist.
@@ -28,8 +29,8 @@ kkachi-agent-helper project init \
   --project-name kkachi-agent-bridge \
   --stack go \
   --repo-path "$PWD" \
-  --commander Gongmyeong \
-  --redteam Macho \
+  --commander responsible-approver \
+  --redteam required-reviewer \
   --docs-map-roadmap docs/roadmap.md \
   --docs-map-spec docs/specs.md \
   --docs-map-architecture docs/architecture.md \
@@ -51,7 +52,7 @@ kkachi-agent-helper run create \
   --sot-policy existing_sot_basis \
   --execution-mode production_write \
   --backend-evidence not_applicable \
-  --commander Gongmyeong \
+  --commander responsible-approver \
   --task-id pilot-003 \
   --json
 
@@ -119,8 +120,8 @@ kkachi-agent-helper project init \
   --project-name kkachi-agent-bridge \
   --stack go \
   --repo-path "$PWD" \
-  --commander Gongmyeong \
-  --redteam Macho \
+  --commander responsible-approver \
+  --redteam required-reviewer \
   --docs-map-roadmap docs/roadmap.md \
   --docs-map-spec docs/specs.md \
   --docs-map-architecture docs/architecture.md \
@@ -216,10 +217,13 @@ KHS `main` may install KAH with `go install github.com/SeventeenthEarth/kkachi-a
 
 Project bootstrap remains `project init` / `project init --force`: KAH creates or reconfigures helper-managed project state, schemas, overlays, and docs maps, but never installs Hermes/KHS skill content. Hermes skill installation belongs to Hermes native tooling.
 
-Capability records follow the same boundary. KAH owns project-local `.kkachi/` persistence, evidence, and audit surfaces for accepted capability snapshots and reports, but it does not discover backend-native inventories and does not make a KHS semantic catalog callable. KAB owns raw backend-native discovery/verification; KHS owns workflow/prompt/semantic guidance; Blue command owns final active prompt selection.
+Workflow graph support is planned, not implemented in the current command surface. `.kkachi-workflow.yaml` is the future project-level graph SOT only after KAH advertises graph support through `capabilities --json` and command help; until then KHS must fail closed instead of silently editing YAML or using generated diagrams, `.kkachi/config.yaml`, stale `.kkachi/` state, KHS defaults, or Kkachi v2 `.kkachi/config/workflows/` as fallback graph authority.
+
+Capability records follow the same boundary. KAH owns project-local `.kkachi/` persistence, evidence, and audit surfaces for accepted capability snapshots and reports, but it does not discover backend-native inventories and does not make a KHS semantic catalog callable. KAB owns raw backend-native discovery/verification; KHS owns workflow/prompt/semantic guidance; the responsible operator owns final active prompt selection.
 
 ## Operational notes
 
+- `.kkachi-workflow.yaml` is the planned project-level workflow graph file and remains outside implemented runtime behavior until advertised by future graph capabilities/help.
 - `.kkachi/config.yaml`, `.kkachi/project-overlay.yaml`, `docs/kkachi-docs-map.yaml`, `.kkachi/status.json`, `.kkachi/events.jsonl`, `.kkachi/schemas/*.schema.json`, `.kkachi/capabilities/...`, and `.kkachi/runs/<run_id>/...` are the local helper state and evidence surfaces.
 - Planned capability cache layout is `.kkachi/capabilities/current.json`, `snapshots/<id>.json`, `reports/<id>.json`, `fingerprints/<id>.json`, and `drift/<id>.json`, plus run-local `capability-snapshot.json` / `capability-check.md`. These are cache/evidence records, not backend-native inventory SOT.
 - Mutating commands fail closed when `status.last_event_id` and the event log tail diverge.

@@ -113,11 +113,11 @@ Status values: `Planned`, `In Progress`, `Blocked`, `Completed`, `Deferred`.
 
 > Goal: add a deterministic KAH graph surface for project-level `.kkachi-workflow.yaml` state while preserving KHS policy ownership and run-local `phase-plan.yaml` evidence.
 >
-> Status note: candidate/planned only until `docs/sot/workflow-graph.md` is confirmed, Hwangchung authorizes implementation, and KAH capabilities/help prove each command surface. Implementation proceeds one PR-candidate task at a time after required review gates.
+> Status note: planning confirmation is recorded for `docs/sot/workflow-graph.md`; implementation remains pending until KAH capabilities/help prove each command surface. Implementation proceeds one PR-candidate task at a time after required review gates.
 
 | Task ID | Title | Status | Work guide | Notes |
 |---|---|---|---|---|
-| graph-001 | Docs/SOT and schema v1 outline for `.kkachi-workflow.yaml` | Planned | Confirm `docs/sot/workflow-graph.md`, authority tables, source precedence, command classification, JSON/human output expectations, and schema outline. | This docs update creates candidate records only; Blue confirmation required before implementation. |
+| graph-001 | Docs/SOT and schema v1 outline for `.kkachi-workflow.yaml` | Completed | Confirm `docs/sot/workflow-graph.md`, authority tables, source precedence, command classification, JSON/human output expectations, and schema outline. | SOT closure completed as docs-only planning authority; runtime implementation still requires capability/help evidence. |
 | graph-002 | Read-only graph validation and explanation commands | Planned | Implement capability-advertised `graph validate` and `graph explain` with fail-closed schema/source checks and compact human/JSON output. | No graph mutation; prove command/help/capability evidence. |
 | graph-003 | Semantic diff and proposal record format | Planned | Implement semantic graph diff plus proposal record storage that preserves changed phases, edges, gates, approvals, risk flags, and next action. | Proposal records do not apply graph changes. |
 | graph-004 | `init --from-template` template ingestion and initial graph write | Planned | Accept explicit KHS template id/path, validate input, write initial `.kkachi-workflow.yaml` only when no graph exists or through approved replacement. | Use `init --from-template`, not `init --profile`. |
@@ -133,17 +133,17 @@ Status values: `Planned`, `In Progress`, `Blocked`, `Completed`, `Deferred`.
 - Do not promote helper behavior into shared Kkachi skills until the behavior is implemented, tested, and reflected in the install/package contracts.
 - Review this roadmap after each epic; split only tasks that prove too large for one reviewable PR.
 
-## Candidate graph record appendix
+## Planning graph record appendix
 
 Date: 2026-05-21
 Owner: KAH roadmap archive
-Confirming role: Hwangchung / KHC Blue commander
-Status: candidate roadmap addition pending Blue confirmation
+Confirming role: Responsible approver / governance evidence record
+Status: planning-confirmed roadmap addition; implementation evidence pending
 Authority level: active roadmap planning record; not implementation authorization by itself
 Scope: KAH docs roadmap only
 Related docs: `README.md`, `sot/workflow-graph.md`, `specs.md`, `compatibility.md`
 Decision summary: add `graph — Command-managed workflow graph` as PR-candidate roadmap epic and mark the deleted `docs/TODO-ALIGN.md` pointer stale.
-Evidence/source paths: `/Users/draccoon/.hermes/kanban/workspaces/t_81f61495/hwangchung-final-kah-khs-graph-docs-plan.md`, kanban task `t_2fb00394`
+Evidence/source paths: governance evidence record in kanban task `t_2fb00394`
 Stale/conflict markers: `docs/TODO-ALIGN.md` is deleted in the current working tree and is not active authority; graph commands are candidate until capabilities/help prove them.
-Open questions: task details must be refined one PR at a time after SOT/spec confirmation and required reviews.
-Next record action: Hwangchung review of roadmap order and graph task boundaries.
+Open questions: `graph-002+` implementation details must be refined one PR at a time with capability/help evidence.
+Next record action: start `graph-002` read-only validation/explanation without widening into graph mutation.

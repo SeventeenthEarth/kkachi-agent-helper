@@ -2,10 +2,10 @@
 
 Date: 2026-05-21
 Owner: KAH/KHS compatibility record
-Confirming role: Hwangchung / KHC Blue commander
+Confirming role: Responsible approver / governance evidence record
 Status: source of truth for implemented compatibility; graph entries are candidate/planned until KAH capabilities advertise them
 Authority level: release-facing compatibility matrix
-Evidence/source path: `/Users/draccoon/.hermes/kanban/workspaces/t_81f61495/hwangchung-final-kah-khs-graph-docs-plan.md`
+Evidence/source path: governance evidence record in kanban task `t_2fb00394`
 
 This matrix records the local-only compatibility contract for `kkachi-agent-helper` releases and KHS/KAH integration. Keep it in sync with `docs/specs.md`, the project bootstrap contract, and release notes.
 
@@ -54,17 +54,17 @@ Status: candidate/planned.
 - Breaking changes must bump `capabilities_schema_version`. Examples: removing, renaming, or changing the JSON type of an existing field; changing the meaning of an existing compatibility flag; changing a previously supported command surface to unsupported without first exposing a deprecation/omission signal.
 - Surfaces planned for removal should first appear in `deprecated_surfaces` or `omitted_surfaces` so KHS can fail closed or adjust activation checks before a breaking version.
 
-## Candidate graph record appendix
+## Planning graph record appendix
 
 Date: 2026-05-21
 Owner: KAH/KHS compatibility record
-Confirming role: Hwangchung / KHC Blue commander
-Status: candidate compatibility addition pending graph support evidence
+Confirming role: Responsible approver / governance evidence record
+Status: planning-confirmed compatibility addition; not a release claim until graph support evidence exists
 Authority level: release-facing compatibility matrix; planned graph rows are not release claims until advertised by KAH capabilities
 Scope: KAH/KHS compatibility notes only
 Related docs: `README.md`, `sot/workflow-graph.md`, `specs.md`, `roadmap.md`, KHS `docs/sot/workflow-graph-integration.md`
 Decision summary: KHS chooses templates/policy/proposals; KAH validates/writes/applies deterministic graph state; no silent direct YAML fallback; KAB alignment is future/non-authoritative.
-Evidence/source paths: `/Users/draccoon/.hermes/kanban/workspaces/t_81f61495/hwangchung-final-kah-khs-graph-docs-plan.md`, kanban task `t_2fb00394`
+Evidence/source paths: governance evidence record in kanban task `t_2fb00394`
 Stale/conflict markers: `.kkachi/config.yaml`, generated diagrams, stale `.kkachi/` state, KHS defaults, and Kkachi v2 `.kkachi/config/workflows/` are not fallback graph authority.
 Open questions: exact capability flags and tested release versions for graph support remain implementation/release tasks.
 Next record action: update the matrix again only when a KAH graph implementation advertises capability evidence.

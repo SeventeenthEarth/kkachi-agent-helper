@@ -1,15 +1,14 @@
-# KAH workflow graph candidate SOT
+# KAH workflow graph planning SOT
 
 Date: 2026-05-21
 Owner: KAH deterministic helper boundary
-Confirming role: Hwangchung / KHC Blue commander
-Status: candidate SOT / planned surface; not implemented unless KAH capabilities and command help prove it
-Authority level: candidate normative spec for future `.kkachi-workflow.yaml` and graph commands
+Confirming role: Responsible approver / governance evidence record
+Status: confirmed planning SOT / planned surface; not implemented unless KAH capabilities and command help prove it
+Authority level: planning authority for future `.kkachi-workflow.yaml` and graph commands
 Scope: KAH docs only; no implementation code, runtime config, KAB docs, profiles, registries, or gateway changes
 Related docs: `../README.md`, `../specs.md`, `../roadmap.md`, `../compatibility.md`, KHS `docs/sot/workflow-graph-integration.md`
 Evidence/source paths:
-- `/Users/draccoon/.hermes/kanban/workspaces/t_81f61495/hwangchung-final-kah-khs-graph-docs-plan.md`
-- Kanban task `t_2fb00394`
+- Governance evidence record in kanban task `t_2fb00394`
 
 ## Decision summary
 
@@ -33,13 +32,13 @@ Out of scope:
 - Kkachi v2 `.kkachi/config/workflows/` runtime configuration;
 - Hermes profile/runtime/gateway settings;
 - direct implementation work in this docs pass;
-- KAH deciding phase policy, review policy, gate policy, backend choice, or Blue/Red/Orange approval rules.
+- KAH deciding phase policy, review policy, gate policy, backend choice, or external approval, risk review, and operator/product approval rules.
 
 ## File authority table
 
 | Path / artifact | Meaning | Owner | Authority |
 |---|---|---|---|
-| `.kkachi-workflow.yaml` | Project-level workflow graph instance | KHS proposes policy/templates; KAH validates/writes/applies | Candidate project graph SOT after graph support lands; not implemented today |
+| `.kkachi-workflow.yaml` | Project-level workflow graph instance | KHS proposes policy/templates; KAH validates/writes/applies | Planned artifact and candidate project graph SOT after graph support lands; not implemented today |
 | `.kkachi/config.yaml` | KAH helper runtime/configuration | KAH | Helper config only; never workflow graph SOT |
 | `.kkachi/` | Runtime state, evidence, events, locks, schemas, run artifacts | KAH | Runtime/evidence substrate |
 | `.kkachi/runs/<run_id>/phase-plan.yaml` | Run-local execution state/evidence for a KHS run | KHS content stored/validated by KAH | Run-local workflow/execution state; not project graph replacement |
@@ -69,6 +68,8 @@ Rules:
 - `phase-plan.yaml` records run-local execution state/evidence for one run.
 - If project graph, KHS phase policy, and run-local phase state conflict, KAH/KHS fail closed and require responsible role confirmation before work proceeds.
 
+Planning is confirmed; `.kkachi-workflow.yaml` remains a candidate artifact until graph support is implemented and advertised.
+
 ## Kkachi v2 namespace collision
 
 `.kkachi-workflow.yaml` is the KAH/KHS project-level workflow graph file. If a repository also contains Kkachi v2 `.kkachi/config/workflows/templates/*.json` or `.kkachi/config/workflows/addons/*.json`, those files belong to Kkachi v2 runtime orchestration and are outside KAH/KHS graph authority. KAH must not read them as fallback graph policy, merge them silently, or treat them as equivalent to `.kkachi-workflow.yaml`.
@@ -87,7 +88,9 @@ kah graph apply --proposal <proposal-id> --approval <evidence-ref> [--json]
 kah graph export --format mermaid|plantuml [--output <path>] [--json]
 ```
 
-Do not document these as normal commands:
+Do not document policy-setting surfaces as normal commands. Forbidden examples include workflow subcommands under the `kah` prefix, profile-driven graph initialization, gate-setting commands, review-policy setters, and graph policy setters.
+
+Forbidden examples:
 
 ```text
 kah workflow ...
@@ -109,7 +112,7 @@ kah graph set-policy ...
 | `apply` | yes, after approval evidence | approval-gated deterministic apply | no |
 | `export` | no graph mutation | visualization artifact generation | no |
 
-Policy mutation category is empty. KAH validates and records state; KHS/Blue own policy decisions.
+Policy mutation category is empty. KAH validates and records state; KHS and responsible approvers own policy decisions.
 
 ## Source precedence and fail-closed rules
 
@@ -141,7 +144,7 @@ Fail closed when:
 
 ## Proposal lifecycle
 
-1. KHS, Blue, or a human drafts a declarative graph patch or selects a KHS template.
+1. KHS, a responsible approver, or a human drafts a declarative graph patch or selects a KHS template.
 2. KAH validates candidate input fail-closed.
 3. KAH explains the current effective graph.
 4. KAH produces a semantic diff.
@@ -180,7 +183,7 @@ gates:
     requires: ["plan", "ask"]
 approvals:
   - scope: "sot-change"
-    required_role: "master|gongmyeong|hwangchung"
+    required_role: "responsible-approver|required-reviewer|external-approver"
 proposals:
   policy: "proposal-first"
 ```
@@ -204,29 +207,30 @@ Required compact JSON fields:
 
 Mermaid and PlantUML exports are generated visualization artifacts only. They do not become graph policy, schema, or source of truth. A later export command must include source checksum and `authoritative: false` in JSON output. Examples may be shown only when labeled non-authoritative.
 
-## Red must-fix coverage
+## Risk review closure coverage
 
-| Red item | Resolution in this candidate SOT |
+| Required review item | Resolution in this planning SOT |
 |---|---|
 | MF-1 | `.kkachi-workflow.yaml` is project-level graph state; `phase-plan.yaml` remains run-local execution state/evidence and is not deprecated. |
 | MF-2 | Kkachi v2 `.kkachi/config/workflows/` is outside KAH/KHS graph scope; no fallback, merge, or namespace sharing is implied. |
 | MF-3 | `kah graph` is planned/candidate until KAH capabilities/help prove implementation. |
 | MF-4 | Mutation input precedence, runtime/evidence precedence, and fail-closed rules are explicit above. |
-| MF-5 | Command classification contains zero policy-mutation commands; KAH does not expose policy-setting graph commands in this candidate plan. |
+| MF-5 | Command classification contains zero policy-mutation commands; KAH does not expose policy-setting graph commands in this planning SOT. |
 
 ## Stale/conflict markers
 
 - Older wording that treats `phase-plan.yaml` as the full workflow SOT is narrowed to run-local execution state/evidence.
 - Existing docs that use the actual binary name `kkachi-agent-helper` remain correct; `kah graph` wording is only planned/candidate shorthand until alias/command evidence exists.
-- Prior `.kkachi-config.yaml` or `.kkachi-config.json` graph phrasing, if encountered, is superseded by `.kkachi-workflow.yaml` for this candidate plan.
+- Prior root-level kkachi config YAML/JSON graph phrasing, if encountered, is superseded by `.kkachi-workflow.yaml` for this planning SOT.
+- Prior role examples that used personal or internal codenames are superseded by generic role placeholders such as `responsible-approver`, `required-reviewer`, and `external-approver`.
 - `docs/TODO-ALIGN.md` is not active roadmap authority in the current working tree.
 
 ## Open questions
 
 - Exact schema validation rules, event types, proposal storage path, and checksum/version policy remain implementation tasks.
 - The command/alias surface must be verified against KAH capabilities/help before any doc may call it implemented.
-- Blue confirmation is required before this candidate SOT becomes final project authority.
+- Planning confirmation is recorded; this SOT is not implemented until KAH capability/help evidence proves the planned command surface.
 
 ## Next record action
 
-Hwangchung should review this file with the KHS integration SOT, compatibility docs, and roadmap rows. After confirmation, implementation should proceed one PR-candidate task at a time from `docs/roadmap.md`.
+Next implementation work is `graph-002`: read-only graph validation and explanation commands, advertised only after `capabilities --json` and command help prove the surface.

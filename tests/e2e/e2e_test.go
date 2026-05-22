@@ -172,27 +172,23 @@ func TestStandardHelpUX(t *testing.T) {
 
 func requireFileContains(t *testing.T, path, want, label string) {
 	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
+	requireContains(t, mustRead(t, path), want, label)
+}
+
+type docContractCase struct {
+	rel   string
+	wants []string
+}
+
+func assertDocContractContains(t *testing.T, tc docContractCase) {
+	t.Helper()
+	text := mustRead(t, filepath.Join(projectRoot, filepath.FromSlash(tc.rel)))
+	for _, want := range tc.wants {
+		requireContains(t, text, want, tc.rel)
 	}
-	requireContains(t, string(data), want, label)
 }
 
 func TestAlign008DocsCompatibilityContract(t *testing.T) {
-	type docContractCase struct {
-		rel   string
-		wants []string
-	}
-
-	assertDocContains := func(t *testing.T, tc docContractCase) {
-		t.Helper()
-		text := mustRead(t, filepath.Join(projectRoot, filepath.FromSlash(tc.rel)))
-		for _, want := range tc.wants {
-			requireContains(t, text, want, tc.rel)
-		}
-	}
-
 	for _, tc := range []docContractCase{
 		{
 			rel: "README.md",
@@ -241,21 +237,111 @@ func TestAlign008DocsCompatibilityContract(t *testing.T) {
 				"`capabilities --json` activation checks",
 				"tested/recommended release versions",
 				"no Hermes skill installation by KAH",
+				"former `docs/TODO-ALIGN.md` reference is stale because that file is deleted",
 			},
 		},
 		{
-			rel: "docs/TODO-ALIGN.md",
+			rel: "docs/README.md",
 			wants: []string{
-				"### align-008 — KHS/KAH compatibility contract docs",
-				"Status: Completed",
-				"README, specs, and compatibility docs now state the KHS/KAH ownership boundary consistently",
-				"`capabilities --json` as the preferred KHS `@latest` activation check",
-				"`project init` / `project init --force` as the bootstrap/reconfiguration contract",
+				"## Authority ladder",
+				"`docs/specs.md`",
+				"`docs/compatibility.md`",
+				"`docs/TODO-ALIGN.md` is deleted in the current working tree",
+				"must not be treated as an active roadmap authority",
 			},
 		},
 	} {
 		t.Run(tc.rel, func(t *testing.T) {
-			assertDocContains(t, tc)
+			assertDocContractContains(t, tc)
+		})
+	}
+}
+
+func TestGraph001DocsSOTClosureContract(t *testing.T) {
+	for _, tc := range []docContractCase{
+		{
+			rel: "README.md",
+			wants: []string{
+				"[Workflow graph planning SOT](docs/sot/workflow-graph.md)",
+				"Workflow graph support is planned, not implemented in the current command surface",
+				"only after KAH advertises graph support through `capabilities --json` and command help",
+				"KHS must fail closed instead of silently editing YAML",
+				"Kkachi v2 `.kkachi/config/workflows/` as fallback graph authority",
+				"remains outside implemented runtime behavior until advertised by future graph capabilities/help",
+			},
+		},
+		{
+			rel: "docs/sot/workflow-graph.md",
+			wants: []string{
+				"# KAH workflow graph planning SOT",
+				"Status: confirmed planning SOT / planned surface; not implemented unless KAH capabilities and command help prove it",
+				"`.kkachi-workflow.yaml` is the planned project-level workflow graph instance",
+				"`phase-plan.yaml` remains run-local execution state/evidence for one KHS run",
+				"Helper config only; never workflow graph SOT",
+				"Out of KAH/KHS graph scope; no merge/fallback",
+				"Status: planned/candidate. These commands are not current behavior unless KAH capabilities and command help prove them",
+				"Do not document policy-setting surfaces as normal commands",
+				"kah graph set-policy ...",
+				`required_role: "responsible-approver|required-reviewer|external-approver"`,
+				"Prior role examples that used personal or internal codenames are superseded by generic role placeholders",
+				"Generated Mermaid/PlantUML diagrams for visualization only",
+				"Next implementation work is `graph-002`: read-only graph validation and explanation commands",
+			},
+		},
+		{
+			rel: "docs/specs.md",
+			wants: []string{
+				"graph additions below are planning-confirmed but not implemented until KAH capability/help evidence exists",
+				"Planning graph update date: 2026-05-21",
+				"### Planning project workflow graph note",
+				".kkachi-workflow.yaml          # planned project-level workflow graph artifact",
+				"Planning is confirmed; `.kkachi-workflow.yaml` remains a candidate artifact until graph support is implemented and advertised",
+				"`.kkachi/config.yaml` | KAH helper runtime/configuration | KAH | Helper config only; never workflow graph SOT",
+				"planned `kah graph` command surface",
+				"KAH docs must not claim this surface is implemented unless `kkachi-agent-helper capabilities --json` and command help",
+				"KAH policy-mutation command category is empty",
+				"kah graph init --profile ...",
+				"## Planning graph record appendix",
+				"implement `graph validate` and `graph explain` in `graph-002`",
+			},
+		},
+		{
+			rel: "docs/compatibility.md",
+			wants: []string{
+				"graph entries are candidate/planned until KAH capabilities advertise them",
+				"Candidate graph compatibility: `.kkachi-workflow.yaml` and `kah graph` are planned/candidate",
+				"KHS must not silently edit `.kkachi-workflow.yaml` as fallback when graph support is missing",
+				"Graph source precedence must fail closed",
+				"`kah graph` | Planned/candidate shorthand",
+				"Direct YAML edit fallback | Forbidden as normal operation",
+				"## Planning graph record appendix",
+				"Status: planning-confirmed compatibility addition; not a release claim until graph support evidence exists",
+			},
+		},
+		{
+			rel: "docs/roadmap.md",
+			wants: []string{
+				"### EPIC: graph — Command-managed workflow graph",
+				"| graph-001 | Docs/SOT and schema v1 outline for `.kkachi-workflow.yaml` | Completed |",
+				"SOT closure completed as docs-only planning authority; runtime implementation still requires capability/help evidence",
+				"| graph-002 | Read-only graph validation and explanation commands | Planned |",
+				"Next record action: start `graph-002` read-only validation/explanation without widening into graph mutation",
+				"## Planning graph record appendix",
+			},
+		},
+		{
+			rel: "docs/README.md",
+			wants: []string{
+				"`docs/sot/workflow-graph.md` | Planning-confirmed SOT/spec for `.kkachi-workflow.yaml`",
+				"Confirmed planning SOT; not implemented until KAH capability/help evidence exists",
+				"`.kkachi-workflow.yaml` is documented as planned project-level workflow graph state, not as implemented KAH behavior today",
+				"`kah graph` is planned/candidate shorthand unless KAH capabilities/help evidence proves the command or alias exists",
+				"Use `docs/roadmap.md` `graph-002` as the next implementation slice",
+			},
+		},
+	} {
+		t.Run(tc.rel, func(t *testing.T) {
+			assertDocContractContains(t, tc)
 		})
 	}
 }
