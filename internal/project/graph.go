@@ -27,7 +27,7 @@ const (
 	graphNextActionValid        = "Graph is valid; KHS may use this read-only evidence."
 	graphNextActionRepair       = "Repair .kkachi-workflow.yaml, then rerun graph validate."
 	graphNextActionDiffReady    = "Review the semantic diff; record a proposal before applying graph changes."
-	graphNextActionProposal     = "Record required approval evidence before graph apply; proposal storage does not apply graph changes."
+	graphNextActionProposal     = "Record an approval or audit evidence reference, then run graph apply --approval <evidence-ref>; proposal storage does not apply graph changes."
 	graphNextActionInitialized  = "Graph is initialized; run graph validate or graph explain for read-only evidence."
 	graphNextActionApplied      = "Graph proposal applied; run graph validate or graph explain for updated evidence."
 	graphNextActionExported     = "Graph diagram exported as a non-authoritative generated artifact; do not use it as workflow graph source of truth."
@@ -489,7 +489,7 @@ func proposeWorkflowGraphUnlocked(root Root, options GraphProposeOptions) (Graph
 	patch := strings.TrimSpace(options.Patch)
 	reason := strings.TrimSpace(options.Reason)
 	if patch == "" {
-		return GraphProposalResult{}, &Problem{Code: "graph_patch_required", Message: "graph proposal patch is required", Hint: "Pass --patch with a repository-relative candidate workflow graph file.", Field: "patch", Expected: "non-empty repository-relative graph path", Actual: "empty"}
+		return GraphProposalResult{}, &Problem{Code: "graph_patch_required", Message: "graph proposal candidate graph is required", Hint: "Pass --candidate-file, or legacy --patch, with a repository-relative complete candidate workflow graph file.", Field: "patch", Expected: "non-empty repository-relative graph path", Actual: "empty"}
 	}
 	if reason == "" {
 		return GraphProposalResult{}, &Problem{Code: "graph_proposal_reason_required", Message: "graph proposal reason is required", Hint: "Pass --reason to explain why this graph change is proposed.", Field: "reason", Expected: "non-empty proposal reason", Actual: "empty"}
@@ -505,7 +505,7 @@ func proposeWorkflowGraphUnlocked(root Root, options GraphProposeOptions) (Graph
 	candidate := loadWorkflowGraph(root, GraphOptions{File: patch})
 	diff := diffLoadedWorkflowGraphs(base, candidate)
 	if diff.Status != GraphStatusPass {
-		return GraphProposalResult{}, graphValidationProblem("graph_proposal_invalid", "cannot record proposal for invalid workflow graph input", "Repair the base graph and candidate patch, then rerun graph propose.", diff.ValidationSummary)
+		return GraphProposalResult{}, graphValidationProblem("graph_proposal_invalid", "cannot record proposal for invalid workflow graph input", "Repair the base graph and candidate graph, then rerun graph propose.", diff.ValidationSummary)
 	}
 
 	proposalID, proposalPath, err := nextGraphProposalPath(root)

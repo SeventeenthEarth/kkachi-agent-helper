@@ -234,6 +234,35 @@ func TestGraphProposeRecordsProposalJSONAndHumanOutput(t *testing.T) {
 	}
 }
 
+func TestGraphProposeAcceptsCandidateFileAliasAndClarifiesAuditEvidence(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	writeCLIGraph(t, repo, cliValidWorkflowGraph())
+	candidate := "graphs/no-change-candidate.yaml"
+	writeCLIGraphFile(t, repo, candidate, cliValidWorkflowGraph())
+	stdout.Reset()
+	stderr.Reset()
+
+	exitCode := runWithOptions([]string{"graph", "propose", "--candidate-file", candidate, "--reason", "audit unchanged graph", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	if exitCode != ExitOK {
+		t.Fatalf("exitCode = %d, want %d stderr=%s stdout=%s", exitCode, ExitOK, stderr.String(), stdout.String())
+	}
+	var proposal project.GraphProposalResult
+	if err := json.Unmarshal(stdout.Bytes(), &proposal); err != nil {
+		t.Fatalf("graph propose output is not JSON: %v\n%s", err, stdout.String())
+	}
+	if proposal.ProposalID != "gprop-000001" || proposal.ApprovalRequired {
+		t.Fatalf("proposal = %#v, want no-change candidate proposal with approval_required=false", proposal)
+	}
+	if !strings.Contains(proposal.NextAction, "audit evidence reference") || !strings.Contains(proposal.NextAction, "graph apply --approval") {
+		t.Fatalf("next_action = %q, want audit evidence and --approval guidance", proposal.NextAction)
+	}
+}
+
 func TestGraphApplyJSONAndHumanOutput(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
@@ -457,8 +486,11 @@ func TestGraphRejectsUsageErrorsOnStderr(t *testing.T) {
 		{name: "missing propose patch", args: []string{"graph", "propose", "--reason", "test", "--json"}, wantCode: "missing_required_option"},
 		{name: "missing propose reason", args: []string{"graph", "propose", "--patch", "candidate.yaml", "--json"}, wantCode: "missing_required_option"},
 		{name: "empty propose patch", args: []string{"graph", "propose", "--patch", "", "--reason", "test", "--json"}, wantCode: "missing_option_value"},
+		{name: "empty propose candidate file", args: []string{"graph", "propose", "--candidate-file", "", "--reason", "test", "--json"}, wantCode: "missing_option_value"},
 		{name: "empty propose reason", args: []string{"graph", "propose", "--patch", "candidate.yaml", "--reason", "", "--json"}, wantCode: "missing_option_value"},
 		{name: "duplicate propose patch", args: []string{"graph", "propose", "--patch", "candidate.yaml", "--patch", "other.yaml", "--reason", "test", "--json"}, wantCode: "duplicate_option"},
+		{name: "duplicate propose candidate file", args: []string{"graph", "propose", "--candidate-file", "candidate.yaml", "--candidate-file", "other.yaml", "--reason", "test", "--json"}, wantCode: "duplicate_option"},
+		{name: "conflicting propose candidate flags", args: []string{"graph", "propose", "--patch", "candidate.yaml", "--candidate-file", "other.yaml", "--reason", "test", "--json"}, wantCode: "duplicate_option"},
 		{name: "duplicate propose reason", args: []string{"graph", "propose", "--patch", "candidate.yaml", "--reason", "test", "--reason", "again", "--json"}, wantCode: "duplicate_option"},
 		{name: "unknown propose option", args: []string{"graph", "propose", "--patch", "candidate.yaml", "--reason", "test", "--from", "base.yaml", "--json"}, wantCode: "unknown_option"},
 		{name: "missing apply proposal", args: []string{"graph", "apply", "--approval", "record", "--json"}, wantCode: "missing_required_option"},

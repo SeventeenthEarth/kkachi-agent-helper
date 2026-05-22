@@ -182,7 +182,7 @@ func TestHelpCommandsExitZeroWithoutProjectState(t *testing.T) {
 		{name: "diagnostics group", args: []string{"diagnostics", "--help"}, want: []string{"kkachi-agent-helper diagnostics", "export", "--output <repo-relative-path>"}},
 		{name: "phase plan", args: []string{"phase-plan", "--help"}, want: []string{"kkachi-agent-helper phase-plan", "supported", "validate <run_id>"}},
 		{name: "approval group", args: []string{"approval", "--help"}, want: []string{"kkachi-agent-helper approval", "request <run_id>", "--decision <approved|rejected>"}},
-		{name: "graph group", args: []string{"graph", "--help"}, want: []string{"kkachi-agent-helper graph", "diff", "propose", "apply", "export", "--patch <repo-relative-candidate-graph>", "--approval <evidence-ref>", "--format mermaid|plantuml"}},
+		{name: "graph group", args: []string{"graph", "--help"}, want: []string{"kkachi-agent-helper graph", "diff", "propose", "apply", "export", "--candidate-file <repo-relative-candidate-graph>", "--patch <repo-relative-candidate-graph>", "--approval <evidence-ref>", "audit evidence reference", "--format mermaid|plantuml"}},
 		{name: "help alias", args: []string{"help", "run", "create"}, want: []string{"kkachi-agent-helper run create", "--execution-mode"}},
 		{name: "help help", args: []string{"help", "help"}, want: []string{"kkachi-agent-helper help", "[command] [subcommand]", "JSON behavior:"}},
 	}

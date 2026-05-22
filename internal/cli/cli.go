@@ -832,30 +832,35 @@ func parseGraphProposeArgs(args []string) (project.GraphProposeOptions, *cliErro
 	seen := map[string]bool{}
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
-		case "--patch", "--reason":
+		case "--patch", "--candidate-file", "--reason":
 			option := args[i]
-			if seen[option] {
+			if seen[option] || (option == "--patch" && seen["--candidate-file"]) || (option == "--candidate-file" && seen["--patch"]) {
 				return options, &cliError{Code: "duplicate_option", Message: "duplicate graph option \"" + option + "\"", Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: option}
 			}
-			value, next, cliErr := parseGraphValueOption(args, i, option, "non-empty value")
+			expected := "non-empty value"
+			if option == "--patch" || option == "--candidate-file" {
+				expected = "repository-relative complete candidate workflow graph path"
+			}
+			value, next, cliErr := parseGraphValueOption(args, i, option, expected)
 			if cliErr != nil {
 				return options, cliErr
 			}
 			seen[option] = true
-			if option == "--patch" {
+			if option == "--patch" || option == "--candidate-file" {
 				options.Patch = value
 			} else {
 				options.Reason = value
 			}
 			i = next
 		default:
-			return options, &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown graph propose option %q", args[i]), Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "--patch or --reason", Actual: args[i]}
+			return options, &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown graph propose option %q", args[i]), Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "--candidate-file, --patch, or --reason", Actual: args[i]}
 		}
 	}
-	for _, required := range []string{"--patch", "--reason"} {
-		if !seen[required] {
-			return options, &cliError{Code: "missing_required_option", Message: "graph propose requires " + required, Hint: graphUsageHint(), ExitCode: ExitUsage, Field: required, Expected: "required graph propose option", Actual: "missing"}
-		}
+	if !seen["--patch"] && !seen["--candidate-file"] {
+		return options, &cliError{Code: "missing_required_option", Message: "graph propose requires --candidate-file or legacy --patch", Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "--candidate-file", Expected: "required graph propose candidate option", Actual: "missing"}
+	}
+	if !seen["--reason"] {
+		return options, &cliError{Code: "missing_required_option", Message: "graph propose requires --reason", Hint: graphUsageHint(), ExitCode: ExitUsage, Field: "--reason", Expected: "required graph propose option", Actual: "missing"}
 	}
 	return options, nil
 }
@@ -2091,7 +2096,7 @@ func phasePlanUsageHint() string {
 }
 
 func graphUsageHint() string {
-	return "Use graph init --from-template <template-id-or-path> [--output .kkachi-workflow.yaml], graph validate [--file .kkachi-workflow.yaml], graph explain [--file .kkachi-workflow.yaml], graph diff --from <graph> --to <graph> [--semantic], graph propose --patch <candidate-graph> --reason <text>, graph apply --proposal <proposal-id> --approval <evidence-ref>, or graph export --format mermaid|plantuml [--output <path>] with optional global --json."
+	return "Use graph init --from-template <template-id-or-path> [--output .kkachi-workflow.yaml], graph validate [--file .kkachi-workflow.yaml], graph explain [--file .kkachi-workflow.yaml], graph diff --from <graph> --to <graph> [--semantic], graph propose --candidate-file <candidate-graph> --reason <text> (legacy --patch accepted), graph apply --proposal <proposal-id> --approval <evidence-ref>, or graph export --format mermaid|plantuml [--output <path>] with optional global --json."
 }
 
 func approvalUsageHint() string {
@@ -2410,12 +2415,12 @@ var helpPages = map[string]helpOutput{
 	"graph": {
 		Command:      "kkachi-agent-helper graph",
 		Status:       capabilityStatusSupported,
-		Usage:        "kkachi-agent-helper graph init --from-template <template-id-or-path> [--output .kkachi-workflow.yaml] [--json]\n  kkachi-agent-helper graph validate [--file .kkachi-workflow.yaml] [--json]\n  kkachi-agent-helper graph explain [--file .kkachi-workflow.yaml] [--json]\n  kkachi-agent-helper graph diff --from <repo-relative-graph> --to <repo-relative-graph> [--semantic] [--json]\n  kkachi-agent-helper graph propose --patch <repo-relative-candidate-graph> --reason <text> [--json]\n  kkachi-agent-helper graph apply --proposal <proposal-id> --approval <evidence-ref> [--json]\n  kkachi-agent-helper graph export --format mermaid|plantuml [--output <path>] [--json]",
+		Usage:        "kkachi-agent-helper graph init --from-template <template-id-or-path> [--output .kkachi-workflow.yaml] [--json]\n  kkachi-agent-helper graph validate [--file .kkachi-workflow.yaml] [--json]\n  kkachi-agent-helper graph explain [--file .kkachi-workflow.yaml] [--json]\n  kkachi-agent-helper graph diff --from <repo-relative-graph> --to <repo-relative-graph> [--semantic] [--json]\n  kkachi-agent-helper graph propose --candidate-file <repo-relative-candidate-graph> --reason <text> [--json]\n  kkachi-agent-helper graph propose --patch <repo-relative-candidate-graph> --reason <text> [--json]  # legacy alias\n  kkachi-agent-helper graph apply --proposal <proposal-id> --approval <evidence-ref> [--json]\n  kkachi-agent-helper graph export --format mermaid|plantuml [--output <path>] [--json]",
 		Summary:      "Initialize, validate, explain, diff, propose, approval-apply, and export project-level .kkachi-workflow.yaml graph state.",
 		Subcommands:  []helpItem{{Name: "init", Description: "Create the initial workflow graph from khs-default or an explicit template path."}, {Name: "validate", Description: "Validate workflow graph schema, source authority, and graph references."}, {Name: "explain", Description: "Show the effective graph phases, edges, gates, approvals, and validation summary."}, {Name: "diff", Description: "Compare two valid workflow graph files semantically without writing graph state."}, {Name: "propose", Description: "Record a proposal for a complete candidate workflow graph without applying it."}, {Name: "apply", Description: "Apply an approved proposal after checksum and source-precedence checks."}, {Name: "export", Description: "Render Mermaid or PlantUML generated diagrams without making them graph authority."}},
-		Options:      []helpItem{{Name: "--from-template <template-id-or-path>", Description: "Template id khs-default or repository-relative workflow graph YAML template for graph init."}, {Name: "--output .kkachi-workflow.yaml", Description: "Optional graph init output; graph init only supports .kkachi-workflow.yaml."}, {Name: "--file <repo-relative-path>", Description: "Workflow graph file to inspect; defaults to .kkachi-workflow.yaml for validate/explain."}, {Name: "--from <repo-relative-graph>", Description: "Base graph file for graph diff."}, {Name: "--to <repo-relative-graph>", Description: "Candidate graph file for graph diff."}, {Name: "--semantic", Description: "Accepted for graph diff; semantic comparison is always used."}, {Name: "--patch <repo-relative-candidate-graph>", Description: "Complete candidate workflow graph file for graph propose."}, {Name: "--reason <text>", Description: "Required reason recorded in the graph proposal."}, {Name: "--proposal <proposal-id>", Description: "Proposal id returned by graph propose for graph apply."}, {Name: "--approval <evidence-ref>", Description: "Required approval evidence reference for graph apply."}, {Name: "--format mermaid|plantuml", Description: "Required graph export diagram format."}, {Name: "--output <repo-relative-path>", Description: "Optional generated diagram output path for graph export."}, {Name: "--json", Description: "Emit structured graph output."}, {Name: "--help", Description: "Show graph help and exit 0."}},
+		Options:      []helpItem{{Name: "--from-template <template-id-or-path>", Description: "Template id khs-default or repository-relative workflow graph YAML template for graph init."}, {Name: "--output .kkachi-workflow.yaml", Description: "Optional graph init output; graph init only supports .kkachi-workflow.yaml."}, {Name: "--file <repo-relative-path>", Description: "Workflow graph file to inspect; defaults to .kkachi-workflow.yaml for validate/explain."}, {Name: "--from <repo-relative-graph>", Description: "Base graph file for graph diff."}, {Name: "--to <repo-relative-graph>", Description: "Candidate graph file for graph diff."}, {Name: "--semantic", Description: "Accepted for graph diff; semantic comparison is always used."}, {Name: "--candidate-file <repo-relative-candidate-graph>", Description: "Complete candidate workflow graph file for graph propose."}, {Name: "--patch <repo-relative-candidate-graph>", Description: "Legacy graph propose alias for --candidate-file; not a partial patch DSL."}, {Name: "--reason <text>", Description: "Required reason recorded in the graph proposal."}, {Name: "--proposal <proposal-id>", Description: "Proposal id returned by graph propose for graph apply."}, {Name: "--approval <evidence-ref>", Description: "Required approval or audit evidence reference recorded by graph apply."}, {Name: "--format mermaid|plantuml", Description: "Required graph export diagram format."}, {Name: "--output <repo-relative-path>", Description: "Optional generated diagram output path for graph export."}, {Name: "--json", Description: "Emit structured graph output."}, {Name: "--help", Description: "Show graph help and exit 0."}},
 		JSONBehavior: "Graph init/validate/explain/diff/propose/apply/export support global --json for structured output. Failing graph validation, diff, or export exits 3 while emitting graph result data on stdout.",
-		Notes:        []string{"graph init creates only the initial .kkachi-workflow.yaml and fails if one already exists.", "graph propose records .kkachi/graph/proposals evidence and an event; it does not edit .kkachi-workflow.yaml.", "graph apply records required approval evidence by reference but does not decide approval policy.", "graph export writes or prints generated diagrams with authoritative=false; exports are never workflow graph source of truth.", "replacement init and kah alias behavior remain unimplemented.", "KAH validates declared graph state only; KHS remains responsible for workflow policy and templates."},
+		Notes:        []string{"graph init creates only the initial .kkachi-workflow.yaml and fails if one already exists.", "graph propose records .kkachi/graph/proposals evidence for a complete candidate graph; it does not edit .kkachi-workflow.yaml.", "approval_required=false means the semantic diff did not trigger graph approval policy; graph apply still records --approval as an explicit approval or audit evidence reference.", "graph apply records the supplied approval/audit evidence reference but does not decide approval policy.", "graph export writes or prints generated diagrams with authoritative=false; exports are never workflow graph source of truth.", "replacement init and kah alias behavior remain unimplemented.", "KAH validates declared graph state only; KHS remains responsible for workflow policy and templates."},
 	},
 }
 

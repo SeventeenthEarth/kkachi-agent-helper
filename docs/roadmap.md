@@ -113,11 +113,11 @@ Status values: `Planned`, `In Progress`, `Blocked`, `Completed`, `Deferred`.
 
 > Goal: add a deterministic KAH graph surface for project-level `.kkachi-workflow.yaml` state while preserving KHS policy ownership and run-local `phase-plan.yaml` evidence.
 >
-> Status note: planning confirmation is recorded for `docs/sot/workflow-graph.md`; implementation remains pending until KAH capabilities/help prove each command surface. Implementation proceeds one PR-candidate task at a time after required review gates.
+> Status note: the graph contract is merged into permanent specs/compatibility docs, and KAH capabilities/help prove each implemented command surface. Future graph work should proceed one PR-candidate task at a time after required review gates.
 
 | Task ID | Title | Status | Work guide | Notes |
 |---|---|---|---|---|
-| graph-001 | Docs/SOT and schema v1 outline for `.kkachi-workflow.yaml` | Completed | Confirm `docs/sot/workflow-graph.md`, authority tables, source precedence, command classification, JSON/human output expectations, and schema outline. | SOT closure completed as docs-only planning authority; runtime implementation still requires capability/help evidence. |
+| graph-001 | Docs/SOT and schema v1 outline for `.kkachi-workflow.yaml` | Completed | Confirm graph authority tables, source precedence, command classification, JSON/human output expectations, and schema outline. | Former temporary workflow graph SOT was merged into permanent specs/compatibility docs and removed after implementation evidence landed. |
 | graph-002 | Read-only graph validation and explanation commands | Completed | Implement capability-advertised `graph validate` and `graph explain` with fail-closed schema/source checks and compact human/JSON output. | Implemented read-only `kkachi-agent-helper graph validate/explain`, `workflow_graph_readonly` capability evidence, help/docs coverage, fail-closed source/schema validation, and unit/CLI/integration/E2E regressions. |
 | graph-003 | Semantic diff and proposal record format | Completed | Implement semantic graph diff plus proposal record storage that preserves changed phases, edges, gates, approvals, risk flags, and next action. | Implemented `kkachi-agent-helper graph diff` and `graph propose` with proposal records under `.kkachi/graph/proposals/`; proposal records do not apply graph changes. |
 | graph-004 | `init --from-template` template ingestion and initial graph write | Completed | Accept explicit KHS template id/path, validate input, write initial `.kkachi-workflow.yaml` only when no graph exists. | Implemented `kkachi-agent-helper graph init --from-template` with built-in `khs-default`, explicit template paths, canonical initial graph write, `graph.initialized` audit event, checksum evidence, `workflow_graph_init` capability, and fail-closed existing-graph behavior. Use `init --from-template`, not `init --profile`; approved replacement is graph apply. |
@@ -141,9 +141,9 @@ Confirming role: Responsible approver / governance evidence record
 Status: graph-007 compatibility diagnostics evidence recorded
 Authority level: active roadmap planning record; not implementation authorization by itself
 Scope: KAH docs roadmap only
-Related docs: `README.md`, `sot/workflow-graph.md`, `specs.md`, `compatibility.md`
+Related docs: `README.md`, `specs.md`, `compatibility.md`
 Decision summary: add `graph — Command-managed workflow graph` as PR-candidate roadmap epic, complete read-only `graph-002` validation/explanation, complete `graph-003` semantic diff/proposal records, complete `graph-004` initial graph init, complete `graph-005` approval-gated apply, complete `graph-006` non-authoritative visualization export, complete `graph-007` compatibility diagnostics/no-direct-YAML-fallback capability evidence, and mark the deleted `docs/TODO-ALIGN.md` pointer stale.
 Evidence/source paths: governance evidence record in kanban task `t_2fb00394`
 Stale/conflict markers: `docs/TODO-ALIGN.md` is deleted in the current working tree and is not active authority; the `kah graph` shorthand remains candidate until capabilities/help prove it.
 Open questions: `graph-008+` implementation details must be refined one PR at a time with capability/help evidence.
-Next record action: keep graph compatibility diagnostics aligned with release evidence without widening graph export into generated-artifact authority or alias behavior.
+Next record action: keep graph compatibility diagnostics aligned with release evidence without widening graph export into generated-artifact authority or `kah graph` alias behavior.

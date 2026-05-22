@@ -131,7 +131,7 @@ Light mode may use the same artifact names with shorter content or explicit not-
 
 ### Project workflow graph note
 
-Status: `graph-007` graph compatibility diagnostics implemented. `docs/sot/workflow-graph.md` is the narrower SOT for `.kkachi-workflow.yaml`, the graph command surface, and graph compatibility diagnostics.
+Status: `graph-007` graph compatibility diagnostics implemented. This file is the permanent behavior SOT for `.kkachi-workflow.yaml`, the graph command surface, and graph compatibility diagnostics.
 
 | Path / artifact | Meaning | Owner | Authority |
 |---|---|---|---|
@@ -143,6 +143,10 @@ Status: `graph-007` graph compatibility diagnostics implemented. `docs/sot/workf
 | Mermaid/PlantUML exports | Generated visualization | KAH export command | Non-authoritative artifact only |
 
 `phase-plan.yaml` remains run-local execution state/evidence and is not deprecated. If project graph, KHS phase policy, and run-local phase state conflict, KAH/KHS fail closed and require responsible role confirmation before acting. KAH must not read Kkachi v2 `.kkachi/config/workflows/` as fallback graph policy, merge it silently, or treat it as equivalent to `.kkachi-workflow.yaml`.
+
+Graph source and evidence precedence is explicit. Applied `.kkachi-workflow.yaml` state whose checksum/version matches KAH graph audit evidence is the effective graph authority, followed by graph init/proposal/apply audit records, then run-local `phase-plan.yaml` for one run's execution state, and `.kkachi/config.yaml` for helper config only. KHS defaults and explicit candidate graph files are init/proposal/diff inputs only; inspection commands do not make a candidate file authoritative. Generated Mermaid/PlantUML diagrams, stale `.kkachi/` runtime state, KHS defaults, Kkachi v2 `.kkachi/config/workflows/`, and `.kkachi/config.yaml` are never fallback graph authority.
+
+KAH fails closed when graph-managed workflow support is required but `.kkachi-workflow.yaml` is missing, invalid, ambiguous, duplicated, or conflicts with KHS phase policy or run-local `phase-plan.yaml`; when direct manual edits lack validation/proposal/apply/audit evidence; when candidate graph changes affect gates, approvals, review policy, or dependencies without approval/audit evidence; or when KHS asks KAH to use imperative workflow-policy commands.
 
 ### Planned capability cache/evidence note
 
@@ -639,7 +643,8 @@ kkachi-agent-helper graph init --from-template <khs-default|repo-relative-templa
 kkachi-agent-helper graph validate [--file .kkachi-workflow.yaml] [--json]
 kkachi-agent-helper graph explain [--file .kkachi-workflow.yaml] [--json]
 kkachi-agent-helper graph diff --from <repo-relative-graph> --to <repo-relative-graph> [--semantic] [--json]
-kkachi-agent-helper graph propose --patch <repo-relative-candidate-graph> --reason <text> [--json]
+kkachi-agent-helper graph propose --candidate-file <repo-relative-candidate-graph> --reason <text> [--json]
+kkachi-agent-helper graph propose --patch <repo-relative-candidate-graph> --reason <text> [--json]  # legacy alias
 kkachi-agent-helper graph apply --proposal <proposal-id> --approval <evidence-ref> [--json]
 kkachi-agent-helper graph export --format mermaid|plantuml [--output <path>] [--json]
 ```
@@ -654,11 +659,24 @@ The accepted graph YAML subset is intentionally narrower than full YAML: top-lev
 
 `graph diff` validates both `--from` and `--to` graph files with the same fail-closed source/schema checks, then emits deterministic semantic changes by stable keys: phases by `id`, edges by `from -> to`, gates by `id`, and approvals by `scope`. It reports added, removed, and modified records plus `risk_flags`, `requires_approval`, `validation_summary`, and `next_action`. `--semantic` is accepted for command clarity; semantic comparison is the only implemented diff mode. Diff does not write graph files, proposal records, events, locks, or exports.
 
-`graph propose` requires initialized helper state, project event coherence, `--patch <repo-relative-candidate-graph>`, and `--reason <text>`. The patch file is a complete candidate workflow graph, not a partial patch DSL. KAH validates the current `.kkachi-workflow.yaml` and the candidate, computes the semantic diff, writes `.kkachi/graph/proposals/gprop-000001.json` style proposal records atomically under the project write lock, and appends `graph.proposal_recorded`. Proposal records include proposal id/path, timestamp, reason, base/candidate file and checksum, validation summary, embedded semantic diff, approval requirement, and next action. Successful CLI output also includes the appended event id. They never apply changes to `.kkachi-workflow.yaml`.
+`graph propose` requires initialized helper state, project event coherence, one candidate graph input option, and `--reason <text>`. Prefer `--candidate-file <repo-relative-candidate-graph>` for new operator use. Legacy `--patch <repo-relative-candidate-graph>` remains accepted as a compatibility alias for the same complete candidate workflow graph input; it is not a partial patch DSL. KAH validates the current `.kkachi-workflow.yaml` and the candidate, computes the semantic diff, writes `.kkachi/graph/proposals/gprop-000001.json` style proposal records atomically under the project write lock, and appends `graph.proposal_recorded`. Proposal records include proposal id/path, timestamp, reason, base/candidate file and checksum, validation summary, embedded semantic diff, approval requirement, and next action. `approval_required=false` means the semantic diff did not trigger graph approval policy, not that apply can proceed without an audit trail. Successful CLI output also includes the appended event id. Proposal records never apply changes to `.kkachi-workflow.yaml`.
 
-`graph apply` requires initialized helper state, project event coherence, `--proposal <proposal-id>`, and `--approval <evidence-ref>`. The approval value is recorded as an evidence reference; KAH does not decide approval policy or validate external approver semantics. Apply loads `.kkachi/graph/proposals/<proposal-id>.json`, verifies schema/status/id/path consistency, validates the current `.kkachi-workflow.yaml` and the candidate graph, requires the current base checksum and candidate checksum to match the proposal record, stamps the candidate `metadata.last_applied_event_id` with the pending apply event id, renders canonical graph YAML, validates the rendered graph, writes `.kkachi-workflow.yaml` atomically, and appends `graph.applied`. JSON output includes `schema_version`, `status`, `proposal_id`, `approval_ref`, `graph_path`, `new_checksum`, `event_ids`, and `next_action`. Apply fails closed without writing graph state or appending events when proposal evidence is missing/invalid, graph sources are invalid, or checksums conflict.
+`graph apply` requires initialized helper state, project event coherence, `--proposal <proposal-id>`, and `--approval <evidence-ref>`. The approval value is recorded as an approval or audit evidence reference; KAH does not decide approval policy or validate external approver semantics. Apply loads `.kkachi/graph/proposals/<proposal-id>.json`, verifies schema/status/id/path consistency, validates the current `.kkachi-workflow.yaml` and the candidate graph, requires the current base checksum and candidate checksum to match the proposal record, stamps the candidate `metadata.last_applied_event_id` with the pending apply event id, renders canonical graph YAML, validates the rendered graph, writes `.kkachi-workflow.yaml` atomically, and appends `graph.applied`. JSON output includes `schema_version`, `status`, `proposal_id`, `approval_ref`, `graph_path`, `new_checksum`, `event_ids`, and `next_action`. Apply fails closed without writing graph state or appending events when proposal evidence is missing/invalid, graph sources are invalid, checksums conflict, or the explicit evidence reference is absent.
 
 `graph export` validates `.kkachi-workflow.yaml` with the same fail-closed graph validation path, then renders either Mermaid (`flowchart TD`) or PlantUML (`@startuml`/`@enduml`) as generated visualization only. `--format mermaid|plantuml` is required. When `--output` is omitted, human output is the diagram body on stdout; JSON output includes metadata plus the `diagram` string. When `--output` is provided, KAH writes a new repository-relative generated diagram file with a matching extension (`.mmd`/`.mermaid` for Mermaid, `.puml`/`.plantuml` for PlantUML) and rejects unsafe paths, graph source paths, existing files, directories, and mismatched extensions. JSON output includes `schema_version`, `status`, `format`, `output_path`, `source_file`, `source_checksum`, `authoritative: false`, `diagram`, `validation_summary`, and `next_action`. Export does not write graph state, create proposals, append events, decide policy, or make diagrams graph authority.
+
+Graph proposal lifecycle is proposal-first. KHS, a responsible approver, or a human drafts a complete candidate graph or selects a KHS template; KAH validates the candidate, explains the current effective graph, computes a semantic diff, records `.kkachi/graph/proposals/gprop-*.json` evidence, accepts explicit approval/audit evidence through `graph apply`, atomically applies the approved candidate, appends audit events, and lets KHS copy relevant evidence into run artifacts when the graph change affects a run. Direct YAML editing is not the normal path; unmanaged direct edits must be repaired through validation/proposal/apply evidence before KHS relies on them.
+
+Stable graph JSON output keeps these compact top-level fields:
+
+| Command | Required fields |
+|---|---|
+| `validate --json` | `schema_version`, `status`, `file`, `checksum`, `effective_source`, `errors`, `warnings`, `conflicts`, `next_action` |
+| `explain --json` | `schema_version`, `status`, `graph_version`, `effective_source`, `phases`, `edges`, `gates`, `approval_requirements`, `pending_proposals`, `validation_summary`, `next_action` |
+| `diff --json` | `schema_version`, `status`, `from`, `to`, `changed_phases`, `changed_edges`, `changed_gates`, `changed_approvals`, `risk_flags`, `requires_approval`, `validation_summary`, `next_action` |
+| `propose --json` | `schema_version`, `status`, `proposal_id`, `proposal_path`, `validation_summary`, `semantic_diff_ref`, `approval_required`, `event_id`, `next_action` |
+| `apply --json` | `schema_version`, `status`, `proposal_id`, `approval_ref`, `graph_path`, `new_checksum`, `event_ids`, `next_action` |
+| `export --json` | `schema_version`, `status`, `format`, `output_path`, `source_file`, `source_checksum`, `authoritative: false`, `diagram`, `validation_summary`, `next_action` |
 
 KAH policy-mutation command category is empty. Do not document policy-setting surfaces as normal commands; this excludes workflow subcommands under the `kah` prefix, profile-driven graph initialization, gate-setting commands, review-policy setters, and graph policy setters.
 
@@ -884,7 +902,7 @@ Confirming role: Responsible approver / governance evidence record
 Status: graph init, validation/explanation, semantic diff, proposal records, approval-gated apply, non-authoritative export, and compatibility diagnostics implemented
 Authority level: `docs/specs.md` remains authoritative for implemented helper behavior and generated visualization export boundaries
 Scope: KAH helper docs only
-Related docs: `README.md`, `sot/workflow-graph.md`, `roadmap.md`, `compatibility.md`, KHS `docs/sot/workflow-graph-integration.md`
+Related docs: `README.md`, `roadmap.md`, `compatibility.md`, KHS `docs/sot/workflow-graph-integration.md`
 Decision summary: add `.kkachi-workflow.yaml` as candidate project-level graph state while preserving `.kkachi/config.yaml` as helper config and `phase-plan.yaml` as run-local execution evidence; diagnostics now publish `graph_compatibility` so KHS can fail closed without direct YAML fallback.
 Evidence/source paths: governance evidence record in kanban task `t_2fb00394`
 Stale/conflict markers: older wording that treats `phase-plan.yaml` as the whole workflow SOT is narrowed to run-local state; prior root-level kkachi config YAML/JSON graph phrasing is superseded by `.kkachi-workflow.yaml` if encountered.
