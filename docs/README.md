@@ -1,10 +1,10 @@
 # KAH docs archive index
 
-Date: 2026-05-21
+Date: 2026-05-22
 Owner: KAH documentation archive
 Confirming role: Responsible approver / governance evidence record
-Status: docs index; workflow graph init/validation/explanation/diff/proposal evidence present and apply/export evidence pending
-Authority level: reading guide for KAH docs; apply/export planning records remain implementation-pending until capability/help evidence exists
+Status: docs index; workflow graph init/validation/explanation/diff/proposal/apply evidence present and export evidence pending
+Authority level: reading guide for KAH docs; export planning records remain implementation-pending until capability/help evidence exists
 Scope: `kkachi-agent-helper/docs` only
 Related docs: `docs/specs.md`, `docs/sot/workflow-graph.md`, `docs/roadmap.md`, `docs/compatibility.md`
 Evidence/source paths:
@@ -19,7 +19,7 @@ This directory is the project archive for `kkachi-agent-helper` docs. It separat
 | Path | Meaning | Owner / confirming role | Authority |
 |---|---|---|---|
 | `docs/specs.md` | Current KAH helper behavior SOT | KAH owner; governance approval evidence recorded for Kkachi command use | Authoritative for implemented/helper behavior unless a narrower confirmed `docs/sot/*` file supersedes a section |
-| `docs/sot/workflow-graph.md` | SOT/spec for `.kkachi-workflow.yaml` and graph support | KHS proposes policy/templates; KAH initializes/validates/explains/diffs and records proposals today; future tasks apply approved graph changes | Authority for implemented graph init/validation/explanation/diff/proposal records; planning SOT for apply/export |
+| `docs/sot/workflow-graph.md` | SOT/spec for `.kkachi-workflow.yaml` and graph support | KHS proposes policy/templates and approval evidence; KAH initializes/validates/explains/diffs, records proposals, and applies approved graph changes | Authority for implemented graph init/validation/explanation/diff/proposal/apply records; planning SOT for export |
 | `docs/roadmap.md` | Active KAH delivery roadmap | KAH owner / responsible approver direction | Planning authority; not implementation authorization by itself |
 | `docs/compatibility.md` | Release-facing KHS/KAH compatibility contract | KAH/KHS integration owners | Compatibility matrix and activation guidance |
 | `docs/release-notes-template.md` | Release note template | KAH release owner | Template only |
@@ -39,11 +39,11 @@ This directory is the project archive for `kkachi-agent-helper` docs. It separat
 
 ## Decision summary
 
-- `.kkachi-workflow.yaml` is documented as project-level workflow graph state with implemented init, validation/explanation, semantic diff, and proposal records.
+- `.kkachi-workflow.yaml` is documented as project-level workflow graph state with implemented init, validation/explanation, semantic diff, proposal records, and approval-gated apply.
 - `.kkachi/config.yaml` remains helper runtime/configuration only.
 - `.kkachi/runs/<run_id>/phase-plan.yaml` remains run-local execution state/evidence and is not deprecated.
 - Kkachi v2 `.kkachi/config/workflows/` is outside KAH/KHS graph scope and must not be used as fallback graph authority.
-- `kkachi-agent-helper graph init`, `graph validate`, `graph explain`, `graph diff`, and `graph propose` are implemented; `kah graph` remains planned/candidate shorthand unless alias evidence exists.
+- `kkachi-agent-helper graph init`, `graph validate`, `graph explain`, `graph diff`, `graph propose`, and `graph apply` are implemented; `kah graph` remains planned/candidate shorthand unless alias evidence exists.
 
 ## Stale/conflict markers
 
@@ -53,10 +53,10 @@ This directory is the project archive for `kkachi-agent-helper` docs. It separat
 
 ## Open questions
 
-- The `.kkachi-workflow.yaml` schema is implemented for init/validation/explanation/diff/proposal records; apply/export details remain open until later tasks close.
+- The `.kkachi-workflow.yaml` schema is implemented for init/validation/explanation/diff/proposal/apply records; export details remain open until a later task closes.
 - The real command name is `kkachi-agent-helper graph`; alias policy for `kah graph` remains unimplemented and current binary evidence must be checked before use.
-- Graph apply/export authority still requires capability/help evidence and any required review gates.
+- Graph export authority still requires capability/help evidence and any required review gates.
 
 ## Next record action
 
-Use `docs/roadmap.md` `graph-005` as the next implementation slice for approval-gated apply. Do not widen graph init into replacement/export behavior.
+Use `docs/roadmap.md` `graph-006` as the next implementation slice for visualization export. Do not widen graph apply into generated-artifact authority or alias behavior.

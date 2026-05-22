@@ -575,6 +575,208 @@ func TestProposeWorkflowGraphRequiresInitializedAndValidBaseState(t *testing.T) 
 	})
 }
 
+func TestApplyWorkflowGraphAppliesApprovedProposal(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	writeWorkflowGraph(t, repo, validWorkflowGraph())
+	patch := "graphs/candidate.yaml"
+	writeGraphFile(t, repo, patch, candidateWorkflowGraph())
+	proposal, err := ProposeWorkflowGraph(root, GraphProposeOptions{Patch: patch, Reason: "add ask phase"})
+	if err != nil {
+		t.Fatalf("ProposeWorkflowGraph() error = %v", err)
+	}
+	proposalBefore := readGraphTestText(t, filepath.Join(repo, filepath.FromSlash(proposal.ProposalPath)))
+
+	result, err := ApplyWorkflowGraph(root, GraphApplyOptions{
+		Proposal: proposal.ProposalID,
+		Approval: "approval-record:grafana-123",
+		Now:      func() time.Time { return time.Date(2026, 5, 22, 2, 3, 4, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatalf("ApplyWorkflowGraph() error = %v", err)
+	}
+	if result.Status != GraphStatusPass || result.ProposalID != proposal.ProposalID || result.ApprovalRef != "approval-record:grafana-123" || result.GraphPath != WorkflowGraphDefaultPath || len(result.EventIDs) != 1 || result.EventIDs[0] != "evt-000003" || result.NewChecksum == "" {
+		t.Fatalf("apply result = %#v, want applied proposal", result)
+	}
+	graphBytes, err := os.ReadFile(filepath.Join(repo, WorkflowGraphDefaultPath))
+	if err != nil {
+		t.Fatalf("read applied graph: %v", err)
+	}
+	sum := sha256.Sum256(graphBytes)
+	if result.NewChecksum != hex.EncodeToString(sum[:]) {
+		t.Fatalf("new checksum = %s, want actual graph checksum", result.NewChecksum)
+	}
+	graphText := string(graphBytes)
+	for _, want := range []string{`id: "ask"`, `required: false`, `last_applied_event_id: "evt-000003"`} {
+		if !strings.Contains(graphText, want) {
+			t.Fatalf("applied graph = %s, want %s", graphText, want)
+		}
+	}
+	if got := readGraphTestText(t, filepath.Join(repo, filepath.FromSlash(proposal.ProposalPath))); got != proposalBefore {
+		t.Fatalf("proposal record changed\nbefore=%s\nafter=%s", proposalBefore, got)
+	}
+	lines := runEventLines(t, repo)
+	if !strings.Contains(lines[len(lines)-1], graphApplyEventType) || !strings.Contains(lines[len(lines)-1], result.NewChecksum) || !strings.Contains(lines[len(lines)-1], "approval-record:grafana-123") {
+		t.Fatalf("last event = %s, want graph applied audit event", lines[len(lines)-1])
+	}
+}
+
+func TestApplyWorkflowGraphFailsClosedWithoutMutation(t *testing.T) {
+	cases := []struct {
+		name     string
+		mutate   func(t *testing.T, repo string, proposal GraphProposalResult)
+		options  func(proposal GraphProposalResult) GraphApplyOptions
+		wantCode string
+	}{
+		{
+			name: "stale base checksum",
+			mutate: func(t *testing.T, repo string, _ GraphProposalResult) {
+				writeWorkflowGraph(t, repo, strings.Replace(validWorkflowGraph(), `title: "Plan"`, `title: "Plan Updated"`, 1))
+			},
+			wantCode: "graph_base_checksum_mismatch",
+		},
+		{
+			name: "changed candidate checksum",
+			mutate: func(t *testing.T, repo string, _ GraphProposalResult) {
+				writeGraphFile(t, repo, "graphs/candidate.yaml", strings.Replace(candidateWorkflowGraph(), `title: "Ask"`, `title: "Ask Updated"`, 1))
+			},
+			wantCode: "graph_candidate_checksum_mismatch",
+		},
+		{
+			name: "missing candidate",
+			mutate: func(t *testing.T, repo string, _ GraphProposalResult) {
+				if err := os.Remove(filepath.Join(repo, "graphs", "candidate.yaml")); err != nil {
+					t.Fatalf("remove candidate: %v", err)
+				}
+			},
+			wantCode: "graph_apply_invalid",
+		},
+		{
+			name: "invalid candidate",
+			mutate: func(t *testing.T, repo string, _ GraphProposalResult) {
+				writeGraphFile(t, repo, "graphs/candidate.yaml", strings.Replace(candidateWorkflowGraph(), `to: "implement"`, `to: "missing"`, 1))
+			},
+			wantCode: "graph_apply_invalid",
+		},
+		{
+			name: "proposal record invalid JSON",
+			mutate: func(t *testing.T, repo string, proposal GraphProposalResult) {
+				writeGraphProposalRecordRaw(t, repo, proposal, "{not json\n")
+			},
+			wantCode: "graph_proposal_invalid_json",
+		},
+		{
+			name: "proposal record schema mismatch",
+			mutate: func(t *testing.T, repo string, proposal GraphProposalResult) {
+				updateGraphProposalRecord(t, repo, proposal, func(record *WorkflowGraphProposalRecord) {
+					record.SchemaVersion = "workflow-graph/v0"
+				})
+			},
+			wantCode: "graph_proposal_schema_invalid",
+		},
+		{
+			name: "proposal record status mismatch",
+			mutate: func(t *testing.T, repo string, proposal GraphProposalResult) {
+				updateGraphProposalRecord(t, repo, proposal, func(record *WorkflowGraphProposalRecord) {
+					record.Status = GraphStatusFail
+				})
+			},
+			wantCode: "graph_proposal_status_invalid",
+		},
+		{
+			name: "proposal record id mismatch",
+			mutate: func(t *testing.T, repo string, proposal GraphProposalResult) {
+				updateGraphProposalRecord(t, repo, proposal, func(record *WorkflowGraphProposalRecord) {
+					record.ProposalID = "gprop-000002"
+				})
+			},
+			wantCode: "graph_proposal_id_mismatch",
+		},
+		{
+			name: "proposal record path mismatch",
+			mutate: func(t *testing.T, repo string, proposal GraphProposalResult) {
+				updateGraphProposalRecord(t, repo, proposal, func(record *WorkflowGraphProposalRecord) {
+					record.ProposalPath = ".kkachi/graph/proposals/gprop-000002.json"
+				})
+			},
+			wantCode: "graph_proposal_path_mismatch",
+		},
+		{
+			name: "proposal record missing candidate evidence",
+			mutate: func(t *testing.T, repo string, proposal GraphProposalResult) {
+				updateGraphProposalRecord(t, repo, proposal, func(record *WorkflowGraphProposalRecord) {
+					record.Candidate.Checksum = ""
+				})
+			},
+			wantCode: "graph_proposal_record_invalid",
+		},
+		{
+			name: "proposal record base file mismatch",
+			mutate: func(t *testing.T, repo string, proposal GraphProposalResult) {
+				updateGraphProposalRecord(t, repo, proposal, func(record *WorkflowGraphProposalRecord) {
+					record.Base.File = "graphs/base.yaml"
+				})
+			},
+			wantCode: "graph_proposal_base_invalid",
+		},
+		{
+			name: "malformed proposal id",
+			options: func(GraphProposalResult) GraphApplyOptions {
+				return GraphApplyOptions{Proposal: "gprop-1.json", Approval: "approval:evidence"}
+			},
+			wantCode: "graph_proposal_invalid",
+		},
+		{
+			name: "unknown proposal id",
+			options: func(GraphProposalResult) GraphApplyOptions {
+				return GraphApplyOptions{Proposal: "gprop-999999", Approval: "approval:evidence"}
+			},
+			wantCode: "graph_proposal_missing",
+		},
+		{
+			name: "blank approval",
+			options: func(proposal GraphProposalResult) GraphApplyOptions {
+				return GraphApplyOptions{Proposal: proposal.ProposalID, Approval: " "}
+			},
+			wantCode: "graph_approval_required",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := initializedRepo(t)
+			root, _ := DiscoverRoot(repo)
+			writeWorkflowGraph(t, repo, validWorkflowGraph())
+			writeGraphFile(t, repo, "graphs/candidate.yaml", candidateWorkflowGraph())
+			proposal, err := ProposeWorkflowGraph(root, GraphProposeOptions{Patch: "graphs/candidate.yaml", Reason: "add ask phase"})
+			if err != nil {
+				t.Fatalf("ProposeWorkflowGraph() error = %v", err)
+			}
+			if tc.mutate != nil {
+				tc.mutate(t, repo, proposal)
+			}
+			beforeGraph := readGraphTestText(t, filepath.Join(repo, WorkflowGraphDefaultPath))
+			beforeEvents := runEventLines(t, repo)
+
+			options := defaultGraphApplyOptions(proposal)
+			if tc.options != nil {
+				options = tc.options(proposal)
+			}
+			_, err = ApplyWorkflowGraph(root, options)
+			assertProblemCode(t, err, tc.wantCode)
+			if got := readGraphTestText(t, filepath.Join(repo, WorkflowGraphDefaultPath)); got != beforeGraph {
+				t.Fatalf("graph mutated after rejected apply\nbefore=%s\nafter=%s", beforeGraph, got)
+			}
+			if afterEvents := runEventLines(t, repo); len(afterEvents) != len(beforeEvents) {
+				t.Fatalf("events changed after rejected apply: before=%d after=%d", len(beforeEvents), len(afterEvents))
+			}
+		})
+	}
+}
+
+func defaultGraphApplyOptions(proposal GraphProposalResult) GraphApplyOptions {
+	return GraphApplyOptions{Proposal: proposal.ProposalID, Approval: "approval:evidence"}
+}
+
 func writeWorkflowGraph(t *testing.T, repo string, body string) {
 	t.Helper()
 	writeGraphFile(t, repo, WorkflowGraphDefaultPath, body)
@@ -626,6 +828,30 @@ func readGraphTestJSON(t *testing.T, path string, target any) {
 	}
 	if err := json.Unmarshal(data, target); err != nil {
 		t.Fatalf("decode %s: %v\n%s", path, err, string(data))
+	}
+}
+
+func updateGraphProposalRecord(t *testing.T, repo string, proposal GraphProposalResult, mutate func(*WorkflowGraphProposalRecord)) {
+	t.Helper()
+	var record WorkflowGraphProposalRecord
+	path := filepath.Join(repo, filepath.FromSlash(proposal.ProposalPath))
+	readGraphTestJSON(t, path, &record)
+	mutate(&record)
+	data, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		t.Fatalf("encode proposal record: %v", err)
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write proposal record: %v", err)
+	}
+}
+
+func writeGraphProposalRecordRaw(t *testing.T, repo string, proposal GraphProposalResult, body string) {
+	t.Helper()
+	path := filepath.Join(repo, filepath.FromSlash(proposal.ProposalPath))
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write raw proposal record: %v", err)
 	}
 }
 

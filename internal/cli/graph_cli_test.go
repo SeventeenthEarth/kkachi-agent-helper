@@ -234,6 +234,73 @@ func TestGraphProposeRecordsProposalJSONAndHumanOutput(t *testing.T) {
 	}
 }
 
+func TestGraphApplyJSONAndHumanOutput(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	writeCLIGraph(t, repo, cliValidWorkflowGraph())
+	patch := "graphs/candidate.yaml"
+	writeCLIGraphFile(t, repo, patch, cliCandidateWorkflowGraph())
+	stdout.Reset()
+	stderr.Reset()
+	exitCode := runWithOptions([]string{"graph", "propose", "--patch", patch, "--reason", "add ask phase", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	if exitCode != ExitOK {
+		t.Fatalf("propose exitCode = %d, want %d stderr=%s stdout=%s", exitCode, ExitOK, stderr.String(), stdout.String())
+	}
+	var proposal project.GraphProposalResult
+	if err := json.Unmarshal(stdout.Bytes(), &proposal); err != nil {
+		t.Fatalf("graph propose output is not JSON: %v\n%s", err, stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+
+	exitCode = runWithOptions([]string{"graph", "apply", "--proposal", proposal.ProposalID, "--approval", "approval:record-1", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	if exitCode != ExitOK {
+		t.Fatalf("apply exitCode = %d, want %d stderr=%s stdout=%s", exitCode, ExitOK, stderr.String(), stdout.String())
+	}
+	var applied project.GraphApplyResult
+	if err := json.Unmarshal(stdout.Bytes(), &applied); err != nil {
+		t.Fatalf("graph apply output is not JSON: %v\n%s", err, stdout.String())
+	}
+	if applied.Status != project.GraphStatusPass || applied.ProposalID != proposal.ProposalID || applied.ApprovalRef != "approval:record-1" || applied.GraphPath != project.WorkflowGraphDefaultPath || applied.NewChecksum == "" || len(applied.EventIDs) != 1 || applied.EventIDs[0] != "evt-000003" {
+		t.Fatalf("applied = %#v, want graph apply result", applied)
+	}
+	graph := readCLITestText(t, filepath.Join(repo, project.WorkflowGraphDefaultPath))
+	for _, want := range []string{`id: "ask"`, `last_applied_event_id: "evt-000003"`} {
+		if !strings.Contains(graph, want) {
+			t.Fatalf("applied graph = %s, want %s", graph, want)
+		}
+	}
+
+	repo = tempGitRepo(t)
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	writeCLIGraph(t, repo, cliValidWorkflowGraph())
+	writeCLIGraphFile(t, repo, patch, cliCandidateWorkflowGraph())
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"graph", "propose", "--patch", patch, "--reason", "add ask phase", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("propose exitCode = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	exitCode = runWithOptions([]string{"graph", "apply", "--proposal", "gprop-000001", "--approval", "approval:record-1"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	if exitCode != ExitOK {
+		t.Fatalf("human apply exitCode = %d, want %d stderr=%s", exitCode, ExitOK, stderr.String())
+	}
+	for _, want := range []string{"graph apply: pass", "proposal_id: gprop-000001", "approval_ref: approval:record-1", "graph_path: .kkachi-workflow.yaml", "event_ids: evt-000003"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("human apply output = %q, want %q", stdout.String(), want)
+		}
+	}
+}
+
 func TestGraphValidationFailureEmitsResultOnStdout(t *testing.T) {
 	repo := tempGitRepo(t)
 	writeCLIGraph(t, repo, strings.Replace(cliValidWorkflowGraph(), `to: "implement"`, `to: "missing"`, 1))
@@ -320,6 +387,13 @@ func TestGraphRejectsUsageErrorsOnStderr(t *testing.T) {
 		{name: "duplicate propose patch", args: []string{"graph", "propose", "--patch", "candidate.yaml", "--patch", "other.yaml", "--reason", "test", "--json"}, wantCode: "duplicate_option"},
 		{name: "duplicate propose reason", args: []string{"graph", "propose", "--patch", "candidate.yaml", "--reason", "test", "--reason", "again", "--json"}, wantCode: "duplicate_option"},
 		{name: "unknown propose option", args: []string{"graph", "propose", "--patch", "candidate.yaml", "--reason", "test", "--from", "base.yaml", "--json"}, wantCode: "unknown_option"},
+		{name: "missing apply proposal", args: []string{"graph", "apply", "--approval", "record", "--json"}, wantCode: "missing_required_option"},
+		{name: "missing apply approval", args: []string{"graph", "apply", "--proposal", "gprop-000001", "--json"}, wantCode: "missing_required_option"},
+		{name: "empty apply proposal", args: []string{"graph", "apply", "--proposal", "", "--approval", "record", "--json"}, wantCode: "missing_option_value"},
+		{name: "empty apply approval", args: []string{"graph", "apply", "--proposal", "gprop-000001", "--approval", "", "--json"}, wantCode: "missing_option_value"},
+		{name: "duplicate apply proposal", args: []string{"graph", "apply", "--proposal", "gprop-000001", "--proposal", "gprop-000002", "--approval", "record", "--json"}, wantCode: "duplicate_option"},
+		{name: "duplicate apply approval", args: []string{"graph", "apply", "--proposal", "gprop-000001", "--approval", "record", "--approval", "record-2", "--json"}, wantCode: "duplicate_option"},
+		{name: "unknown apply option", args: []string{"graph", "apply", "--proposal", "gprop-000001", "--approval", "record", "--patch", "candidate.yaml", "--json"}, wantCode: "unknown_option"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

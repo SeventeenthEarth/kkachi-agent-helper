@@ -140,7 +140,7 @@ func TestStandardHelpUX(t *testing.T) {
 		{name: "diagnostics group", args: []string{"diagnostics", "--help"}, want: []string{"kkachi-agent-helper diagnostics", "export", "--output <repo-relative-path>"}},
 		{name: "phase plan", args: []string{"phase-plan", "--help"}, want: []string{"kkachi-agent-helper phase-plan", "supported", "validate <run_id>"}},
 		{name: "approval", args: []string{"approval", "--help"}, want: []string{"kkachi-agent-helper approval", "request <run_id>", "--decision <approved|rejected>"}},
-		{name: "graph", args: []string{"graph", "--help"}, want: []string{"kkachi-agent-helper graph", "graph init --from-template <template-id-or-path>", "graph validate [--file .kkachi-workflow.yaml]", "graph diff --from <repo-relative-graph>", "graph propose --patch <repo-relative-candidate-graph>"}},
+		{name: "graph", args: []string{"graph", "--help"}, want: []string{"kkachi-agent-helper graph", "graph init --from-template <template-id-or-path>", "graph validate [--file .kkachi-workflow.yaml]", "graph diff --from <repo-relative-graph>", "graph propose --patch <repo-relative-candidate-graph>", "graph apply --proposal <proposal-id>"}},
 		{name: "help help", args: []string{"help", "help"}, want: []string{"kkachi-agent-helper help", "[command] [subcommand]", "JSON behavior:"}},
 	}
 
@@ -264,21 +264,22 @@ func TestGraphDocsSOTAndReadonlyImplementationContract(t *testing.T) {
 			rel: "README.md",
 			wants: []string{
 				"[Workflow graph SOT](docs/sot/workflow-graph.md)",
-				"init, validation, explanation, semantic diff, and proposal records are implemented",
+				"init, validation, explanation, semantic diff, proposal records, and approval-gated apply are implemented",
 				"kkachi-agent-helper graph init --from-template <khs-default|repo-relative-template.yaml> [--output .kkachi-workflow.yaml] [--json]",
 				"kkachi-agent-helper graph validate [--file .kkachi-workflow.yaml] [--json]",
 				"kkachi-agent-helper graph diff --from <repo-relative-graph> --to <repo-relative-graph> [--semantic] [--json]",
+				"kkachi-agent-helper graph apply --proposal <proposal-id> --approval <evidence-ref> [--json]",
 				"`graph propose` records `.kkachi/graph/proposals/gprop-*.json` evidence",
 				"KHS must fail closed instead of silently editing YAML",
 				"Kkachi v2 `.kkachi/config/workflows/` as fallback graph authority",
-				"Graph apply and export surfaces remain planned",
+				"Graph export remains planned",
 			},
 		},
 		{
 			rel: "docs/sot/workflow-graph.md",
 			wants: []string{
 				"# KAH workflow graph SOT",
-				"init, validation/explanation, semantic diff, and proposal records implemented",
+				"init, validation/explanation, semantic diff, proposal records, and approval-gated apply implemented",
 				"`.kkachi-workflow.yaml` is the project-level workflow graph instance",
 				"`phase-plan.yaml` remains run-local execution state/evidence for one KHS run",
 				"Helper config only; never workflow graph SOT",
@@ -288,46 +289,48 @@ func TestGraphDocsSOTAndReadonlyImplementationContract(t *testing.T) {
 				"kkachi-agent-helper graph explain [--file .kkachi-workflow.yaml] [--json]",
 				"kkachi-agent-helper graph diff --from <repo-relative-graph> --to <repo-relative-graph> [--semantic] [--json]",
 				"kkachi-agent-helper graph propose --patch <repo-relative-candidate-graph> --reason <text> [--json]",
+				"kkachi-agent-helper graph apply --proposal <proposal-id> --approval <evidence-ref> [--json]",
 				"Existing `.kkachi-workflow.yaml` files, invalid files, symlinks, and directories fail closed as `graph_already_exists`",
 				"Do not document policy-setting surfaces as normal commands",
 				"kah graph set-policy ...",
 				`required_role: "responsible-approver|required-reviewer|external-approver"`,
 				"Prior role examples that used personal or internal codenames are superseded by generic role placeholders",
 				"Generated Mermaid/PlantUML diagrams for visualization only",
-				"Next implementation work is `graph-005`: approval-gated apply",
+				"Next implementation work is graph export",
 			},
 		},
 		{
 			rel: "docs/specs.md",
 			wants: []string{
-				"graph init, validation/explanation, semantic diff, and proposal records are implemented",
-				"Planning graph update date: 2026-05-21",
+				"graph init, validation/explanation, semantic diff, proposal records, and approval-gated apply are implemented",
+				"Planning graph update date: 2026-05-22",
 				"### Project workflow graph note",
-				".kkachi-workflow.yaml          # project-level workflow graph artifact; init/validate/explain/diff implemented",
+				".kkachi-workflow.yaml          # project-level workflow graph artifact; init/validate/explain/diff/apply implemented",
 				"`.kkachi/config.yaml` | KAH helper runtime/configuration | KAH | Helper config only; never workflow graph SOT",
 				"kkachi-agent-helper graph init --from-template <khs-default|repo-relative-template.yaml> [--output .kkachi-workflow.yaml] [--json]",
 				"kkachi-agent-helper graph validate [--file .kkachi-workflow.yaml] [--json]",
 				"kkachi-agent-helper graph propose --patch <repo-relative-candidate-graph> --reason <text> [--json]",
+				"kkachi-agent-helper graph apply --proposal <proposal-id> --approval <evidence-ref> [--json]",
 				"Other bare values fail as `graph_template_unknown`",
 				"`graph validate` checks the source path",
 				"KAH policy-mutation command category is empty",
 				"kah graph init --profile ...",
 				"## Planning graph record appendix",
-				"Next record action: implement `graph-005` approval-gated apply",
+				"Next record action: implement graph export",
 			},
 		},
 		{
 			rel: "docs/compatibility.md",
 			wants: []string{
-				"graph init, validation/explanation, semantic diff, and proposal records are implemented",
+				"graph init, validation/explanation, semantic diff, proposal records, and approval-gated apply are implemented",
 				"Workflow graph compatibility: `.kkachi-workflow.yaml` plus `kkachi-agent-helper graph init`",
 				"KHS must not silently edit `.kkachi-workflow.yaml` as fallback when graph apply support is missing",
 				"Graph source precedence must fail closed",
-				"`kkachi-agent-helper graph init/validate/explain/diff/propose` | Implemented graph evidence surface",
+				"`kkachi-agent-helper graph init/validate/explain/diff/propose/apply` | Implemented graph evidence surface",
 				"`kah graph` | Planned/candidate shorthand",
 				"Direct YAML edit fallback | Forbidden as normal operation",
 				"## Planning graph record appendix",
-				"Status: graph init/validation/explanation/diff/proposal compatibility implemented",
+				"Status: graph init/validation/explanation/diff/proposal/apply compatibility implemented",
 			},
 		},
 		{
@@ -339,9 +342,11 @@ func TestGraphDocsSOTAndReadonlyImplementationContract(t *testing.T) {
 				"| graph-002 | Read-only graph validation and explanation commands | Completed |",
 				"| graph-003 | Semantic diff and proposal record format | Completed |",
 				"| graph-004 | `init --from-template` template ingestion and initial graph write | Completed |",
+				"| graph-005 | Approval-gated apply with audit events and fail-closed source precedence | Completed |",
 				"workflow_graph_readonly",
 				"workflow_graph_init",
-				"Next record action: start `graph-005` approval-gated apply",
+				"workflow_graph_apply",
+				"Next record action: start `graph-006` visualization export",
 				"## Planning graph record appendix",
 			},
 		},
@@ -349,10 +354,10 @@ func TestGraphDocsSOTAndReadonlyImplementationContract(t *testing.T) {
 			rel: "docs/README.md",
 			wants: []string{
 				"`docs/sot/workflow-graph.md` | SOT/spec for `.kkachi-workflow.yaml` and graph support",
-				"Authority for implemented graph init/validation/explanation/diff/proposal records",
+				"Authority for implemented graph init/validation/explanation/diff/proposal/apply records",
 				"`.kkachi-workflow.yaml` is documented as project-level workflow graph state with implemented init",
-				"`kkachi-agent-helper graph init`, `graph validate`, `graph explain`, `graph diff`, and `graph propose` are implemented",
-				"Use `docs/roadmap.md` `graph-005` as the next implementation slice",
+				"`kkachi-agent-helper graph init`, `graph validate`, `graph explain`, `graph diff`, `graph propose`, and `graph apply` are implemented",
+				"Use `docs/roadmap.md` `graph-006` as the next implementation slice",
 			},
 		},
 	} {
@@ -929,7 +934,7 @@ func TestDiagnosticsExportRedaction(t *testing.T) {
 	requireNotContains(t, redacted.stderr, secret, "redacted diagnostics error")
 }
 
-func TestGraphInitAndReadonlyFlow(t *testing.T) {
+func TestGraphInitApplyAndReadonlyFlow(t *testing.T) {
 	r := repo(t, "graph")
 	requireCLI(t, r, "project", "init", "--json")
 
@@ -981,6 +986,14 @@ func TestGraphInitAndReadonlyFlow(t *testing.T) {
 	requireContains(t, proposal.stdout, `"semantic_diff_ref":".kkachi/graph/proposals/gprop-000001.json#semantic_diff"`, "graph proposal")
 	requireContains(t, mustRead(t, filepath.Join(r, ".kkachi", "graph", "proposals", "gprop-000001.json")), `"semantic_diff": {`, "graph proposal record")
 	requireContains(t, mustRead(t, filepath.Join(r, ".kkachi", "events.jsonl")), `"type":"graph.proposal_recorded"`, "graph proposal event")
+	applied := requireCLI(t, r, "graph", "apply", "--proposal", "gprop-000001", "--approval", "approval:e2e", "--json")
+	requireContains(t, applied.stdout, `"proposal_id":"gprop-000001"`, "graph apply")
+	requireContains(t, applied.stdout, `"approval_ref":"approval:e2e"`, "graph apply")
+	requireContains(t, applied.stdout, `"event_ids":["evt-000004"]`, "graph apply")
+	requireContains(t, mustRead(t, filepath.Join(r, ".kkachi-workflow.yaml")), `last_applied_event_id: "evt-000004"`, "applied graph")
+	requireContains(t, mustRead(t, filepath.Join(r, ".kkachi-workflow.yaml")), `id: "ask"`, "applied graph")
+	requireContains(t, mustRead(t, filepath.Join(r, ".kkachi", "events.jsonl")), `"type":"graph.applied"`, "graph apply event")
+	requireContains(t, requireCLI(t, r, "graph", "validate", "--json").stdout, `"status":"pass"`, "applied graph validation")
 
 	invalidGraph := "docs/graphs/invalid-workflow.yaml"
 	writeFile(t, filepath.Join(r, filepath.FromSlash(invalidGraph)), strings.Replace(e2eValidWorkflowGraph(), `to: "implement"`, `to: "missing"`, 1))
@@ -1107,6 +1120,7 @@ func TestReleasePackaging(t *testing.T) {
 	requireContains(t, string(out), `"approval_records":true`, "capabilities approval flag")
 	requireContains(t, string(out), `"workflow_graph_readonly":true`, "capabilities graph flag")
 	requireContains(t, string(out), `"workflow_graph_init":true`, "capabilities graph init flag")
+	requireContains(t, string(out), `"workflow_graph_apply":true`, "capabilities graph apply flag")
 	requireContains(t, string(out), `"name":"install"`, "capabilities omitted install")
 	help := exec.Command(artifact, "run", "create", "--help")
 	out, err = help.Output()

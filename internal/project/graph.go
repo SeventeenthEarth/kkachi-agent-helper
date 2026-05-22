@@ -29,8 +29,10 @@ const (
 	graphNextActionDiffReady    = "Review the semantic diff; record a proposal before applying graph changes."
 	graphNextActionProposal     = "Record required approval evidence before graph apply; proposal storage does not apply graph changes."
 	graphNextActionInitialized  = "Graph is initialized; run graph validate or graph explain for read-only evidence."
+	graphNextActionApplied      = "Graph proposal applied; run graph validate or graph explain for updated evidence."
 	graphInitEventType          = "graph.initialized"
 	graphProposalEventType      = "graph.proposal_recorded"
+	graphApplyEventType         = "graph.applied"
 	graphProposalDir            = ".kkachi/graph/proposals"
 	graphTemplateKHSDefault     = "khs-default"
 	graphTemplateSourceBuiltin  = "built_in"
@@ -52,6 +54,12 @@ type GraphProposeOptions struct {
 	Patch  string
 	Reason string
 	Now    func() time.Time
+}
+
+type GraphApplyOptions struct {
+	Proposal string
+	Approval string
+	Now      func() time.Time
 }
 
 type GraphInitOptions struct {
@@ -186,6 +194,17 @@ type GraphProposalResult struct {
 	ApprovalRequired  bool                           `json:"approval_required"`
 	EventID           string                         `json:"event_id,omitempty"`
 	NextAction        string                         `json:"next_action"`
+}
+
+type GraphApplyResult struct {
+	SchemaVersion string   `json:"schema_version"`
+	Status        string   `json:"status"`
+	ProposalID    string   `json:"proposal_id"`
+	ApprovalRef   string   `json:"approval_ref"`
+	GraphPath     string   `json:"graph_path"`
+	NewChecksum   string   `json:"new_checksum"`
+	EventIDs      []string `json:"event_ids"`
+	NextAction    string   `json:"next_action"`
 }
 
 type GraphInitResult struct {
@@ -484,6 +503,157 @@ func proposeWorkflowGraphUnlocked(root Root, options GraphProposeOptions) (Graph
 	}, nil
 }
 
+func ApplyWorkflowGraph(root Root, options GraphApplyOptions) (GraphApplyResult, error) {
+	var result GraphApplyResult
+	err := withProjectWriteLock(root, "graph apply", "", func() error {
+		var err error
+		result, err = applyWorkflowGraphUnlocked(root, options)
+		return err
+	})
+	return result, err
+}
+
+func applyWorkflowGraphUnlocked(root Root, options GraphApplyOptions) (GraphApplyResult, error) {
+	proposalID := strings.TrimSpace(options.Proposal)
+	approvalRef := strings.TrimSpace(options.Approval)
+	if proposalID == "" {
+		return GraphApplyResult{}, &Problem{Code: "graph_proposal_required", Message: "graph apply proposal is required", Hint: "Pass --proposal with a graph proposal id such as gprop-000001.", Field: "proposal", Expected: "non-empty proposal id", Actual: "empty"}
+	}
+	if !isGraphProposalID(proposalID) {
+		return GraphApplyResult{}, &Problem{Code: "graph_proposal_invalid", Message: "graph apply proposal id is invalid", Hint: "Use a proposal id returned by graph propose, such as gprop-000001.", Field: "proposal", Expected: "gprop- followed by six digits", Actual: proposalID}
+	}
+	if approvalRef == "" {
+		return GraphApplyResult{}, &Problem{Code: "graph_approval_required", Message: "graph apply approval evidence is required", Hint: "Pass --approval with the responsible approval evidence reference.", Field: "approval", Expected: "non-empty approval evidence reference", Actual: "empty"}
+	}
+	if options.Now == nil {
+		options.Now = func() time.Time { return time.Now().UTC() }
+	}
+	if err := preflightEventCoherence(root); err != nil {
+		return GraphApplyResult{}, err
+	}
+
+	record, proposalPath, err := readWorkflowGraphProposalRecord(root, proposalID)
+	if err != nil {
+		return GraphApplyResult{}, err
+	}
+	if err := validateWorkflowGraphProposalRecord(record, proposalID, proposalPath.Relative); err != nil {
+		return GraphApplyResult{}, err
+	}
+
+	base := loadWorkflowGraph(root, GraphOptions{File: WorkflowGraphDefaultPath})
+	if base.validation.Status != GraphStatusPass {
+		return GraphApplyResult{}, graphValidationProblem("graph_apply_invalid", "cannot apply proposal while current workflow graph is invalid", "Repair .kkachi-workflow.yaml, then rerun graph apply.", GraphDiffValidationSummary{From: base.validation, To: record.ValidationSummary.Candidate})
+	}
+	if base.validation.Checksum != record.Base.Checksum {
+		return GraphApplyResult{}, &Problem{Code: "graph_base_checksum_mismatch", Message: "current workflow graph no longer matches proposal base", Hint: "Record a new proposal against the current .kkachi-workflow.yaml before applying.", Path: WorkflowGraphDefaultPath, Field: "checksum", Expected: record.Base.Checksum, Actual: base.validation.Checksum}
+	}
+
+	candidate := loadWorkflowGraph(root, GraphOptions{File: record.Candidate.File})
+	if candidate.validation.Status != GraphStatusPass {
+		return GraphApplyResult{}, graphValidationProblem("graph_apply_invalid", "cannot apply proposal with invalid candidate workflow graph", "Repair the candidate graph or record a new proposal, then rerun graph apply.", GraphDiffValidationSummary{From: base.validation, To: candidate.validation})
+	}
+	if candidate.validation.Checksum != record.Candidate.Checksum {
+		return GraphApplyResult{}, &Problem{Code: "graph_candidate_checksum_mismatch", Message: "candidate workflow graph no longer matches proposal record", Hint: "Record a new proposal after changing the candidate graph.", Path: record.Candidate.File, Field: "checksum", Expected: record.Candidate.Checksum, Actual: candidate.validation.Checksum}
+	}
+
+	graphPath, err := ResolveRelativePath(root, WorkflowGraphDefaultPath)
+	if err != nil {
+		return GraphApplyResult{}, err
+	}
+	var rendered []byte
+	var newChecksum string
+	appendResult, err := appendEventWithPreparedStatusMutation(root, AppendEventOptions{Type: graphApplyEventType, Now: options.Now}, func(_ map[string]any, nextID string, _ string) (preparedEventStatusMutation, error) {
+		applied := candidate.graph
+		applied.Metadata.LastAppliedEventID = nextID
+		rendered = encodeWorkflowGraph(applied)
+		validation := validateRenderedWorkflowGraph(rendered, graphPath.Relative)
+		if validation.Status != GraphStatusPass {
+			return preparedEventStatusMutation{}, graphApplyRenderedValidationProblem(validation)
+		}
+		newChecksum = validation.Checksum
+		payload := map[string]any{
+			"proposal_id":         record.ProposalID,
+			"proposal_path":       record.ProposalPath,
+			"approval_ref":        approvalRef,
+			"graph_path":          graphPath.Relative,
+			"base_checksum":       record.Base.Checksum,
+			"candidate_checksum":  record.Candidate.Checksum,
+			"new_checksum":        newChecksum,
+			"semantic_diff_ref":   record.ProposalPath + "#semantic_diff",
+			"proposal_created_at": record.CreatedAt,
+			"proposal_reason":     record.Reason,
+		}
+		return preparedEventStatusMutation{
+			Payload: payload,
+			BeforeAppend: func() error {
+				return writeExistingFileAtomically(graphPath, rendered)
+			},
+		}, nil
+	})
+	if err != nil {
+		return GraphApplyResult{}, err
+	}
+	return GraphApplyResult{
+		SchemaVersion: WorkflowGraphSchemaVersion,
+		Status:        GraphStatusPass,
+		ProposalID:    record.ProposalID,
+		ApprovalRef:   approvalRef,
+		GraphPath:     graphPath.Relative,
+		NewChecksum:   newChecksum,
+		EventIDs:      []string{appendResult.EventID},
+		NextAction:    graphNextActionApplied,
+	}, nil
+}
+
+func readWorkflowGraphProposalRecord(root Root, proposalID string) (WorkflowGraphProposalRecord, SafePath, error) {
+	path, err := ResolveRelativePath(root, graphProposalDir+"/"+proposalID+".json")
+	if err != nil {
+		return WorkflowGraphProposalRecord{}, SafePath{}, err
+	}
+	data, err := os.ReadFile(path.Absolute)
+	if os.IsNotExist(err) {
+		return WorkflowGraphProposalRecord{}, path, &Problem{Code: "graph_proposal_missing", Message: "graph proposal record is missing", Hint: "Run graph propose first and pass the returned proposal id.", Path: path.Relative, Field: "proposal", Expected: "existing graph proposal record", Actual: "missing"}
+	}
+	if err != nil {
+		return WorkflowGraphProposalRecord{}, path, &Problem{Code: "graph_proposal_read_failed", Message: "cannot read graph proposal record", Hint: "Check repository permissions before applying graph proposals.", Path: path.Relative, Field: "path", Expected: "readable graph proposal record", Actual: err.Error()}
+	}
+	var record WorkflowGraphProposalRecord
+	if err := json.Unmarshal(data, &record); err != nil {
+		return WorkflowGraphProposalRecord{}, path, &Problem{Code: "graph_proposal_invalid_json", Message: "graph proposal record is not valid JSON", Hint: "Record proposals with graph propose so the strict proposal schema is preserved.", Path: path.Relative, Field: "json", Expected: "valid graph proposal JSON", Actual: err.Error()}
+	}
+	return record, path, nil
+}
+
+func isGraphProposalID(value string) bool {
+	return graphProposalIDPattern.MatchString(value + ".json")
+}
+
+func validateWorkflowGraphProposalRecord(record WorkflowGraphProposalRecord, proposalID string, proposalPath string) error {
+	if record.SchemaVersion != WorkflowGraphSchemaVersion {
+		return &Problem{Code: "graph_proposal_schema_invalid", Message: "graph proposal schema version is invalid", Hint: "Record a fresh proposal with the current helper before applying.", Path: proposalPath, Field: "schema_version", Expected: WorkflowGraphSchemaVersion, Actual: record.SchemaVersion}
+	}
+	if record.Status != GraphStatusPass {
+		return &Problem{Code: "graph_proposal_status_invalid", Message: "graph proposal status is invalid", Hint: "Only passing proposal records can be applied.", Path: proposalPath, Field: "status", Expected: GraphStatusPass, Actual: record.Status}
+	}
+	if record.ProposalID != proposalID {
+		return &Problem{Code: "graph_proposal_id_mismatch", Message: "graph proposal id does not match the requested proposal", Hint: "Inspect the proposal record and rerun graph apply with the matching proposal id.", Path: proposalPath, Field: "proposal_id", Expected: proposalID, Actual: record.ProposalID}
+	}
+	if record.ProposalPath != proposalPath {
+		return &Problem{Code: "graph_proposal_path_mismatch", Message: "graph proposal path does not match its stored record", Hint: "Record a fresh proposal with graph propose before applying.", Path: proposalPath, Field: "proposal_path", Expected: proposalPath, Actual: record.ProposalPath}
+	}
+	if strings.TrimSpace(record.Base.File) == "" || strings.TrimSpace(record.Base.Checksum) == "" || strings.TrimSpace(record.Candidate.File) == "" || strings.TrimSpace(record.Candidate.Checksum) == "" {
+		return &Problem{Code: "graph_proposal_record_invalid", Message: "graph proposal record is missing base or candidate evidence", Hint: "Record a fresh proposal with graph propose before applying.", Path: proposalPath, Field: "base_candidate", Expected: "base and candidate file/checksum evidence", Actual: "missing"}
+	}
+	if record.Base.File != WorkflowGraphDefaultPath {
+		return &Problem{Code: "graph_proposal_base_invalid", Message: "graph proposal base is not the project workflow graph", Hint: "Record a fresh proposal against .kkachi-workflow.yaml before applying.", Path: proposalPath, Field: "base.file", Expected: WorkflowGraphDefaultPath, Actual: record.Base.File}
+	}
+	return nil
+}
+
+func graphApplyRenderedValidationProblem(validation GraphValidationResult) error {
+	return graphValidationProblem("graph_apply_rendered_invalid", "applied workflow graph would be invalid", "Inspect the proposal candidate and record a fresh valid proposal before applying.", GraphDiffValidationSummary{From: validation, To: validation})
+}
+
 func normalizeWorkflowGraphGates(gates []WorkflowGraphGate) []WorkflowGraphGate {
 	result := append([]WorkflowGraphGate{}, gates...)
 	for i := range result {
@@ -601,7 +771,7 @@ func rejectExistingWorkflowGraph(path SafePath) error {
 	} else if info.Mode()&os.ModeSymlink != 0 {
 		actual = "symlink exists"
 	}
-	return &Problem{Code: "graph_already_exists", Message: "workflow graph already exists", Hint: "Use graph propose/apply in graph-005, or remove/repair manually with explicit governance.", Path: path.Relative, Field: "path", Expected: WorkflowGraphDefaultPath + " does not exist", Actual: actual}
+	return &Problem{Code: "graph_already_exists", Message: "workflow graph already exists", Hint: "Use graph propose and graph apply, or remove/repair manually with explicit governance.", Path: path.Relative, Field: "path", Expected: WorkflowGraphDefaultPath + " does not exist", Actual: actual}
 }
 
 func validateRenderedWorkflowGraph(data []byte, path string) GraphValidationResult {
