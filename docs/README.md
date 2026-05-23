@@ -3,7 +3,7 @@
 Date: 2026-05-22
 Owner: KAH documentation archive
 Confirming role: Responsible approver / governance evidence record
-Status: docs index; workflow graph init/validation/explanation/diff/proposal/apply/export evidence present
+Status: docs index; workflow graph init/validation/explanation/diff/proposal/apply/export and phase-plan feedback-bound validation evidence present
 Authority level: reading guide for KAH docs; graph export records are implemented evidence and generated-artifact boundaries
 Scope: `kkachi-agent-helper/docs` only
 Related docs: `docs/specs.md`, `docs/roadmap.md`, `docs/compatibility.md`
@@ -39,13 +39,13 @@ This directory is the project archive for `kkachi-agent-helper` docs. It separat
 
 ## Decision summary
 
-- `.kkachi-workflow.yaml` is documented as project-level workflow graph state with implemented init, validation/explanation, semantic diff, proposal records, approval-gated apply, compatibility diagnostics, and read-only `EXTERNAL_FEEDBACK_INTAKE` bounds projection.
+- `.kkachi-workflow.yaml` is documented as project-level workflow graph state with implemented init, validation/explanation, semantic diff, proposal records, approval-gated apply, compatibility diagnostics, `EXTERNAL_FEEDBACK_INTAKE` bounds projection, and phase-plan feedback-bound validation.
 - `.kkachi/config.yaml` remains helper runtime/configuration only.
 - `.kkachi/runs/<run_id>/phase-plan.yaml` remains run-local execution state/evidence and is not deprecated.
 - Kkachi v2 `.kkachi/config/workflows/` is outside KAH/KHS graph scope and must not be used as fallback graph authority.
 - `kkachi-agent-helper graph init`, `graph validate`, `graph explain`, `graph diff`, `graph propose`, `graph apply`, and `graph export` are implemented; `kah graph` remains planned/candidate shorthand unless alias evidence exists.
 - Graph behavior authority now lives in `docs/specs.md`; KHS/KAH graph activation and fallback guidance lives in `docs/compatibility.md`.
-- `docs/sot/external-feedback-intake.md` is the planning SOT for future final configurable `EXTERNAL_FEEDBACK_INTAKE` support and tracks completed graph-009 read-only schema support; it does not claim graph-011 activation support.
+- `docs/sot/external-feedback-intake.md` is the planning SOT for future final configurable `EXTERNAL_FEEDBACK_INTAKE` support and tracks completed graph-009/graph-010 implementation slices; it does not claim graph-011 activation support.
 
 ## Stale/conflict markers
 

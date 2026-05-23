@@ -56,6 +56,7 @@ func TestValidatePhasePlanRequiresReasonsFeedbackAndFinalEvidence(t *testing.T) 
 	if _, err := InitPhasePlan(root, PhasePlanInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
 		t.Fatalf("InitPhasePlan() error = %v", err)
 	}
+	writeWorkflowGraph(t, repo, workflowGraphWithFeedbackIntake(validWorkflowGraph()))
 	runID := created.Metadata.RunID
 	writePlan := func(content string) {
 		t.Helper()
@@ -88,7 +89,7 @@ phases:
   - id: "optimize"
     status: "not_applicable"
     reason: "Optimization was not needed."
-  - id: "request-feedback-4"
+  - id: "request-feedback-6"
     status: "not_applicable"
     reason: "Out of range."
   - id: "request-feedback-1"
@@ -165,6 +166,192 @@ phases:
 	}
 	if result.Status != PhasePlanStatusFail || !phaseCheckFailed(result.Checks, "feedback_pairs") {
 		t.Fatalf("checks = %#v, want reverse feedback pair failure", result.Checks)
+	}
+}
+
+func TestValidatePhasePlanUsesGraphFeedbackPolicy(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if _, err := InitPhasePlan(root, PhasePlanInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+		t.Fatalf("InitPhasePlan() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+	writePlan := func(content string) {
+		t.Helper()
+		path := filepath.Join(repo, ".kkachi", "runs", runID, "phase-plan.yaml")
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("write phase plan: %v", err)
+		}
+	}
+
+	result, err := ValidatePhasePlan(root, PhasePlanValidationOptions{RunID: runID})
+	if err != nil {
+		t.Fatalf("ValidatePhasePlan() missing graph error = %v", err)
+	}
+	if result.Status != PhasePlanStatusFail || !phaseCheckFailed(result.Checks, "feedback_policy_source") {
+		t.Fatalf("checks = %#v, want missing graph feedback policy failure", result.Checks)
+	}
+
+	writeWorkflowGraph(t, repo, validWorkflowGraph())
+	result, err = ValidatePhasePlan(root, PhasePlanValidationOptions{RunID: runID})
+	if err != nil {
+		t.Fatalf("ValidatePhasePlan() missing policy error = %v", err)
+	}
+	if result.Status != PhasePlanStatusFail || !phaseCheckFailed(result.Checks, "feedback_policy_missing") {
+		t.Fatalf("checks = %#v, want missing feedback_intake failure", result.Checks)
+	}
+
+	writeWorkflowGraph(t, repo, strings.Replace(workflowGraphWithFeedbackIntake(validWorkflowGraph()), `max_rounds: 5`, `max_rounds: 3`, 1))
+	result, err = ValidatePhasePlan(root, PhasePlanValidationOptions{RunID: runID})
+	if err != nil {
+		t.Fatalf("ValidatePhasePlan() stale policy error = %v", err)
+	}
+	if result.Status != PhasePlanStatusFail || !phaseCheckFailed(result.Checks, "feedback_policy_source") {
+		t.Fatalf("checks = %#v, want stale feedback_intake source failure", result.Checks)
+	}
+
+	writeWorkflowGraph(t, repo, workflowGraphWithFeedbackIntake(validWorkflowGraph()))
+	writePlan(`version: "0.1"
+run_id: "` + runID + `"
+phases:
+  - id: "intake"
+    status: "pending"
+  - id: "sot"
+    status: "pending"
+  - id: "roadmap"
+    status: "pending"
+  - id: "plan"
+    status: "pending"
+  - id: "ask"
+    status: "pending"
+  - id: "implement"
+    status: "pending"
+  - id: "optimize"
+    status: "pending"
+  - id: "request-feedback-1"
+    status: "pending"
+  - id: "handle-feedback-1"
+    status: "pending"
+  - id: "request-feedback-2"
+    status: "pending"
+  - id: "handle-feedback-2"
+    status: "pending"
+  - id: "request-feedback-3"
+    status: "pending"
+  - id: "handle-feedback-3"
+    status: "pending"
+  - id: "request-feedback-4"
+    status: "pending"
+  - id: "handle-feedback-4"
+    status: "pending"
+  - id: "request-feedback-5"
+    status: "pending"
+  - id: "handle-feedback-5"
+    status: "pending"
+  - id: "review"
+    status: "pending"
+  - id: "verify"
+    status: "pending"
+  - id: "docs"
+    status: "pending"
+  - id: "final"
+    status: "pending"
+`)
+	result, err = ValidatePhasePlan(root, PhasePlanValidationOptions{RunID: runID})
+	if err != nil {
+		t.Fatalf("ValidatePhasePlan() graph max5 error = %v", err)
+	}
+	if result.Status != PhasePlanStatusPass || !phaseCheckPassed(result.Checks, "feedback_required_rounds") || !phaseCheckPassed(result.Checks, "feedback_pairs") {
+		t.Fatalf("checks = %#v, want graph policy feedback pass", result.Checks)
+	}
+
+	writePlan(strings.Replace(readText(t, filepath.Join(repo, ".kkachi", "runs", runID, "phase-plan.yaml")), `  - id: "request-feedback-1"
+    status: "pending"
+  - id: "handle-feedback-1"
+    status: "pending"
+`, "", 1))
+	result, err = ValidatePhasePlan(root, PhasePlanValidationOptions{RunID: runID})
+	if err != nil {
+		t.Fatalf("ValidatePhasePlan() missing required feedback error = %v", err)
+	}
+	if result.Status != PhasePlanStatusFail || !phaseCheckFailed(result.Checks, "feedback_required_rounds") {
+		t.Fatalf("checks = %#v, want required feedback round failure", result.Checks)
+	}
+}
+
+func TestValidatePhasePlanFinalChecksDeclaredOptionalFeedbackEvidence(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if _, err := InitPhasePlan(root, PhasePlanInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+		t.Fatalf("InitPhasePlan() error = %v", err)
+	}
+	writeWorkflowGraph(t, repo, workflowGraphWithFeedbackIntake(validWorkflowGraph()))
+	runID := created.Metadata.RunID
+	path := filepath.Join(repo, ".kkachi", "runs", runID, "phase-plan.yaml")
+	if err := os.WriteFile(path, []byte(`version: "0.1"
+run_id: "`+runID+`"
+phases:
+  - id: "intake"
+    status: "complete"
+    evidence: "intake.md"
+  - id: "sot"
+    status: "complete"
+    evidence: "sot-basis.md"
+  - id: "roadmap"
+    status: "complete"
+    evidence: "run-metadata.json"
+  - id: "plan"
+    status: "complete"
+    evidence: "plan.md"
+  - id: "ask"
+    status: "not_applicable"
+    reason: "No question."
+  - id: "implement"
+    status: "complete"
+    evidence: "diff.patch"
+  - id: "optimize"
+    status: "not_applicable"
+    reason: "Optimization was not needed."
+  - id: "request-feedback-1"
+    status: "not_applicable"
+    reason: "No feedback."
+  - id: "handle-feedback-1"
+    status: "not_applicable"
+    reason: "No feedback."
+  - id: "request-feedback-4"
+    status: "complete"
+  - id: "handle-feedback-4"
+    status: "not_applicable"
+    reason: "No fourth feedback."
+  - id: "review"
+    status: "complete"
+    evidence: "review.md"
+  - id: "verify"
+    status: "complete"
+    evidence: "verify.md"
+  - id: "docs"
+    status: "complete"
+    evidence: "docs-update.md"
+  - id: "final"
+    status: "complete"
+    evidence: "final-report.md"
+`), 0o600); err != nil {
+		t.Fatalf("write phase plan: %v", err)
+	}
+	result, err := ValidatePhasePlan(root, PhasePlanValidationOptions{RunID: runID, Final: true})
+	if err != nil {
+		t.Fatalf("ValidatePhasePlan() final optional feedback error = %v", err)
+	}
+	if result.Status != PhasePlanStatusFail || !phaseCheckFailed(result.Checks, "final_evidence_links") {
+		t.Fatalf("checks = %#v, want optional feedback evidence failure", result.Checks)
 	}
 }
 

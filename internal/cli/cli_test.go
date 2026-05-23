@@ -2520,6 +2520,8 @@ func TestPhasePlanCLIInitSetValidateAndDiagnostics(t *testing.T) {
 		t.Fatalf("approvals = %#v, want request and decision", approvals)
 	}
 
+	writeCLIGraph(t, repo, cliWorkflowGraphWithFeedbackIntake(cliValidWorkflowGraph()))
+
 	stdout.Reset()
 	stderr.Reset()
 	if code := runWithOptions([]string{"phase-plan", "validate", created.RunID, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {

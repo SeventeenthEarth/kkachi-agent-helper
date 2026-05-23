@@ -396,6 +396,7 @@ func TestPhasePlanBinaryFlowAndDiagnostics(t *testing.T) {
 	}
 	assertFileContains(t, filepath.Join(repo, ".kkachi", "runs", created.RunID, "phase-plan.yaml"), "request-feedback-1", "phase plan file")
 	assertFileContains(t, filepath.Join(repo, ".kkachi", "events.jsonl"), `"type":"phase_plan.initialized"`, "phase init event")
+	writeIntegrationTarget(t, repo, ".kkachi-workflow.yaml", integrationWorkflowGraphWithFeedbackIntake(integrationValidWorkflowGraph()))
 
 	setOutput := runHelper(t, binary, repo, "phase-plan", "set", created.RunID, "ask", "--status", "not_applicable", "--reason", "No actionable question.", "--json")
 	var updated struct {
@@ -436,6 +437,34 @@ func TestPhasePlanBinaryFlowAndDiagnostics(t *testing.T) {
 	if validation.RunID != created.RunID || validation.Status != "pass" || !requiredPhasesPassed {
 		t.Fatalf("validation = %#v, want required phase validation pass", validation)
 	}
+
+	phasePlanPath := filepath.Join(repo, ".kkachi", "runs", created.RunID, "phase-plan.yaml")
+	phasePlanBytes, err := os.ReadFile(phasePlanPath)
+	if err != nil {
+		t.Fatalf("read phase plan: %v", err)
+	}
+	phasePlanWithRound4 := strings.Replace(string(phasePlanBytes), `  - id: "review"
+    status: "pending"
+`, `  - id: "request-feedback-4"
+    status: "pending"
+  - id: "handle-feedback-4"
+    status: "pending"
+  - id: "review"
+    status: "pending"
+`, 1)
+	writeIntegrationTarget(t, repo, ".kkachi/runs/"+created.RunID+"/phase-plan.yaml", phasePlanWithRound4)
+	round4Output := runHelper(t, binary, repo, "phase-plan", "validate", created.RunID, "--json")
+	assertOutputContains(t, round4Output, `"status":"pass"`, "phase-plan round4 validation")
+
+	if err := os.Remove(filepath.Join(repo, ".kkachi-workflow.yaml")); err != nil {
+		t.Fatalf("remove workflow graph: %v", err)
+	}
+	missingPolicyOutput, err := runHelperAllowError(binary, repo, "phase-plan", "validate", created.RunID, "--json")
+	if err == nil {
+		t.Fatalf("phase-plan validate without graph unexpectedly passed: %s", string(missingPolicyOutput))
+	}
+	assertOutputContains(t, missingPolicyOutput, `"feedback_policy_source"`, "missing graph feedback policy validation")
+	writeIntegrationTarget(t, repo, ".kkachi-workflow.yaml", integrationWorkflowGraphWithFeedbackIntake(integrationValidWorkflowGraph()))
 
 	finalOutput, err := runHelperAllowError(binary, repo, "phase-plan", "validate", created.RunID, "--final", "--json")
 	if err == nil {

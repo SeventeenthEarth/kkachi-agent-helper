@@ -120,6 +120,12 @@ type PhasePlanCheck struct {
 	Actual   string `json:"actual,omitempty"`
 }
 
+type phasePlanFeedbackPolicy struct {
+	requiredRounds map[int]bool
+	allowedRounds  map[int]bool
+	sourceCheck    *PhasePlanCheck
+}
+
 func InitPhasePlan(root Root, options PhasePlanInitOptions) (PhasePlanInitResult, error) {
 	var result PhasePlanInitResult
 	err := withProjectWriteLock(root, "phase-plan init", options.RunID, func() error {
@@ -251,7 +257,8 @@ func ValidatePhasePlan(root Root, options PhasePlanValidationOptions) (PhasePlan
 	if err != nil {
 		return PhasePlanValidationResult{}, err
 	}
-	checks := validatePhasePlanChecksWithApprovals(root, plan, options.Final)
+	policy := resolvePhasePlanFeedbackPolicy(root, plan.Path)
+	checks := validatePhasePlanChecksWithApprovals(root, plan, options.Final, &policy)
 	status := PhasePlanStatusPass
 	for _, check := range checks {
 		if check.Status == PhasePlanStatusFail {
@@ -300,7 +307,7 @@ func readPhasePlan(root Root, runID string) (PhasePlan, error) {
 }
 
 func validatePhasePlanShape(plan PhasePlan) (PhasePlanValidationResult, error) {
-	checks := validatePhasePlanChecks(plan, false)
+	checks := validatePhasePlanChecks(plan, false, nil)
 	for _, check := range checks {
 		if check.Status == PhasePlanStatusFail && (check.Name == "version" || check.Name == "run_id" || check.Name == "phase_id" || check.Name == "phase_status" || check.Name == "duplicate_phase") {
 			return PhasePlanValidationResult{}, &Problem{Code: "phase_plan_invalid", Message: check.Message, Hint: check.Hint, Path: check.Path, Field: check.Field, Expected: check.Expected, Actual: check.Actual}
@@ -309,7 +316,7 @@ func validatePhasePlanShape(plan PhasePlan) (PhasePlanValidationResult, error) {
 	return PhasePlanValidationResult{RunID: plan.RunID, Path: plan.Path, Status: PhasePlanStatusPass, Checks: checks, Plan: plan}, nil
 }
 
-func validatePhasePlanChecks(plan PhasePlan, final bool) []PhasePlanCheck {
+func validatePhasePlanChecks(plan PhasePlan, final bool, feedbackPolicy *phasePlanFeedbackPolicy) []PhasePlanCheck {
 	checks := []PhasePlanCheck{}
 	add := func(check PhasePlanCheck) {
 		if check.Status == "" {
@@ -380,7 +387,7 @@ func validatePhasePlanChecks(plan PhasePlan, final bool) []PhasePlanCheck {
 		add(PhasePlanCheck{Name: "required_phases", Status: PhasePlanStatusFail, Message: "required phase rows are missing", Hint: "Initialize or update phase-plan.yaml with all KHS-declared required rows.", Field: "phases[].id", Expected: strings.Join(defaultPhaseIDs, ","), Actual: strings.Join(missing, ",")})
 	}
 
-	feedbackChecks := validateFeedbackPhases(seen, plan.Path)
+	feedbackChecks := validateFeedbackPhases(seen, plan.Path, feedbackPolicy)
 	checks = append(checks, feedbackChecks...)
 	if final {
 		checks = append(checks, validateFinalPhaseState(plan, seen)...)
@@ -388,26 +395,28 @@ func validatePhasePlanChecks(plan PhasePlan, final bool) []PhasePlanCheck {
 	return checks
 }
 
-func validatePhasePlanChecksWithApprovals(root Root, plan PhasePlan, final bool) []PhasePlanCheck {
-	checks := validatePhasePlanChecks(plan, final)
+func validatePhasePlanChecksWithApprovals(root Root, plan PhasePlan, final bool, feedbackPolicy *phasePlanFeedbackPolicy) []PhasePlanCheck {
+	checks := validatePhasePlanChecks(plan, final, feedbackPolicy)
 	if final {
 		checks = append(checks, validateFinalApprovalState(root, plan)...)
 	}
 	return checks
 }
 
-func validateFeedbackPhases(seen map[string]PhaseRow, path string) []PhasePlanCheck {
+func validateFeedbackPhases(seen map[string]PhaseRow, path string, policy *phasePlanFeedbackPolicy) []PhasePlanCheck {
 	checks := []PhasePlanCheck{}
 	requests := map[int]bool{}
 	handles := map[int]bool{}
 	invalid := []string{}
+	hasFeedbackPhases := false
 	for id := range seen {
 		matches := feedbackPhasePattern.FindStringSubmatch(id)
 		if matches == nil {
 			continue
 		}
+		hasFeedbackPhases = true
 		round, err := strconv.Atoi(matches[2])
-		if err != nil || round < 1 || round > 3 {
+		if err != nil || !feedbackRoundAllowed(round, policy) {
 			invalid = append(invalid, id)
 			continue
 		}
@@ -417,11 +426,31 @@ func validateFeedbackPhases(seen map[string]PhaseRow, path string) []PhasePlanCh
 			handles[round] = true
 		}
 	}
+	if hasFeedbackPhases && policy != nil && policy.sourceCheck != nil {
+		checks = append(checks, *policy.sourceCheck)
+	}
 	if len(invalid) > 0 {
 		sort.Strings(invalid)
-		checks = append(checks, PhasePlanCheck{Name: "feedback_round_range", Status: PhasePlanStatusFail, Path: path, Message: "feedback phase round is outside the supported range", Hint: "Use feedback rounds 1 through 3 only.", Field: "phases[].id", Expected: "request-feedback-1..3 or handle-feedback-1..3", Actual: strings.Join(invalid, ",")})
+		checks = append(checks, PhasePlanCheck{Name: "feedback_round_range", Status: PhasePlanStatusFail, Path: path, Message: "feedback phase round is outside the graph-declared supported range", Hint: "Use feedback rounds declared by .kkachi-workflow.yaml feedback_intake policy.", Field: "phases[].id", Expected: feedbackRoundExpected(policy), Actual: strings.Join(invalid, ",")})
 	} else {
-		checks = append(checks, PhasePlanCheck{Name: "feedback_round_range", Status: PhasePlanStatusPass, Path: path, Message: "feedback phase rounds are within the supported range"})
+		checks = append(checks, PhasePlanCheck{Name: "feedback_round_range", Status: PhasePlanStatusPass, Path: path, Message: "feedback phase rounds are within the graph-declared supported range"})
+	}
+	if policy != nil && policy.sourceCheck == nil {
+		missingRequired := []string{}
+		for round := range policy.requiredRounds {
+			if !requests[round] {
+				missingRequired = append(missingRequired, fmt.Sprintf("request-feedback-%d", round))
+			}
+			if !handles[round] {
+				missingRequired = append(missingRequired, fmt.Sprintf("handle-feedback-%d", round))
+			}
+		}
+		if len(missingRequired) > 0 {
+			sort.Strings(missingRequired)
+			checks = append(checks, PhasePlanCheck{Name: "feedback_required_rounds", Status: PhasePlanStatusFail, Path: path, Message: "required feedback rounds are missing", Hint: "Declare the graph-required feedback request and handling rows in phase-plan.yaml.", Field: "phases[].id", Expected: "request-feedback-1 and handle-feedback-1", Actual: strings.Join(missingRequired, ",")})
+		} else {
+			checks = append(checks, PhasePlanCheck{Name: "feedback_required_rounds", Status: PhasePlanStatusPass, Path: path, Message: "required feedback rounds are declared"})
+		}
 	}
 	unpaired := []string{}
 	for round := range requests {
@@ -443,11 +472,98 @@ func validateFeedbackPhases(seen map[string]PhaseRow, path string) []PhasePlanCh
 	return checks
 }
 
+func resolvePhasePlanFeedbackPolicy(root Root, path string) phasePlanFeedbackPolicy {
+	loaded := loadWorkflowGraph(root, GraphOptions{File: WorkflowGraphDefaultPath})
+	if loaded.validation.Status != GraphStatusPass {
+		return phasePlanFeedbackPolicy{
+			sourceCheck: &PhasePlanCheck{
+				Name:     "feedback_policy_source",
+				Status:   PhasePlanStatusFail,
+				Path:     path,
+				Message:  "workflow graph feedback policy cannot be used",
+				Hint:     "Create or repair .kkachi-workflow.yaml with a valid feedback_intake policy before validating feedback phases.",
+				Field:    WorkflowGraphDefaultPath,
+				Expected: "valid workflow graph with feedback_intake",
+				Actual:   graphValidationIssueSummary(loaded.validation.Errors),
+			},
+		}
+	}
+	feedback := loaded.validation.FeedbackIntake
+	if feedback == nil {
+		return phasePlanFeedbackPolicy{
+			sourceCheck: &PhasePlanCheck{
+				Name:     "feedback_policy_missing",
+				Status:   PhasePlanStatusFail,
+				Path:     path,
+				Message:  "workflow graph feedback policy is missing",
+				Hint:     "Declare feedback_intake in .kkachi-workflow.yaml before validating feedback phases.",
+				Field:    "feedback_intake",
+				Expected: graphFeedbackIntakePolicy,
+				Actual:   graphIssueActualMissing,
+			},
+		}
+	}
+	required := map[int]bool{}
+	allowed := map[int]bool{}
+	for _, round := range feedback.RequiredRounds {
+		required[round] = true
+		allowed[round] = true
+	}
+	for _, round := range feedback.OptionalRounds {
+		allowed[round] = true
+	}
+	return phasePlanFeedbackPolicy{requiredRounds: required, allowedRounds: allowed}
+}
+
+func feedbackRoundAllowed(round int, policy *phasePlanFeedbackPolicy) bool {
+	if round < 1 {
+		return false
+	}
+	if policy == nil || policy.sourceCheck != nil {
+		return round <= 5
+	}
+	return policy.allowedRounds[round]
+}
+
+func feedbackRoundExpected(policy *phasePlanFeedbackPolicy) string {
+	if policy == nil || policy.sourceCheck != nil {
+		return "request-feedback-1..5 or handle-feedback-1..5"
+	}
+	rounds := make([]int, 0, len(policy.allowedRounds))
+	for round := range policy.allowedRounds {
+		rounds = append(rounds, round)
+	}
+	sort.Ints(rounds)
+	parts := make([]string, 0, len(rounds)*2)
+	for _, round := range rounds {
+		parts = append(parts, fmt.Sprintf("request-feedback-%d", round), fmt.Sprintf("handle-feedback-%d", round))
+	}
+	return strings.Join(parts, ",")
+}
+
+func graphValidationIssueSummary(issues []GraphIssue) string {
+	if len(issues) == 0 {
+		return "invalid"
+	}
+	parts := make([]string, 0, len(issues))
+	for _, issue := range issues {
+		if issue.Name == "" {
+			continue
+		}
+		parts = append(parts, issue.Name)
+	}
+	if len(parts) == 0 {
+		return "invalid"
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ",")
+}
+
 func validateFinalPhaseState(plan PhasePlan, seen map[string]PhaseRow) []PhasePlanCheck {
 	checks := []PhasePlanCheck{}
 	nonTerminal := []string{}
 	missingEvidence := []string{}
-	for _, id := range defaultPhaseIDs {
+	for _, id := range finalPhaseIDs(seen) {
 		phase, ok := seen[id]
 		if !ok {
 			continue
@@ -470,6 +586,23 @@ func validateFinalPhaseState(plan PhasePlan, seen map[string]PhaseRow) []PhasePl
 		checks = append(checks, PhasePlanCheck{Name: "final_evidence_links", Status: PhasePlanStatusFail, Path: plan.Path, Message: "completed phase rows require evidence links", Hint: "Record a run artifact path or evidence reference for each completed phase.", Field: "phases[].evidence", Expected: "non-empty evidence for complete phases", Actual: strings.Join(missingEvidence, ",")})
 	}
 	return checks
+}
+
+func finalPhaseIDs(seen map[string]PhaseRow) []string {
+	result := append([]string{}, defaultPhaseIDs...)
+	included := map[string]bool{}
+	for _, id := range result {
+		included[id] = true
+	}
+	extraFeedback := []string{}
+	for id := range seen {
+		if included[id] || feedbackPhasePattern.FindStringSubmatch(id) == nil {
+			continue
+		}
+		extraFeedback = append(extraFeedback, id)
+	}
+	sort.Strings(extraFeedback)
+	return append(result, extraFeedback...)
 }
 
 func validateFinalApprovalState(root Root, plan PhasePlan) []PhasePlanCheck {

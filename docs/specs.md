@@ -2,7 +2,7 @@
 
 Date: 2026-04-30
 Owner: KAH maintainers
-Status: source of truth for implemented helper behavior; graph init, validation/explanation, semantic diff, proposal records, approval-gated apply, and non-authoritative graph export are implemented
+Status: source of truth for implemented helper behavior; graph init, validation/explanation, semantic diff, proposal records, approval-gated apply, non-authoritative graph export, compatibility diagnostics, and graph-policy-driven phase-plan feedback validation are implemented
 Planning graph update date: 2026-05-22
 Planning graph evidence: governance evidence record in kanban task `t_2fb00394`
 
@@ -131,7 +131,7 @@ Light mode may use the same artifact names with shorter content or explicit not-
 
 ### Project workflow graph note
 
-Status: `graph-009` read-only external feedback intake graph schema validation implemented. This file is the permanent behavior SOT for `.kkachi-workflow.yaml`, the graph command surface, and graph compatibility diagnostics.
+Status: `graph-010` external feedback intake phase-plan validation implemented. This file is the permanent behavior SOT for `.kkachi-workflow.yaml`, the graph command surface, phase-plan validation, and graph compatibility diagnostics.
 
 | Path / artifact | Meaning | Owner | Authority |
 |---|---|---|---|
@@ -160,7 +160,7 @@ feedback_intake:
   optional_rounds: [2,3,4,5]
 ```
 
-Missing, duplicate, unsupported, conflicting, stale `max3`/`1..3`, or round 6+ declarations fail closed. Absence of `feedback_intake` remains valid graph input with no graph-declared feedback policy. KAH projects valid declarations through `graph validate --json`, `graph explain --json`, and `graph diff --json`; `graph diff` marks changed bounds with `feedback_intake_changed`. This does not advertise final configurable feedback-intake support: phase-plan behavior, migration diagnostics, and activation capabilities remain gated to later graph tasks. `.kkachi/config.yaml`, generated diagrams, stale `.kkachi/` runtime state, KHS defaults, Kkachi v2 `.kkachi/config/workflows/`, and KAB runtime state are never fallback authorities for feedback bounds.
+Missing, duplicate, unsupported, conflicting, stale `max3`/`1..3`, or round 6+ declarations fail closed. Absence of `feedback_intake` remains valid graph input with no graph-declared feedback policy, but `phase-plan validate` fails closed rather than accepting feedback phase rows without a valid graph feedback policy. KAH projects valid declarations through `graph validate --json`, `graph explain --json`, and `graph diff --json`; `graph diff` marks changed bounds with `feedback_intake_changed`. This does not advertise final configurable feedback-intake support: migration diagnostics and activation capabilities remain gated to later graph tasks. `.kkachi/config.yaml`, generated diagrams, stale `.kkachi/` runtime state, KHS defaults, Kkachi v2 `.kkachi/config/workflows/`, and KAB runtime state are never fallback authorities for feedback bounds.
 
 ### Planned capability cache/evidence note
 
@@ -643,7 +643,7 @@ kkachi-agent-helper phase-plan validate <run_id> [--final] [--json]
 
 `phase-plan init` creates the constrained YAML file with `version`, `run_id`, and declared phase rows including `ask`, `optimize`, `request-feedback-1`, and `handle-feedback-1`. Mutating phase-plan commands are serialized by `.kkachi/project_write.lock`, refuse status/event incoherence, write atomically, and append `phase_plan.initialized` or `phase_plan.updated`.
 
-`phase-plan validate` checks deterministic structure and completeness only: required rows are present, phase statuses are from the supported enum, skipped/not-applicable rows include non-empty reasons, feedback rounds are within `1..3`, and `request-feedback-N` / `handle-feedback-N` rows are paired. This `1..3` feedback bound is the current implemented behavior and may still reject round 4 until `graph-010` replaces it with graph-policy-driven validation. With `--final`, required rows must be terminal (`complete`, `skipped`, or `not_applicable`) and completed rows must include evidence links, and rows marked `approval_required: true` must have a latest `approval.recorded` decision of `approved`. Passing validation exits `0`; failing validation exits `3`.
+`phase-plan validate` checks deterministic structure and completeness only: required rows are present, phase statuses are from the supported enum, skipped/not-applicable rows include non-empty reasons, feedback rounds follow the effective `.kkachi-workflow.yaml` `feedback_intake` policy, and `request-feedback-N` / `handle-feedback-N` rows are paired. A valid graph feedback policy requires round 1, permits optional declared continuation rounds 2 through 5, and rejects round 6+. Missing or invalid graph state, absent `feedback_intake`, or forbidden fallback sources fail closed for declared feedback phase rows; KAH does not fall back to legacy `1..3` bounds. With `--final`, required rows and declared feedback rows must be terminal (`complete`, `skipped`, or `not_applicable`), completed rows must include evidence links, and rows marked `approval_required: true` must have a latest `approval.recorded` decision of `approved`. Passing validation exits `0`; failing validation exits `3`.
 
 
 ### `graph` surface
@@ -913,11 +913,11 @@ The following items remain open until roadmap tasks close them:
 Date: 2026-05-21
 Owner: KAH deterministic helper boundary
 Confirming role: Responsible approver / governance evidence record
-Status: graph init, validation/explanation, semantic diff, proposal records, approval-gated apply, non-authoritative export, compatibility diagnostics, and read-only feedback-intake graph bounds implemented
+Status: graph init, validation/explanation, semantic diff, proposal records, approval-gated apply, non-authoritative export, compatibility diagnostics, read-only feedback-intake graph bounds, and phase-plan feedback-bound validation implemented
 Authority level: `docs/specs.md` remains authoritative for implemented helper behavior and generated visualization export boundaries
 Scope: KAH helper docs only
 Related docs: `README.md`, `roadmap.md`, `compatibility.md`, KHS `docs/sot/workflow-graph-integration.md`
-Decision summary: add `.kkachi-workflow.yaml` as candidate project-level graph state while preserving `.kkachi/config.yaml` as helper config and `phase-plan.yaml` as run-local execution evidence; diagnostics now publish `graph_compatibility` so KHS can fail closed without direct YAML fallback; graph validation/projection now recognizes declared feedback-intake bounds without advertising final activation support.
+Decision summary: add `.kkachi-workflow.yaml` as candidate project-level graph state while preserving `.kkachi/config.yaml` as helper config and `phase-plan.yaml` as run-local execution evidence; diagnostics now publish `graph_compatibility` so KHS can fail closed without direct YAML fallback; graph validation/projection recognizes declared feedback-intake bounds, and phase-plan validation consumes those bounds without advertising final activation support.
 Evidence/source paths: governance evidence record in kanban task `t_2fb00394`
 Stale/conflict markers: older wording that treats `phase-plan.yaml` as the whole workflow SOT is narrowed to run-local state; prior root-level kkachi config YAML/JSON graph phrasing is superseded by `.kkachi-workflow.yaml` if encountered.
 Open questions: command alias remains an implementation task.

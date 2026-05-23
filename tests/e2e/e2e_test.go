@@ -279,10 +279,10 @@ func TestGraphDocsSOTAndReadonlyImplementationContract(t *testing.T) {
 		{
 			rel: "docs/specs.md",
 			wants: []string{
-				"graph init, validation/explanation, semantic diff, proposal records, approval-gated apply, and non-authoritative graph export are implemented",
+				"graph init, validation/explanation, semantic diff, proposal records, approval-gated apply, non-authoritative graph export, compatibility diagnostics, and graph-policy-driven phase-plan feedback validation are implemented",
 				"Planning graph update date: 2026-05-22",
 				"### Project workflow graph note",
-				"This file is the permanent behavior SOT for `.kkachi-workflow.yaml`, the graph command surface, and graph compatibility diagnostics.",
+				"This file is the permanent behavior SOT for `.kkachi-workflow.yaml`, the graph command surface, phase-plan validation, and graph compatibility diagnostics.",
 				".kkachi-workflow.yaml          # project-level workflow graph artifact; init/validate/explain/diff/apply implemented",
 				"`.kkachi/config.yaml` | KAH helper runtime/configuration | KAH | Helper config only; never workflow graph SOT",
 				"Graph source and evidence precedence is explicit.",
@@ -306,8 +306,8 @@ func TestGraphDocsSOTAndReadonlyImplementationContract(t *testing.T) {
 		{
 			rel: "docs/compatibility.md",
 			wants: []string{
-				"graph init, validation/explanation, semantic diff, proposal records, approval-gated apply, non-authoritative graph export, and compatibility diagnostics implemented",
-				"Configurable `EXTERNAL_FEEDBACK_INTAKE` support is partially implemented for graph read-only validation/projection only",
+				"graph init, validation/explanation, semantic diff, proposal records, approval-gated apply, non-authoritative graph export, compatibility diagnostics, and phase-plan feedback-bound validation implemented",
+				"Configurable `EXTERNAL_FEEDBACK_INTAKE` support is partially implemented for graph validation/projection and phase-plan feedback-bound validation",
 				"Workflow graph compatibility: `.kkachi-workflow.yaml` plus `kkachi-agent-helper graph init`",
 				"KHS must not silently edit `.kkachi-workflow.yaml` as fallback when graph apply support is missing",
 				"Graph source precedence must fail closed",
@@ -345,7 +345,7 @@ func TestGraphDocsSOTAndReadonlyImplementationContract(t *testing.T) {
 				"`docs/specs.md` | Current KAH helper behavior SOT, including `.kkachi-workflow.yaml` command/schema behavior",
 				"Authoritative for implemented/helper behavior and workflow graph behavior",
 				"Compatibility matrix, activation guidance, and graph fallback rules",
-				"read-only `EXTERNAL_FEEDBACK_INTAKE` bounds projection",
+				"`EXTERNAL_FEEDBACK_INTAKE` bounds projection, and phase-plan feedback-bound validation",
 				"`kkachi-agent-helper graph init`, `graph validate`, `graph explain`, `graph diff`, `graph propose`, `graph apply`, and `graph export` are implemented",
 				"graph compatibility diagnostics",
 			},
@@ -914,7 +914,8 @@ func TestDiagnosticsExportRedaction(t *testing.T) {
 	requireCLI(t, r, "artifact", "init", runID, "--json")
 	requireCLI(t, r, "phase-plan", "init", runID, "--json")
 	requireCLI(t, r, "phase-plan", "set", runID, "ask", "--status", "not_applicable", "--reason", "No actionable question.", "--json")
-	requireCLI(t, r, "phase-plan", "validate", runID, "--json")
+	missingPolicy := requireFailCLI(t, r, "phase-plan", "validate", runID, "--json")
+	requireContains(t, missingPolicy.stdout, `"feedback_policy_source"`, "phase-plan missing graph policy")
 	writeFile(t, filepath.Join(r, ".kkachi/runs", runID, "selected-cli.json"), fmt.Sprintf(`{"version":"0.1","status":"pending","api_token":"%s"}`+"\n", secret))
 	requireCLI(t, r, "event", "append", "diagnostic.secret", "--run", runID, "--payload", fmt.Sprintf(`{"access_token":"%s"}`, secret), "--json")
 	requireFailCLI(t, r, "gate", "check", runID, "intake", "--json")
@@ -1099,6 +1100,7 @@ func TestApprovalRecordsEndToEnd(t *testing.T) {
 	requireCLI(t, r, "project", "init", "--json")
 	runID := createRun(t, r, "align-007", "production_write")
 	requireCLI(t, r, "phase-plan", "init", runID, "--json")
+	writeFile(t, filepath.Join(r, ".kkachi-workflow.yaml"), e2eWorkflowGraphWithFeedbackIntake(e2eValidWorkflowGraph()))
 	set := requireCLI(t, r, "phase-plan", "set", runID, "implement", "--status", "in_progress", "--approval-required", "true", "--json")
 	requireContains(t, set.stdout, `"approval_required":true`, "phase approval-required")
 	request := requireCLI(t, r, "approval", "request", runID, "--phase", "implement", "--reason", "High-risk implementation phase.", "--evidence", "plan.md#approval", "--json")

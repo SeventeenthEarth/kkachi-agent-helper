@@ -20,7 +20,7 @@ The intended policy is:
 - Rounds 2 through 5 are optional continuation rounds.
 - Five loops are never mandatory.
 
-This document does not claim final advertised support. KAH may advertise configurable external feedback intake support only after `graph-010` phase-plan validation and `graph-011` migration/proposal handling, diagnostics/capabilities, permanent docs, and tests are aligned. `graph-009` implements read-only graph schema handling only.
+This document does not claim final advertised support. KAH may advertise configurable external feedback intake support only after `graph-011` migration/proposal handling, diagnostics/capabilities, permanent docs, and tests are aligned. `graph-009` implements graph schema handling, and `graph-010` implements phase-plan feedback-bound validation without final activation advertisement.
 
 ## Authority model
 
@@ -57,7 +57,7 @@ Lock the normative contract before code changes so later implementation can stay
 
 ### Approach
 
-Use `docs/specs.md` as the behavior SOT and `docs/compatibility.md` as the activation/fallback SOT. Keep `graph-008` docs explicit that fixed `1..3` validation remains the current implementation until later graph tasks change it.
+Use `docs/specs.md` as the behavior SOT and `docs/compatibility.md` as the activation/fallback SOT. Keep `graph-008` docs explicit that fixed `1..3` validation was the implementation before graph-policy-driven phase-plan validation landed in `graph-010`.
 
 ### Implementation notes
 
@@ -68,7 +68,7 @@ Use `docs/specs.md` as the behavior SOT and `docs/compatibility.md` as the activ
 ### Checklist
 
 - [x] `docs/specs.md` records intended `min_rounds=1`, `max_rounds=5`, required round 1, and optional rounds 2..5.
-- [x] `docs/specs.md` states that current implementation may still reject round 4 until `graph-010` lands.
+- [x] `docs/specs.md` stated the pre-`graph-010` implementation could reject round 4 until graph-policy-driven validation landed.
 - [x] `docs/compatibility.md` states KHS must fail closed until KAH advertises final support.
 - [x] `docs/roadmap.md` lists `graph-008`, `graph-009`, `graph-010`, and `graph-011` as reviewable task candidates.
 - [x] Stale `1..3` references are either preserved as current implementation facts or marked as planned-to-change.
@@ -132,6 +132,8 @@ Add graph support as a read-only schema/projection layer first. The graph can re
 
 ## graph-010: Phase-plan generation and validation
 
+Status: implemented without final activation advertisement.
+
 ### Goal
 
 Replace fixed `1..3` phase-plan validation with policy-driven bounds while preserving KHS ownership of phase applicability and optional continuation decisions.
@@ -163,19 +165,19 @@ Keep phase-plan as run-local declared state. KAH validates the rows KHS or the o
 - Round 1 remains the minimum required pair for the intended policy.
 - Optional rounds may be absent without failure unless KHS declared them for that run or a final gate requires explicit skipped/not-applicable rows.
 - If optional rows are predeclared, skipped/not-applicable rows require non-empty reasons.
-- Completed feedback rows must keep evidence links scoped to the matching round.
+- Completed feedback rows require evidence links under final validation.
 - Event payloads and reports should avoid stale `1..3` language once `graph-010` changes runtime behavior.
 
 ### Checklist
 
-- [ ] `request-feedback-4` and `handle-feedback-4` can pass when declared under a valid max5 policy.
-- [ ] `request-feedback-6` or `handle-feedback-6` fails.
-- [ ] Missing required round 1 fails when graph policy requires it.
-- [ ] Unpaired request/handle rows fail.
-- [ ] Optional rounds 2 through 5 are not required by default.
-- [ ] Skipped/not-applicable optional rows require reasons when declared.
-- [ ] Completed rows require evidence links under final validation.
-- [ ] Stale checklist/report/event claims such as `max3`, `1..3`, or round 4 out-of-range conflict with graph max5 and fail closed.
+- [x] `request-feedback-4` and `handle-feedback-4` can pass when declared under a valid max5 policy.
+- [x] `request-feedback-6` or `handle-feedback-6` fails.
+- [x] Missing required round 1 fails when graph policy requires it.
+- [x] Unpaired request/handle rows fail.
+- [x] Optional rounds 2 through 5 are not required by default.
+- [x] Skipped/not-applicable optional rows require reasons when declared.
+- [x] Completed rows require evidence links under final validation.
+- [x] Missing or policy-less graph state fails closed instead of accepting stale `max3`, `1..3`, or round 4 out-of-range fallback assumptions.
 
 ### Acceptance criteria
 
