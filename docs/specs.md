@@ -148,6 +148,8 @@ Graph source and evidence precedence is explicit. Applied `.kkachi-workflow.yaml
 
 KAH fails closed when graph-managed workflow support is required but `.kkachi-workflow.yaml` is missing, invalid, ambiguous, duplicated, or conflicts with KHS phase policy or run-local `phase-plan.yaml`; when direct manual edits lack validation/proposal/apply/audit evidence; when candidate graph changes affect gates, approvals, review policy, or dependencies without approval/audit evidence; or when KHS asks KAH to use imperative workflow-policy commands.
 
+Planned `EXTERNAL_FEEDBACK_INTAKE` graph policy is documented in `docs/sot/external-feedback-intake.md` and is not implemented support yet. The intended future contract is `min_rounds=1`, `max_rounds=5`, with round 1 required and rounds 2 through 5 optional continuation rounds. After the later graph tasks land, validated `.kkachi-workflow.yaml` state with audit evidence is the project policy authority for these bounds; `.kkachi/config.yaml`, generated diagrams, stale `.kkachi/` runtime state, KHS defaults, Kkachi v2 `.kkachi/config/workflows/`, and KAB runtime state are never fallback authorities for feedback bounds.
+
 ### Planned capability cache/evidence note
 
 Status: docs/design lock for future capability storage. Implementation, schemas, and commands remain separately gated.
@@ -629,7 +631,7 @@ kkachi-agent-helper phase-plan validate <run_id> [--final] [--json]
 
 `phase-plan init` creates the constrained YAML file with `version`, `run_id`, and declared phase rows including `ask`, `optimize`, `request-feedback-1`, and `handle-feedback-1`. Mutating phase-plan commands are serialized by `.kkachi/project_write.lock`, refuse status/event incoherence, write atomically, and append `phase_plan.initialized` or `phase_plan.updated`.
 
-`phase-plan validate` checks deterministic structure and completeness only: required rows are present, phase statuses are from the supported enum, skipped/not-applicable rows include non-empty reasons, feedback rounds are within `1..3`, and `request-feedback-N` / `handle-feedback-N` rows are paired. With `--final`, required rows must be terminal (`complete`, `skipped`, or `not_applicable`) and completed rows must include evidence links, and rows marked `approval_required: true` must have a latest `approval.recorded` decision of `approved`. Passing validation exits `0`; failing validation exits `3`.
+`phase-plan validate` checks deterministic structure and completeness only: required rows are present, phase statuses are from the supported enum, skipped/not-applicable rows include non-empty reasons, feedback rounds are within `1..3`, and `request-feedback-N` / `handle-feedback-N` rows are paired. This `1..3` feedback bound is the current implemented behavior and may still reject round 4 until `graph-010` replaces it with graph-policy-driven validation. With `--final`, required rows must be terminal (`complete`, `skipped`, or `not_applicable`) and completed rows must include evidence links, and rows marked `approval_required: true` must have a latest `approval.recorded` decision of `approved`. Passing validation exits `0`; failing validation exits `3`.
 
 
 ### `graph` surface
