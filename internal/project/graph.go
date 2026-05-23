@@ -40,6 +40,8 @@ const (
 	graphTemplateSourcePath     = "path"
 	graphExportFormatMermaid    = "mermaid"
 	graphExportFormatPlantUML   = "plantuml"
+	graphFeedbackIntakePolicy   = "EXTERNAL_FEEDBACK_INTAKE"
+	graphFeedbackIntakeSchema   = "external-feedback-intake/v1"
 	graphIssueGraphFile         = "graph_file"
 	graphIssueActualMissing     = "missing"
 )
@@ -90,29 +92,31 @@ type GraphIssue struct {
 }
 
 type GraphValidationResult struct {
-	SchemaVersion   string       `json:"schema_version"`
-	Status          string       `json:"status"`
-	File            string       `json:"file"`
-	Checksum        string       `json:"checksum"`
-	EffectiveSource string       `json:"effective_source"`
-	Errors          []GraphIssue `json:"errors"`
-	Warnings        []GraphIssue `json:"warnings"`
-	Conflicts       []GraphIssue `json:"conflicts"`
-	NextAction      string       `json:"next_action"`
+	SchemaVersion   string                       `json:"schema_version"`
+	Status          string                       `json:"status"`
+	File            string                       `json:"file"`
+	Checksum        string                       `json:"checksum"`
+	EffectiveSource string                       `json:"effective_source"`
+	FeedbackIntake  *WorkflowGraphFeedbackIntake `json:"feedback_intake,omitempty"`
+	Errors          []GraphIssue                 `json:"errors"`
+	Warnings        []GraphIssue                 `json:"warnings"`
+	Conflicts       []GraphIssue                 `json:"conflicts"`
+	NextAction      string                       `json:"next_action"`
 }
 
 type GraphExplanationResult struct {
-	SchemaVersion        string                  `json:"schema_version"`
-	Status               string                  `json:"status"`
-	GraphVersion         string                  `json:"graph_version"`
-	EffectiveSource      string                  `json:"effective_source"`
-	Phases               []WorkflowGraphPhase    `json:"phases"`
-	Edges                []WorkflowGraphEdge     `json:"edges"`
-	Gates                []WorkflowGraphGate     `json:"gates"`
-	ApprovalRequirements []WorkflowGraphApproval `json:"approval_requirements"`
-	PendingProposals     []string                `json:"pending_proposals"`
-	ValidationSummary    GraphValidationResult   `json:"validation_summary"`
-	NextAction           string                  `json:"next_action"`
+	SchemaVersion        string                       `json:"schema_version"`
+	Status               string                       `json:"status"`
+	GraphVersion         string                       `json:"graph_version"`
+	EffectiveSource      string                       `json:"effective_source"`
+	Phases               []WorkflowGraphPhase         `json:"phases"`
+	Edges                []WorkflowGraphEdge          `json:"edges"`
+	Gates                []WorkflowGraphGate          `json:"gates"`
+	ApprovalRequirements []WorkflowGraphApproval      `json:"approval_requirements"`
+	FeedbackIntake       *WorkflowGraphFeedbackIntake `json:"feedback_intake,omitempty"`
+	PendingProposals     []string                     `json:"pending_proposals"`
+	ValidationSummary    GraphValidationResult        `json:"validation_summary"`
+	NextAction           string                       `json:"next_action"`
 }
 
 type GraphDiffEndpoint struct {
@@ -127,18 +131,19 @@ type GraphDiffValidationSummary struct {
 }
 
 type GraphDiffResult struct {
-	SchemaVersion     string                       `json:"schema_version"`
-	Status            string                       `json:"status"`
-	From              GraphDiffEndpoint            `json:"from"`
-	To                GraphDiffEndpoint            `json:"to"`
-	ChangedPhases     WorkflowGraphPhaseChanges    `json:"changed_phases"`
-	ChangedEdges      WorkflowGraphEdgeChanges     `json:"changed_edges"`
-	ChangedGates      WorkflowGraphGateChanges     `json:"changed_gates"`
-	ChangedApprovals  WorkflowGraphApprovalChanges `json:"changed_approvals"`
-	RiskFlags         []string                     `json:"risk_flags"`
-	RequiresApproval  bool                         `json:"requires_approval"`
-	ValidationSummary GraphDiffValidationSummary   `json:"validation_summary"`
-	NextAction        string                       `json:"next_action"`
+	SchemaVersion         string                            `json:"schema_version"`
+	Status                string                            `json:"status"`
+	From                  GraphDiffEndpoint                 `json:"from"`
+	To                    GraphDiffEndpoint                 `json:"to"`
+	ChangedPhases         WorkflowGraphPhaseChanges         `json:"changed_phases"`
+	ChangedEdges          WorkflowGraphEdgeChanges          `json:"changed_edges"`
+	ChangedGates          WorkflowGraphGateChanges          `json:"changed_gates"`
+	ChangedApprovals      WorkflowGraphApprovalChanges      `json:"changed_approvals"`
+	ChangedFeedbackIntake WorkflowGraphFeedbackIntakeChange `json:"changed_feedback_intake"`
+	RiskFlags             []string                          `json:"risk_flags"`
+	RequiresApproval      bool                              `json:"requires_approval"`
+	ValidationSummary     GraphDiffValidationSummary        `json:"validation_summary"`
+	NextAction            string                            `json:"next_action"`
 }
 
 type WorkflowGraphPhaseChanges struct {
@@ -187,6 +192,12 @@ type WorkflowGraphApprovalChange struct {
 	Key    string                `json:"key"`
 	Before WorkflowGraphApproval `json:"before"`
 	After  WorkflowGraphApproval `json:"after"`
+}
+
+type WorkflowGraphFeedbackIntakeChange struct {
+	Changed bool                         `json:"changed"`
+	Before  *WorkflowGraphFeedbackIntake `json:"before,omitempty"`
+	After   *WorkflowGraphFeedbackIntake `json:"after,omitempty"`
 }
 
 type GraphProposalValidationSummary struct {
@@ -257,14 +268,15 @@ type WorkflowGraphProposalRecord struct {
 }
 
 type WorkflowGraph struct {
-	Version   string
-	GraphID   string
-	Metadata  WorkflowGraphMetadata
-	Phases    []WorkflowGraphPhase
-	Edges     []WorkflowGraphEdge
-	Gates     []WorkflowGraphGate
-	Approvals []WorkflowGraphApproval
-	Proposals WorkflowGraphProposals
+	Version        string
+	GraphID        string
+	Metadata       WorkflowGraphMetadata
+	Phases         []WorkflowGraphPhase
+	Edges          []WorkflowGraphEdge
+	Gates          []WorkflowGraphGate
+	Approvals      []WorkflowGraphApproval
+	Proposals      WorkflowGraphProposals
+	FeedbackIntake *WorkflowGraphFeedbackIntake
 }
 
 type WorkflowGraphMetadata struct {
@@ -311,11 +323,28 @@ type WorkflowGraphProposals struct {
 	Policy string `json:"policy,omitempty"`
 }
 
+type WorkflowGraphFeedbackIntake struct {
+	Policy         string `json:"policy"`
+	SchemaVersion  string `json:"schema_version"`
+	MinRounds      int    `json:"min_rounds"`
+	MaxRounds      int    `json:"max_rounds"`
+	RequiredRounds []int  `json:"required_rounds"`
+	OptionalRounds []int  `json:"optional_rounds"`
+
+	policySet         bool
+	schemaVersionSet  bool
+	minRoundsSet      bool
+	maxRoundsSet      bool
+	requiredRoundsSet bool
+	optionalRoundsSet bool
+}
+
 type graphDocument struct {
-	graph          WorkflowGraph
-	errors         []GraphIssue
-	metadataFields map[string]bool
-	proposalFields map[string]bool
+	graph                WorkflowGraph
+	errors               []GraphIssue
+	metadataFields       map[string]bool
+	proposalFields       map[string]bool
+	feedbackIntakeFields map[string]bool
 }
 
 type loadedWorkflowGraph struct {
@@ -349,6 +378,7 @@ func ExplainWorkflowGraph(root Root, options GraphOptions) GraphExplanationResul
 	result.Edges = append([]WorkflowGraphEdge{}, loaded.graph.Edges...)
 	result.Gates = normalizeWorkflowGraphGates(loaded.graph.Gates)
 	result.ApprovalRequirements = append([]WorkflowGraphApproval{}, loaded.graph.Approvals...)
+	result.FeedbackIntake = cleanWorkflowGraphFeedbackIntakePtr(loaded.graph.FeedbackIntake)
 	return result
 }
 
@@ -849,7 +879,7 @@ func validateRenderedWorkflowGraph(data []byte, path string) GraphValidationResu
 		status = GraphStatusFail
 		nextAction = graphNextActionRepair
 	}
-	return GraphValidationResult{SchemaVersion: WorkflowGraphSchemaVersion, Status: status, File: path, Checksum: hex.EncodeToString(sum[:]), EffectiveSource: graphEffectiveSourceProject, Errors: errors, Warnings: []GraphIssue{}, Conflicts: []GraphIssue{}, NextAction: nextAction}
+	return GraphValidationResult{SchemaVersion: WorkflowGraphSchemaVersion, Status: status, File: path, Checksum: hex.EncodeToString(sum[:]), EffectiveSource: graphEffectiveSourceProject, FeedbackIntake: cleanWorkflowGraphFeedbackIntakePtr(doc.graph.FeedbackIntake), Errors: errors, Warnings: []GraphIssue{}, Conflicts: []GraphIssue{}, NextAction: nextAction}
 }
 
 func encodeWorkflowGraph(graph WorkflowGraph) []byte {
@@ -943,6 +973,28 @@ func encodeWorkflowGraph(graph WorkflowGraph) []byte {
 		builder.WriteString(yamlQuotedScalar(graph.Proposals.Policy))
 		builder.WriteString("\n")
 	}
+	if graph.FeedbackIntake != nil {
+		feedback := cleanWorkflowGraphFeedbackIntake(*graph.FeedbackIntake)
+		builder.WriteString("feedback_intake:\n")
+		builder.WriteString("  policy: ")
+		builder.WriteString(yamlQuotedScalar(feedback.Policy))
+		builder.WriteString("\n")
+		builder.WriteString("  schema_version: ")
+		builder.WriteString(yamlQuotedScalar(feedback.SchemaVersion))
+		builder.WriteString("\n")
+		builder.WriteString("  min_rounds: ")
+		builder.WriteString(strconv.Itoa(feedback.MinRounds))
+		builder.WriteString("\n")
+		builder.WriteString("  max_rounds: ")
+		builder.WriteString(strconv.Itoa(feedback.MaxRounds))
+		builder.WriteString("\n")
+		builder.WriteString("  required_rounds: ")
+		builder.WriteString(graphYAMLIntList(feedback.RequiredRounds))
+		builder.WriteString("\n")
+		builder.WriteString("  optional_rounds: ")
+		builder.WriteString(graphYAMLIntList(feedback.OptionalRounds))
+		builder.WriteString("\n")
+	}
 	return []byte(builder.String())
 }
 
@@ -957,17 +1009,29 @@ func graphYAMLStringList(values []string) string {
 	return "[" + strings.Join(quoted, ", ") + "]"
 }
 
+func graphYAMLIntList(values []int) string {
+	if len(values) == 0 {
+		return "[]"
+	}
+	items := make([]string, 0, len(values))
+	for _, value := range values {
+		items = append(items, strconv.Itoa(value))
+	}
+	return "[" + strings.Join(items, ", ") + "]"
+}
+
 func diffLoadedWorkflowGraphs(from loadedWorkflowGraph, to loadedWorkflowGraph) GraphDiffResult {
 	result := GraphDiffResult{
-		SchemaVersion:    WorkflowGraphSchemaVersion,
-		Status:           GraphStatusPass,
-		From:             graphDiffEndpoint(from.validation),
-		To:               graphDiffEndpoint(to.validation),
-		ChangedPhases:    WorkflowGraphPhaseChanges{Added: []WorkflowGraphPhase{}, Removed: []WorkflowGraphPhase{}, Modified: []WorkflowGraphPhaseChange{}},
-		ChangedEdges:     WorkflowGraphEdgeChanges{Added: []WorkflowGraphEdge{}, Removed: []WorkflowGraphEdge{}, Modified: []WorkflowGraphEdgeChange{}},
-		ChangedGates:     WorkflowGraphGateChanges{Added: []WorkflowGraphGate{}, Removed: []WorkflowGraphGate{}, Modified: []WorkflowGraphGateChange{}},
-		ChangedApprovals: WorkflowGraphApprovalChanges{Added: []WorkflowGraphApproval{}, Removed: []WorkflowGraphApproval{}, Modified: []WorkflowGraphApprovalChange{}},
-		RiskFlags:        []string{},
+		SchemaVersion:         WorkflowGraphSchemaVersion,
+		Status:                GraphStatusPass,
+		From:                  graphDiffEndpoint(from.validation),
+		To:                    graphDiffEndpoint(to.validation),
+		ChangedPhases:         WorkflowGraphPhaseChanges{Added: []WorkflowGraphPhase{}, Removed: []WorkflowGraphPhase{}, Modified: []WorkflowGraphPhaseChange{}},
+		ChangedEdges:          WorkflowGraphEdgeChanges{Added: []WorkflowGraphEdge{}, Removed: []WorkflowGraphEdge{}, Modified: []WorkflowGraphEdgeChange{}},
+		ChangedGates:          WorkflowGraphGateChanges{Added: []WorkflowGraphGate{}, Removed: []WorkflowGraphGate{}, Modified: []WorkflowGraphGateChange{}},
+		ChangedApprovals:      WorkflowGraphApprovalChanges{Added: []WorkflowGraphApproval{}, Removed: []WorkflowGraphApproval{}, Modified: []WorkflowGraphApprovalChange{}},
+		ChangedFeedbackIntake: WorkflowGraphFeedbackIntakeChange{},
+		RiskFlags:             []string{},
 		ValidationSummary: GraphDiffValidationSummary{
 			From: from.validation,
 			To:   to.validation,
@@ -984,6 +1048,7 @@ func diffLoadedWorkflowGraphs(from loadedWorkflowGraph, to loadedWorkflowGraph) 
 	result.ChangedEdges = diffWorkflowGraphEdges(from.graph.Edges, to.graph.Edges)
 	result.ChangedGates = diffWorkflowGraphGates(from.graph.Gates, to.graph.Gates)
 	result.ChangedApprovals = diffWorkflowGraphApprovals(from.graph.Approvals, to.graph.Approvals)
+	result.ChangedFeedbackIntake = diffWorkflowGraphFeedbackIntake(from.graph.FeedbackIntake, to.graph.FeedbackIntake)
 	result.RiskFlags = workflowGraphRiskFlags(from.graph, to.graph, result)
 	result.RequiresApproval = len(result.RiskFlags) > 0
 	return result
@@ -1047,6 +1112,15 @@ func diffWorkflowGraphApprovals(from []WorkflowGraphApproval, to []WorkflowGraph
 		},
 	)
 	return WorkflowGraphApprovalChanges{Added: added, Removed: removed, Modified: modified}
+}
+
+func diffWorkflowGraphFeedbackIntake(from *WorkflowGraphFeedbackIntake, to *WorkflowGraphFeedbackIntake) WorkflowGraphFeedbackIntakeChange {
+	before := cleanWorkflowGraphFeedbackIntakePtr(from)
+	after := cleanWorkflowGraphFeedbackIntakePtr(to)
+	if reflect.DeepEqual(before, after) {
+		return WorkflowGraphFeedbackIntakeChange{}
+	}
+	return WorkflowGraphFeedbackIntakeChange{Changed: true, Before: before, After: after}
 }
 
 func diffWorkflowGraphEntities[T any, C any](
@@ -1116,6 +1190,9 @@ func workflowGraphRiskFlags(from WorkflowGraph, to WorkflowGraph, diff GraphDiff
 	if len(diff.ChangedApprovals.Added) > 0 || len(diff.ChangedApprovals.Removed) > 0 || len(diff.ChangedApprovals.Modified) > 0 {
 		flags["approvals_changed"] = true
 	}
+	if diff.ChangedFeedbackIntake.Changed {
+		flags["feedback_intake_changed"] = true
+	}
 	return sortedGraphKeys(flags)
 }
 
@@ -1160,6 +1237,30 @@ func canonicalWorkflowGraphGate(gate WorkflowGraphGate) WorkflowGraphGate {
 func cleanWorkflowGraphApproval(approval WorkflowGraphApproval) WorkflowGraphApproval {
 	approval.seenFields = nil
 	return approval
+}
+
+func cleanWorkflowGraphFeedbackIntakePtr(feedback *WorkflowGraphFeedbackIntake) *WorkflowGraphFeedbackIntake {
+	if feedback == nil {
+		return nil
+	}
+	cleaned := cleanWorkflowGraphFeedbackIntake(*feedback)
+	return &cleaned
+}
+
+func cleanWorkflowGraphFeedbackIntake(feedback WorkflowGraphFeedbackIntake) WorkflowGraphFeedbackIntake {
+	feedback.policySet = false
+	feedback.schemaVersionSet = false
+	feedback.minRoundsSet = false
+	feedback.maxRoundsSet = false
+	feedback.requiredRoundsSet = false
+	feedback.optionalRoundsSet = false
+	if feedback.RequiredRounds == nil {
+		feedback.RequiredRounds = []int{}
+	}
+	if feedback.OptionalRounds == nil {
+		feedback.OptionalRounds = []int{}
+	}
+	return feedback
 }
 
 func sortedStrings(values []string) []string {
@@ -1385,6 +1486,7 @@ func loadWorkflowGraph(root Root, options GraphOptions) loadedWorkflowGraph {
 			File:            path.Relative,
 			Checksum:        hex.EncodeToString(sum[:]),
 			EffectiveSource: graphEffectiveSourceProject,
+			FeedbackIntake:  cleanWorkflowGraphFeedbackIntakePtr(doc.graph.FeedbackIntake),
 			Errors:          errors,
 			Warnings:        []GraphIssue{},
 			Conflicts:       []GraphIssue{},
@@ -1458,7 +1560,7 @@ func failedGraphValidation(file string, errors []GraphIssue) GraphValidationResu
 }
 
 func parseWorkflowGraph(data []byte, path string) graphDocument {
-	doc := graphDocument{metadataFields: map[string]bool{}, proposalFields: map[string]bool{}}
+	doc := graphDocument{metadataFields: map[string]bool{}, proposalFields: map[string]bool{}, feedbackIntakeFields: map[string]bool{}}
 	lines := strings.Split(string(data), "\n")
 	section := ""
 	seenSections := map[string]bool{}
@@ -1542,7 +1644,7 @@ func parseWorkflowGraph(data []byte, path string) graphDocument {
 				}
 				doc.graph.GraphID = parsed
 			default:
-				addParseError(lineNo, key, "workflow graph contains an unsupported top-level field", "version, graph_id, metadata, phases, edges, gates, approvals, or proposals", key)
+				addParseError(lineNo, key, "workflow graph contains an unsupported top-level field", "version, graph_id, metadata, phases, edges, gates, approvals, proposals, or feedback_intake", key)
 			}
 			continue
 		}
@@ -1569,7 +1671,7 @@ func parseWorkflowGraph(data []byte, path string) graphDocument {
 			setGraphListItemField(&doc, section, lineNo, item, phase, edge, gate, approval)
 			continue
 		}
-		if section == "metadata" || section == "proposals" {
+		if section == "metadata" || section == "proposals" || section == "feedback_intake" {
 			setGraphMappingField(&doc, section, lineNo, line)
 			continue
 		}
@@ -1586,7 +1688,7 @@ func parseWorkflowGraph(data []byte, path string) graphDocument {
 
 func knownGraphSection(section string) bool {
 	switch section {
-	case "metadata", "phases", "edges", "gates", "approvals", "proposals":
+	case "metadata", "phases", "edges", "gates", "approvals", "proposals", "feedback_intake":
 		return true
 	default:
 		return false
@@ -1666,6 +1768,70 @@ func setGraphMappingField(doc *graphDocument, section string, lineNo int, line s
 			return
 		}
 		doc.errors = append(doc.errors, GraphIssue{Name: "graph_yaml", Message: "workflow graph proposals field is unsupported", Field: key, Expected: "policy", Actual: key, Line: lineNo})
+	case "feedback_intake":
+		if doc.graph.FeedbackIntake == nil {
+			doc.graph.FeedbackIntake = &WorkflowGraphFeedbackIntake{}
+		}
+		switch key {
+		case "policy":
+			if !markGraphField(doc, doc.feedbackIntakeFields, lineNo, key) {
+				return
+			}
+			doc.graph.FeedbackIntake.Policy = parsed
+			doc.graph.FeedbackIntake.policySet = true
+		case "schema_version":
+			if !markGraphField(doc, doc.feedbackIntakeFields, lineNo, key) {
+				return
+			}
+			doc.graph.FeedbackIntake.SchemaVersion = parsed
+			doc.graph.FeedbackIntake.schemaVersionSet = true
+		case "min_rounds":
+			if !markGraphField(doc, doc.feedbackIntakeFields, lineNo, key) {
+				return
+			}
+			round, err := parseYAMLInt(value)
+			if err != nil {
+				doc.errors = append(doc.errors, GraphIssue{Name: "graph_yaml", Message: "feedback_intake min_rounds field is invalid", Field: key, Expected: "integer scalar", Actual: err.Error(), Line: lineNo})
+				return
+			}
+			doc.graph.FeedbackIntake.MinRounds = round
+			doc.graph.FeedbackIntake.minRoundsSet = true
+		case "max_rounds":
+			if !markGraphField(doc, doc.feedbackIntakeFields, lineNo, key) {
+				return
+			}
+			round, err := parseYAMLInt(value)
+			if err != nil {
+				doc.errors = append(doc.errors, GraphIssue{Name: "graph_yaml", Message: "feedback_intake max_rounds field is invalid", Field: key, Expected: "integer scalar", Actual: err.Error(), Line: lineNo})
+				return
+			}
+			doc.graph.FeedbackIntake.MaxRounds = round
+			doc.graph.FeedbackIntake.maxRoundsSet = true
+		case "required_rounds":
+			if !markGraphField(doc, doc.feedbackIntakeFields, lineNo, key) {
+				return
+			}
+			rounds, err := parseYAMLIntList(value)
+			if err != nil {
+				doc.errors = append(doc.errors, GraphIssue{Name: "graph_yaml", Message: "feedback_intake required_rounds list is invalid", Field: key, Expected: "inline integer list", Actual: err.Error(), Line: lineNo})
+				return
+			}
+			doc.graph.FeedbackIntake.RequiredRounds = rounds
+			doc.graph.FeedbackIntake.requiredRoundsSet = true
+		case "optional_rounds":
+			if !markGraphField(doc, doc.feedbackIntakeFields, lineNo, key) {
+				return
+			}
+			rounds, err := parseYAMLIntList(value)
+			if err != nil {
+				doc.errors = append(doc.errors, GraphIssue{Name: "graph_yaml", Message: "feedback_intake optional_rounds list is invalid", Field: key, Expected: "inline integer list", Actual: err.Error(), Line: lineNo})
+				return
+			}
+			doc.graph.FeedbackIntake.OptionalRounds = rounds
+			doc.graph.FeedbackIntake.optionalRoundsSet = true
+		default:
+			doc.errors = append(doc.errors, GraphIssue{Name: "graph_yaml", Message: "workflow graph feedback_intake field is unsupported", Field: key, Expected: "policy, schema_version, min_rounds, max_rounds, required_rounds, or optional_rounds", Actual: key, Line: lineNo})
+		}
 	}
 }
 
@@ -1786,6 +1952,35 @@ func parseYAMLBool(value string) (bool, bool) {
 }
 
 func parseYAMLStringList(value string) ([]string, error) {
+	return parseYAMLInlineList(value, func(part string) (string, error) {
+		item, err := parseWorkflowGraphScalar(strings.TrimSpace(part))
+		if err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(item) == "" {
+			return "", fmt.Errorf("empty list item")
+		}
+		return item, nil
+	})
+}
+
+func parseYAMLInt(value string) (int, error) {
+	parsed, err := parseWorkflowGraphScalar(value)
+	if err != nil {
+		return 0, err
+	}
+	round, err := strconv.Atoi(strings.TrimSpace(parsed))
+	if err != nil {
+		return 0, fmt.Errorf("not an integer")
+	}
+	return round, nil
+}
+
+func parseYAMLIntList(value string) ([]int, error) {
+	return parseYAMLInlineList(value, parseYAMLInt)
+}
+
+func parseYAMLInlineList[T any](value string, parseItem func(string) (T, error)) ([]T, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return nil, nil
@@ -1795,17 +1990,14 @@ func parseYAMLStringList(value string) ([]string, error) {
 	}
 	inner := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(value, "["), "]"))
 	if inner == "" {
-		return []string{}, nil
+		return []T{}, nil
 	}
 	parts := splitInlineList(inner)
-	result := make([]string, 0, len(parts))
+	result := make([]T, 0, len(parts))
 	for _, part := range parts {
-		item, err := parseWorkflowGraphScalar(strings.TrimSpace(part))
+		item, err := parseItem(strings.TrimSpace(part))
 		if err != nil {
 			return nil, err
-		}
-		if strings.TrimSpace(item) == "" {
-			return nil, fmt.Errorf("empty list item")
 		}
 		result = append(result, item)
 	}
@@ -1970,7 +2162,127 @@ func validateWorkflowGraph(graph WorkflowGraph, path string) []GraphIssue {
 	if graph.Proposals.Policy != "" && graph.Proposals.Policy != "proposal-first" {
 		add("proposals_policy", "proposals.policy", "workflow graph proposals policy is unsupported", "proposal-first", graph.Proposals.Policy)
 	}
+	errors = append(errors, validateWorkflowGraphFeedbackIntake(graph.FeedbackIntake, path)...)
 	return errors
+}
+
+func validateWorkflowGraphFeedbackIntake(feedback *WorkflowGraphFeedbackIntake, path string) []GraphIssue {
+	if feedback == nil {
+		return nil
+	}
+	errors := []GraphIssue{}
+	add := func(name string, field string, message string, expected string, actual string) {
+		errors = append(errors, GraphIssue{Name: name, Path: path, Message: message, Hint: "Repair feedback_intake so KAH can validate external feedback intake bounds deterministically.", Field: field, Expected: expected, Actual: actual})
+	}
+	if !feedback.policySet {
+		add("feedback_intake_policy", "feedback_intake.policy", "feedback intake policy is required", graphFeedbackIntakePolicy, graphIssueActualMissing)
+	} else if feedback.Policy != graphFeedbackIntakePolicy {
+		add("feedback_intake_policy", "feedback_intake.policy", "feedback intake policy is unsupported", graphFeedbackIntakePolicy, feedback.Policy)
+	}
+	if !feedback.schemaVersionSet {
+		add("feedback_intake_schema_version", "feedback_intake.schema_version", "feedback intake schema version is required", graphFeedbackIntakeSchema, graphIssueActualMissing)
+	} else if feedback.SchemaVersion != graphFeedbackIntakeSchema {
+		add("feedback_intake_schema_version", "feedback_intake.schema_version", "feedback intake schema version is unsupported", graphFeedbackIntakeSchema, feedback.SchemaVersion)
+	}
+	if !feedback.minRoundsSet {
+		add("feedback_intake_min_rounds", "feedback_intake.min_rounds", "feedback intake min_rounds is required", "1", graphIssueActualMissing)
+	} else if feedback.MinRounds != 1 {
+		add("feedback_intake_min_rounds", "feedback_intake.min_rounds", "feedback intake min_rounds is unsupported", "1", strconv.Itoa(feedback.MinRounds))
+	}
+	if !feedback.maxRoundsSet {
+		add("feedback_intake_max_rounds", "feedback_intake.max_rounds", "feedback intake max_rounds is required", "5", graphIssueActualMissing)
+	} else if feedback.MaxRounds != 5 {
+		name := "feedback_intake_max_rounds"
+		message := "feedback intake max_rounds is unsupported"
+		if feedback.MaxRounds == 3 {
+			name = "feedback_intake_stale_bounds"
+			message = "feedback intake max_rounds preserves stale fixed max3 bounds"
+		}
+		add(name, "feedback_intake.max_rounds", message, "5", strconv.Itoa(feedback.MaxRounds))
+	}
+	if feedback.minRoundsSet && feedback.maxRoundsSet && feedback.MaxRounds < feedback.MinRounds {
+		add("feedback_intake_round_bounds", "feedback_intake.max_rounds", "feedback intake max_rounds must be greater than or equal to min_rounds", "max_rounds >= min_rounds", fmt.Sprintf("%d < %d", feedback.MaxRounds, feedback.MinRounds))
+	}
+	if !feedback.requiredRoundsSet {
+		add("feedback_intake_required_rounds", "feedback_intake.required_rounds", "feedback intake required_rounds is required", "[1]", graphIssueActualMissing)
+	} else {
+		validateWorkflowGraphFeedbackRounds(feedback.RequiredRounds, "feedback_intake.required_rounds", true, add)
+		if !reflect.DeepEqual(feedback.RequiredRounds, []int{1}) {
+			add("feedback_intake_required_rounds", "feedback_intake.required_rounds", "feedback intake required rounds must declare round 1 only", "[1]", graphYAMLIntList(feedback.RequiredRounds))
+		}
+	}
+	if !feedback.optionalRoundsSet {
+		add("feedback_intake_optional_rounds", "feedback_intake.optional_rounds", "feedback intake optional_rounds is required", "[2,3,4,5]", graphIssueActualMissing)
+	} else {
+		validateWorkflowGraphFeedbackRounds(feedback.OptionalRounds, "feedback_intake.optional_rounds", false, add)
+		if reflect.DeepEqual(feedback.OptionalRounds, []int{2, 3}) {
+			add("feedback_intake_stale_bounds", "feedback_intake.optional_rounds", "feedback intake optional_rounds preserves stale fixed 1..3 bounds", "[2,3,4,5]", graphYAMLIntList(feedback.OptionalRounds))
+		} else if !reflect.DeepEqual(feedback.OptionalRounds, []int{2, 3, 4, 5}) {
+			add("feedback_intake_optional_rounds", "feedback_intake.optional_rounds", "feedback intake optional rounds must declare continuation rounds 2 through 5", "[2,3,4,5]", graphYAMLIntList(feedback.OptionalRounds))
+		}
+	}
+	if feedback.requiredRoundsSet && feedback.optionalRoundsSet {
+		overlap := graphRoundOverlap(feedback.RequiredRounds, feedback.OptionalRounds)
+		if len(overlap) > 0 {
+			add("feedback_intake_rounds_conflict", "feedback_intake.required_rounds", "feedback intake rounds cannot be both required and optional", "disjoint required and optional rounds", graphYAMLIntList(overlap))
+		}
+	}
+	return errors
+}
+
+func validateWorkflowGraphFeedbackRounds(rounds []int, field string, required bool, add func(string, string, string, string, string)) {
+	seen := map[int]bool{}
+	duplicates := []int{}
+	invalid := []int{}
+	for _, round := range rounds {
+		if seen[round] {
+			duplicates = append(duplicates, round)
+		}
+		seen[round] = true
+		if round < 1 || round >= 6 {
+			invalid = append(invalid, round)
+		}
+	}
+	if len(duplicates) > 0 {
+		sort.Ints(duplicates)
+		add("feedback_intake_duplicate_round", field, "feedback intake round declarations must be unique", "unique rounds", graphYAMLIntList(uniqueInts(duplicates)))
+	}
+	if len(invalid) > 0 {
+		sort.Ints(invalid)
+		name := "feedback_intake_round_range"
+		if required {
+			name = "feedback_intake_required_rounds"
+		}
+		add(name, field, "feedback intake round is outside the supported range", "rounds 1 through 5", graphYAMLIntList(uniqueInts(invalid)))
+	}
+}
+
+func graphRoundOverlap(left []int, right []int) []int {
+	rightSet := map[int]bool{}
+	for _, value := range right {
+		rightSet[value] = true
+	}
+	overlap := []int{}
+	for _, value := range left {
+		if rightSet[value] {
+			overlap = append(overlap, value)
+		}
+	}
+	sort.Ints(overlap)
+	return uniqueInts(overlap)
+}
+
+func uniqueInts(values []int) []int {
+	result := []int{}
+	seen := map[int]bool{}
+	for _, value := range values {
+		if seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
 }
 
 func firstGraphCycle(edges []WorkflowGraphEdge, phaseIDs map[string]bool) []string {

@@ -295,7 +295,8 @@ func TestGraphDocsSOTAndReadonlyImplementationContract(t *testing.T) {
 				"Other bare values fail as `graph_template_unknown`",
 				"`graph validate` checks the source path",
 				"Graph proposal lifecycle is proposal-first.",
-				"| `validate --json` | `schema_version`, `status`, `file`, `checksum`, `effective_source`, `errors`, `warnings`, `conflicts`, `next_action` |",
+				"| `validate --json` | `schema_version`, `status`, `file`, `checksum`, `effective_source`, optional `feedback_intake`, `errors`, `warnings`, `conflicts`, `next_action` |",
+				"`graph diff` marks changed bounds with `feedback_intake_changed`",
 				"KAH policy-mutation command category is empty",
 				"kah graph init --profile ...",
 				"## Planning graph record appendix",
@@ -306,6 +307,7 @@ func TestGraphDocsSOTAndReadonlyImplementationContract(t *testing.T) {
 			rel: "docs/compatibility.md",
 			wants: []string{
 				"graph init, validation/explanation, semantic diff, proposal records, approval-gated apply, non-authoritative graph export, and compatibility diagnostics implemented",
+				"Configurable `EXTERNAL_FEEDBACK_INTAKE` support is partially implemented for graph read-only validation/projection only",
 				"Workflow graph compatibility: `.kkachi-workflow.yaml` plus `kkachi-agent-helper graph init`",
 				"KHS must not silently edit `.kkachi-workflow.yaml` as fallback when graph apply support is missing",
 				"Graph source precedence must fail closed",
@@ -343,7 +345,7 @@ func TestGraphDocsSOTAndReadonlyImplementationContract(t *testing.T) {
 				"`docs/specs.md` | Current KAH helper behavior SOT, including `.kkachi-workflow.yaml` command/schema behavior",
 				"Authoritative for implemented/helper behavior and workflow graph behavior",
 				"Compatibility matrix, activation guidance, and graph fallback rules",
-				"`.kkachi-workflow.yaml` is documented as project-level workflow graph state with implemented init",
+				"read-only `EXTERNAL_FEEDBACK_INTAKE` bounds projection",
 				"`kkachi-agent-helper graph init`, `graph validate`, `graph explain`, `graph diff`, `graph propose`, `graph apply`, and `graph export` are implemented",
 				"graph compatibility diagnostics",
 			},
@@ -455,6 +457,17 @@ approvals:
 proposals:
   policy: "proposal-first"
 	`
+}
+
+func e2eWorkflowGraphWithFeedbackIntake(body string) string {
+	return body + `feedback_intake:
+  policy: "EXTERNAL_FEEDBACK_INTAKE"
+  schema_version: "external-feedback-intake/v1"
+  min_rounds: 1
+  max_rounds: 5
+  required_rounds: [1]
+  optional_rounds: [2,3,4,5]
+`
 }
 
 func e2eCandidateWorkflowGraph() string {
@@ -990,6 +1003,17 @@ func TestGraphInitApplyAndReadonlyFlow(t *testing.T) {
 	alternateValidation := requireCLI(t, r, "graph", "validate", "--file", alternate, "--json")
 	requireContains(t, alternateValidation.stdout, `"status":"pass"`, "alternate graph validation")
 	requireContains(t, alternateValidation.stdout, `"file":"`+alternate+`"`, "alternate graph validation")
+
+	feedbackGraph := "docs/graphs/feedback-workflow.yaml"
+	writeFile(t, filepath.Join(r, filepath.FromSlash(feedbackGraph)), e2eWorkflowGraphWithFeedbackIntake(e2eValidWorkflowGraph()))
+	feedbackValidation := requireCLI(t, r, "graph", "validate", "--file", feedbackGraph, "--json")
+	requireContains(t, feedbackValidation.stdout, `"feedback_intake":{"policy":"EXTERNAL_FEEDBACK_INTAKE"`, "feedback graph validation")
+	feedbackExplanation := requireCLI(t, r, "graph", "explain", "--file", feedbackGraph, "--json")
+	requireContains(t, feedbackExplanation.stdout, `"optional_rounds":[2,3,4,5]`, "feedback graph explanation")
+	invalidFeedbackGraph := "docs/graphs/invalid-feedback-workflow.yaml"
+	writeFile(t, filepath.Join(r, filepath.FromSlash(invalidFeedbackGraph)), strings.Replace(e2eWorkflowGraphWithFeedbackIntake(e2eValidWorkflowGraph()), `optional_rounds: [2,3,4,5]`, `optional_rounds: [2,3,4,5,6]`, 1))
+	failedFeedback := requireFailCLI(t, r, "graph", "validate", "--file", invalidFeedbackGraph, "--json")
+	requireContains(t, failedFeedback.stdout, `"name":"feedback_intake_round_range"`, "invalid feedback graph validation")
 
 	candidate := "docs/graphs/proposed-workflow.yaml"
 	writeFile(t, filepath.Join(r, filepath.FromSlash(candidate)), e2eCandidateWorkflowGraph())

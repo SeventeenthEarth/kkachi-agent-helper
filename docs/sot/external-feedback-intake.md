@@ -20,7 +20,7 @@ The intended policy is:
 - Rounds 2 through 5 are optional continuation rounds.
 - Five loops are never mandatory.
 
-This document does not claim implemented support. KAH may advertise configurable external feedback intake support only after `graph-009` graph schema handling, `graph-010` phase-plan validation, and `graph-011` migration/proposal handling, diagnostics/capabilities, permanent docs, and tests are aligned.
+This document does not claim final advertised support. KAH may advertise configurable external feedback intake support only after `graph-010` phase-plan validation and `graph-011` migration/proposal handling, diagnostics/capabilities, permanent docs, and tests are aligned. `graph-009` implements read-only graph schema handling only.
 
 ## Authority model
 
@@ -114,17 +114,17 @@ Add graph support as a read-only schema/projection layer first. The graph can re
 
 ### Checklist
 
-- [ ] `min_rounds >= 1` is validated.
-- [ ] `max_rounds >= min_rounds` is validated.
-- [ ] Current intended `max_rounds <= 5` is validated.
-- [ ] Round 1 is required for the intended policy.
-- [ ] Rounds 2 through 5 are represented as optional continuation, not mandatory.
-- [ ] Round 6 and higher fail closed.
-- [ ] Missing bounds fail closed when graph-managed feedback bounds are required.
-- [ ] Unknown or unsupported schema versions fail closed.
-- [ ] Duplicate and conflicting declarations fail closed.
-- [ ] Stale `1..3` or `max3` declarations are reported as stale, not silently accepted.
-- [ ] `graph validate/explain/diff` tests cover min1/max5, stale max3, missing bounds, unknown versions, duplicate declarations, conflicting declarations, and round 6 rejection.
+- [x] `min_rounds >= 1` is validated.
+- [x] `max_rounds >= min_rounds` is validated.
+- [x] Current intended `max_rounds <= 5` is validated.
+- [x] Round 1 is required for the intended policy.
+- [x] Rounds 2 through 5 are represented as optional continuation, not mandatory.
+- [x] Round 6 and higher fail closed.
+- [x] Missing bounds fail closed when graph-managed feedback bounds are required.
+- [x] Unknown or unsupported schema versions fail closed.
+- [x] Duplicate and conflicting declarations fail closed.
+- [x] Stale `1..3` or `max3` declarations are reported as stale, not silently accepted.
+- [x] `graph validate/explain/diff` tests cover min1/max5, stale max3, missing bounds, unknown versions, duplicate declarations, conflicting declarations, and round 6 rejection.
 
 ### Acceptance criteria
 

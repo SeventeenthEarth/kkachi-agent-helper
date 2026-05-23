@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/SeventeenthEarth/kkachi-agent-helper/internal/project"
@@ -2740,6 +2741,9 @@ func writeGraphValidateResult(w io.Writer, result project.GraphValidationResult,
 	if result.EffectiveSource != "" {
 		fmt.Fprintf(w, "effective_source: %s\n", result.EffectiveSource)
 	}
+	if result.FeedbackIntake != nil {
+		fmt.Fprintf(w, "feedback_intake: %s\n", graphFeedbackIntakeSummary(result.FeedbackIntake))
+	}
 	fmt.Fprintf(w, "errors: %d\n", len(result.Errors))
 	writeGraphIssues(w, result.Errors)
 	fmt.Fprintf(w, "next_action: %s\n", result.NextAction)
@@ -2779,6 +2783,9 @@ func writeGraphExplainResult(w io.Writer, result project.GraphExplanationResult,
 	fmt.Fprintf(w, "approval_requirements: %d\n", len(result.ApprovalRequirements))
 	for _, approval := range result.ApprovalRequirements {
 		fmt.Fprintf(w, "- approval %s role=%s\n", approval.Scope, approval.RequiredRole)
+	}
+	if result.FeedbackIntake != nil {
+		fmt.Fprintf(w, "feedback_intake: %s\n", graphFeedbackIntakeSummary(result.FeedbackIntake))
 	}
 	fmt.Fprintf(w, "pending_proposals: %d\n", len(result.PendingProposals))
 	fmt.Fprintf(w, "errors: %d\n", len(result.ValidationSummary.Errors))
@@ -2851,9 +2858,34 @@ func writeGraphDiffResult(w io.Writer, result project.GraphDiffResult, jsonMode 
 	for _, change := range result.ChangedApprovals.Modified {
 		fmt.Fprintf(w, "- approval modified %s\n", change.Key)
 	}
+	fmt.Fprintf(w, "changed_feedback_intake: %t\n", result.ChangedFeedbackIntake.Changed)
+	if result.ChangedFeedbackIntake.Before != nil {
+		fmt.Fprintf(w, "- feedback_intake before %s\n", graphFeedbackIntakeSummary(result.ChangedFeedbackIntake.Before))
+	}
+	if result.ChangedFeedbackIntake.After != nil {
+		fmt.Fprintf(w, "- feedback_intake after %s\n", graphFeedbackIntakeSummary(result.ChangedFeedbackIntake.After))
+	}
 	fmt.Fprintf(w, "risk_flags: %s\n", strings.Join(result.RiskFlags, ","))
 	fmt.Fprintf(w, "requires_approval: %t\n", result.RequiresApproval)
 	fmt.Fprintf(w, "next_action: %s\n", result.NextAction)
+}
+
+func graphFeedbackIntakeSummary(feedback *project.WorkflowGraphFeedbackIntake) string {
+	if feedback == nil {
+		return "absent"
+	}
+	return fmt.Sprintf("policy=%s schema_version=%s min_rounds=%d max_rounds=%d required_rounds=%s optional_rounds=%s", feedback.Policy, feedback.SchemaVersion, feedback.MinRounds, feedback.MaxRounds, graphIntListSummary(feedback.RequiredRounds), graphIntListSummary(feedback.OptionalRounds))
+}
+
+func graphIntListSummary(values []int) string {
+	if len(values) == 0 {
+		return "[]"
+	}
+	items := make([]string, 0, len(values))
+	for _, value := range values {
+		items = append(items, strconv.Itoa(value))
+	}
+	return "[" + strings.Join(items, ",") + "]"
 }
 
 func writeGraphProposalResult(w io.Writer, result project.GraphProposalResult, jsonMode bool) {

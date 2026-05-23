@@ -48,6 +48,63 @@ func TestGraphValidateAndExplainJSON(t *testing.T) {
 	}
 }
 
+func TestGraphFeedbackIntakeJSONAndHumanOutput(t *testing.T) {
+	repo := tempGitRepo(t)
+	writeCLIGraph(t, repo, cliWorkflowGraphWithFeedbackIntake(cliValidWorkflowGraph()))
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := runWithOptions([]string{"graph", "validate", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	if exitCode != ExitOK {
+		t.Fatalf("exitCode = %d, want %d stderr=%s", exitCode, ExitOK, stderr.String())
+	}
+	var validation project.GraphValidationResult
+	if err := json.Unmarshal(stdout.Bytes(), &validation); err != nil {
+		t.Fatalf("graph validate output is not JSON: %v\n%s", err, stdout.String())
+	}
+	if validation.FeedbackIntake == nil || validation.FeedbackIntake.Policy != "EXTERNAL_FEEDBACK_INTAKE" || validation.FeedbackIntake.MaxRounds != 5 {
+		t.Fatalf("validation = %#v, want feedback intake projection", validation)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	exitCode = runWithOptions([]string{"graph", "explain"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	if exitCode != ExitOK {
+		t.Fatalf("human explain exitCode = %d, want %d stderr=%s", exitCode, ExitOK, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "feedback_intake: policy=EXTERNAL_FEEDBACK_INTAKE") || !strings.Contains(stdout.String(), "optional_rounds=[2,3,4,5]") {
+		t.Fatalf("human explain output = %q, want feedback intake summary", stdout.String())
+	}
+
+	candidate := "graphs/candidate.yaml"
+	writeCLIGraphFile(t, repo, candidate, cliValidWorkflowGraph())
+	stdout.Reset()
+	stderr.Reset()
+	exitCode = runWithOptions([]string{"graph", "diff", "--from", project.WorkflowGraphDefaultPath, "--to", candidate, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	if exitCode != ExitOK {
+		t.Fatalf("diff exitCode = %d, want %d stderr=%s stdout=%s", exitCode, ExitOK, stderr.String(), stdout.String())
+	}
+	var diff project.GraphDiffResult
+	if err := json.Unmarshal(stdout.Bytes(), &diff); err != nil {
+		t.Fatalf("graph diff output is not JSON: %v\n%s", err, stdout.String())
+	}
+	if !diff.ChangedFeedbackIntake.Changed || !graphCLISliceContains(diff.RiskFlags, "feedback_intake_changed") {
+		t.Fatalf("diff = %#v, want feedback intake change risk", diff)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	exitCode = runWithOptions([]string{"graph", "diff", "--from", project.WorkflowGraphDefaultPath, "--to", candidate}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	if exitCode != ExitOK {
+		t.Fatalf("human diff exitCode = %d, want %d stderr=%s", exitCode, ExitOK, stderr.String())
+	}
+	for _, want := range []string{"changed_feedback_intake: true", "feedback_intake_changed", "feedback_intake before policy=EXTERNAL_FEEDBACK_INTAKE"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("human diff output = %q, want %q", stdout.String(), want)
+		}
+	}
+}
+
 func TestGraphValidateExplicitFileJSON(t *testing.T) {
 	repo := tempGitRepo(t)
 	relative := "docs/graphs/candidate-workflow.yaml"
@@ -594,6 +651,26 @@ approvals:
 proposals:
   policy: "proposal-first"
 	`
+}
+
+func cliWorkflowGraphWithFeedbackIntake(body string) string {
+	return body + `feedback_intake:
+  policy: "EXTERNAL_FEEDBACK_INTAKE"
+  schema_version: "external-feedback-intake/v1"
+  min_rounds: 1
+  max_rounds: 5
+  required_rounds: [1]
+  optional_rounds: [2,3,4,5]
+`
+}
+
+func graphCLISliceContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func cliCandidateWorkflowGraph() string {

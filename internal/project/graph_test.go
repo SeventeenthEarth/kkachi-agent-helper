@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +29,25 @@ func TestValidateAndExplainWorkflowGraph(t *testing.T) {
 	}
 	if explained.Phases[0].ID != "plan" || explained.Edges[0].From != "plan" || explained.Gates[0].Requires[1] != "implement" || explained.ApprovalRequirements[0].RequiredRole != "responsible-approver" {
 		t.Fatalf("explanation details = %#v, want graph projection", explained)
+	}
+}
+
+func TestValidateAndExplainWorkflowGraphFeedbackIntake(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	writeWorkflowGraph(t, repo, workflowGraphWithFeedbackIntake(validWorkflowGraph()))
+
+	result := ValidateWorkflowGraph(root, GraphOptions{})
+	if result.Status != GraphStatusPass || result.FeedbackIntake == nil || result.FeedbackIntake.Policy != graphFeedbackIntakePolicy || result.FeedbackIntake.MaxRounds != 5 {
+		t.Fatalf("validation = %#v, want passing feedback intake projection", result)
+	}
+	if !reflect.DeepEqual(result.FeedbackIntake.RequiredRounds, []int{1}) || !reflect.DeepEqual(result.FeedbackIntake.OptionalRounds, []int{2, 3, 4, 5}) {
+		t.Fatalf("feedback rounds = required:%#v optional:%#v, want min1/max5 projection", result.FeedbackIntake.RequiredRounds, result.FeedbackIntake.OptionalRounds)
+	}
+
+	explained := ExplainWorkflowGraph(root, GraphOptions{})
+	if explained.Status != GraphStatusPass || explained.FeedbackIntake == nil || explained.FeedbackIntake.SchemaVersion != graphFeedbackIntakeSchema {
+		t.Fatalf("explanation = %#v, want feedback intake projection", explained)
 	}
 }
 
@@ -368,6 +388,87 @@ phases:
 	}
 }
 
+func TestValidateWorkflowGraphRejectsInvalidFeedbackIntake(t *testing.T) {
+	cases := []struct {
+		name      string
+		section   string
+		wantIssue string
+	}{
+		{
+			name:      "missing field",
+			section:   strings.Replace(validFeedbackIntakeSection(), `  max_rounds: 5`+"\n", "", 1),
+			wantIssue: "feedback_intake_max_rounds",
+		},
+		{
+			name:      "unsupported schema",
+			section:   strings.Replace(validFeedbackIntakeSection(), graphFeedbackIntakeSchema, "external-feedback-intake/v2", 1),
+			wantIssue: "feedback_intake_schema_version",
+		},
+		{
+			name:      "unsupported policy",
+			section:   strings.Replace(validFeedbackIntakeSection(), graphFeedbackIntakePolicy, "OTHER_POLICY", 1),
+			wantIssue: "feedback_intake_policy",
+		},
+		{
+			name:      "duplicate declaration",
+			section:   strings.Replace(validFeedbackIntakeSection(), `  policy: "EXTERNAL_FEEDBACK_INTAKE"`, "  policy: \"EXTERNAL_FEEDBACK_INTAKE\"\n  policy: \"EXTERNAL_FEEDBACK_INTAKE\"", 1),
+			wantIssue: "graph_yaml",
+		},
+		{
+			name:      "conflicting declarations",
+			section:   strings.Replace(validFeedbackIntakeSection(), `optional_rounds: [2,3,4,5]`, `optional_rounds: [1,2,3,4,5]`, 1),
+			wantIssue: "feedback_intake_rounds_conflict",
+		},
+		{
+			name:      "stale max3",
+			section:   strings.Replace(strings.Replace(validFeedbackIntakeSection(), `max_rounds: 5`, `max_rounds: 3`, 1), `optional_rounds: [2,3,4,5]`, `optional_rounds: [2,3]`, 1),
+			wantIssue: "feedback_intake_stale_bounds",
+		},
+		{
+			name:      "max below min",
+			section:   strings.Replace(strings.Replace(validFeedbackIntakeSection(), `min_rounds: 1`, `min_rounds: 4`, 1), `max_rounds: 5`, `max_rounds: 3`, 1),
+			wantIssue: "feedback_intake_round_bounds",
+		},
+		{
+			name:      "min below one",
+			section:   strings.Replace(validFeedbackIntakeSection(), `min_rounds: 1`, `min_rounds: 0`, 1),
+			wantIssue: "feedback_intake_min_rounds",
+		},
+		{
+			name:      "max above five",
+			section:   strings.Replace(validFeedbackIntakeSection(), `max_rounds: 5`, `max_rounds: 6`, 1),
+			wantIssue: "feedback_intake_max_rounds",
+		},
+		{
+			name:      "required round one missing",
+			section:   strings.Replace(validFeedbackIntakeSection(), `required_rounds: [1]`, `required_rounds: [2]`, 1),
+			wantIssue: "feedback_intake_required_rounds",
+		},
+		{
+			name:      "round six rejected",
+			section:   strings.Replace(validFeedbackIntakeSection(), `optional_rounds: [2,3,4,5]`, `optional_rounds: [2,3,4,5,6]`, 1),
+			wantIssue: "feedback_intake_round_range",
+		},
+		{
+			name:      "duplicate section",
+			section:   validFeedbackIntakeSection() + validFeedbackIntakeSection(),
+			wantIssue: "graph_yaml",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := initializedRepo(t)
+			root, _ := DiscoverRoot(repo)
+			writeWorkflowGraph(t, repo, validWorkflowGraph()+tc.section)
+
+			result := ValidateWorkflowGraph(root, GraphOptions{})
+			if result.Status != GraphStatusFail || !graphIssueNamed(result.Errors, tc.wantIssue) {
+				t.Fatalf("validation = %#v, want issue %s", result, tc.wantIssue)
+			}
+		})
+	}
+}
+
 func TestDiffWorkflowGraphReportsSemanticChanges(t *testing.T) {
 	repo := initializedRepo(t)
 	root, _ := DiscoverRoot(repo)
@@ -405,6 +506,23 @@ func TestDiffWorkflowGraphReportsSemanticChanges(t *testing.T) {
 	}
 	if !result.RequiresApproval {
 		t.Fatalf("requires approval = false, want true")
+	}
+}
+
+func TestDiffWorkflowGraphReportsFeedbackIntakeChanges(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	from := "graphs/from.yaml"
+	to := "graphs/to.yaml"
+	writeGraphFile(t, repo, from, validWorkflowGraph())
+	writeGraphFile(t, repo, to, workflowGraphWithFeedbackIntake(validWorkflowGraph()))
+
+	result := DiffWorkflowGraph(root, GraphDiffOptions{From: from, To: to})
+	if result.Status != GraphStatusPass || !result.ChangedFeedbackIntake.Changed || result.ChangedFeedbackIntake.Before != nil || result.ChangedFeedbackIntake.After == nil {
+		t.Fatalf("diff = %#v, want added feedback intake change", result)
+	}
+	if !graphStringSliceContains(result.RiskFlags, "feedback_intake_changed") || !result.RequiresApproval {
+		t.Fatalf("risk flags = %#v requires=%t, want feedback intake approval risk", result.RiskFlags, result.RequiresApproval)
 	}
 }
 
@@ -1005,6 +1123,21 @@ approvals:
 proposals:
   policy: "proposal-first"
 	`
+}
+
+func workflowGraphWithFeedbackIntake(body string) string {
+	return body + validFeedbackIntakeSection()
+}
+
+func validFeedbackIntakeSection() string {
+	return `feedback_intake:
+  policy: "EXTERNAL_FEEDBACK_INTAKE"
+  schema_version: "external-feedback-intake/v1"
+  min_rounds: 1
+  max_rounds: 5
+  required_rounds: [1]
+  optional_rounds: [2,3,4,5]
+`
 }
 
 func candidateWorkflowGraph() string {

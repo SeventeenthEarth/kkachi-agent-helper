@@ -183,6 +183,20 @@ func TestGraphReadonlyBinaryFlow(t *testing.T) {
 		t.Fatalf("alternate validation = %#v, want explicit graph candidate", alternateValidation)
 	}
 
+	feedbackGraph := "docs/graphs/feedback-workflow.yaml"
+	writeIntegrationTarget(t, repo, feedbackGraph, integrationWorkflowGraphWithFeedbackIntake(integrationValidWorkflowGraph()))
+	feedbackValidation := runHelper(t, binary, repo, "graph", "validate", "--file", feedbackGraph, "--json")
+	assertOutputContains(t, feedbackValidation, `"feedback_intake":{"policy":"EXTERNAL_FEEDBACK_INTAKE"`, "feedback graph validation")
+	feedbackExplanation := runHelper(t, binary, repo, "graph", "explain", "--file", feedbackGraph, "--json")
+	assertOutputContains(t, feedbackExplanation, `"optional_rounds":[2,3,4,5]`, "feedback graph explanation")
+	invalidFeedbackGraph := "docs/graphs/invalid-feedback-workflow.yaml"
+	writeIntegrationTarget(t, repo, invalidFeedbackGraph, strings.Replace(integrationWorkflowGraphWithFeedbackIntake(integrationValidWorkflowGraph()), `max_rounds: 5`, `max_rounds: 3`, 1))
+	invalidFeedbackOutput, err := runHelperAllowError(binary, repo, "graph", "validate", "--file", invalidFeedbackGraph, "--json")
+	if err == nil {
+		t.Fatalf("graph validate with invalid feedback bounds unexpectedly passed: %s", string(invalidFeedbackOutput))
+	}
+	assertOutputContains(t, invalidFeedbackOutput, `"name":"feedback_intake_stale_bounds"`, "invalid feedback graph validation")
+
 	candidate := "docs/graphs/proposed-workflow.yaml"
 	writeIntegrationTarget(t, repo, candidate, integrationCandidateWorkflowGraph())
 	diffOutput := runHelper(t, binary, repo, "graph", "diff", "--from", ".kkachi-workflow.yaml", "--to", candidate, "--semantic", "--json")
@@ -1777,6 +1791,17 @@ approvals:
 proposals:
   policy: "proposal-first"
 	`
+}
+
+func integrationWorkflowGraphWithFeedbackIntake(body string) string {
+	return body + `feedback_intake:
+  policy: "EXTERNAL_FEEDBACK_INTAKE"
+  schema_version: "external-feedback-intake/v1"
+  min_rounds: 1
+  max_rounds: 5
+  required_rounds: [1]
+  optional_rounds: [2,3,4,5]
+`
 }
 
 func integrationCandidateWorkflowGraph() string {

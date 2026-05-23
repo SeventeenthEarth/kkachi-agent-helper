@@ -131,7 +131,7 @@ Light mode may use the same artifact names with shorter content or explicit not-
 
 ### Project workflow graph note
 
-Status: `graph-007` graph compatibility diagnostics implemented. This file is the permanent behavior SOT for `.kkachi-workflow.yaml`, the graph command surface, and graph compatibility diagnostics.
+Status: `graph-009` read-only external feedback intake graph schema validation implemented. This file is the permanent behavior SOT for `.kkachi-workflow.yaml`, the graph command surface, and graph compatibility diagnostics.
 
 | Path / artifact | Meaning | Owner | Authority |
 |---|---|---|---|
@@ -148,7 +148,19 @@ Graph source and evidence precedence is explicit. Applied `.kkachi-workflow.yaml
 
 KAH fails closed when graph-managed workflow support is required but `.kkachi-workflow.yaml` is missing, invalid, ambiguous, duplicated, or conflicts with KHS phase policy or run-local `phase-plan.yaml`; when direct manual edits lack validation/proposal/apply/audit evidence; when candidate graph changes affect gates, approvals, review policy, or dependencies without approval/audit evidence; or when KHS asks KAH to use imperative workflow-policy commands.
 
-Planned `EXTERNAL_FEEDBACK_INTAKE` graph policy is documented in `docs/sot/external-feedback-intake.md` and is not implemented support yet. The intended future contract is `min_rounds=1`, `max_rounds=5`, with round 1 required and rounds 2 through 5 optional continuation rounds. After the later graph tasks land, validated `.kkachi-workflow.yaml` state with audit evidence is the project policy authority for these bounds; `.kkachi/config.yaml`, generated diagrams, stale `.kkachi/` runtime state, KHS defaults, Kkachi v2 `.kkachi/config/workflows/`, and KAB runtime state are never fallback authorities for feedback bounds.
+`EXTERNAL_FEEDBACK_INTAKE` graph policy is implemented as read-only schema validation and projection only. When present, `.kkachi-workflow.yaml` must declare:
+
+```yaml
+feedback_intake:
+  policy: "EXTERNAL_FEEDBACK_INTAKE"
+  schema_version: "external-feedback-intake/v1"
+  min_rounds: 1
+  max_rounds: 5
+  required_rounds: [1]
+  optional_rounds: [2,3,4,5]
+```
+
+Missing, duplicate, unsupported, conflicting, stale `max3`/`1..3`, or round 6+ declarations fail closed. Absence of `feedback_intake` remains valid graph input with no graph-declared feedback policy. KAH projects valid declarations through `graph validate --json`, `graph explain --json`, and `graph diff --json`; `graph diff` marks changed bounds with `feedback_intake_changed`. This does not advertise final configurable feedback-intake support: phase-plan behavior, migration diagnostics, and activation capabilities remain gated to later graph tasks. `.kkachi/config.yaml`, generated diagrams, stale `.kkachi/` runtime state, KHS defaults, Kkachi v2 `.kkachi/config/workflows/`, and KAB runtime state are never fallback authorities for feedback bounds.
 
 ### Planned capability cache/evidence note
 
@@ -653,13 +665,13 @@ kkachi-agent-helper graph export --format mermaid|plantuml [--output <path>] [--
 
 `graph init` requires initialized helper state, project event coherence, and `--from-template <template-id-or-path>`. The built-in template id `khs-default` is a deterministic seed from the current KHS phase-plan default spine, with linear edges and no generated gates, approvals, review policy, or policy decisions. Values containing `/` or ending in `.yaml` or `.yml` are treated as explicit repository-relative YAML template paths and must pass the same fail-closed graph source and schema validation as other graph inputs. Other bare values fail as `graph_template_unknown`; `--profile` is not supported. `--output` may be omitted or exactly `.kkachi-workflow.yaml`; any other output path is rejected so graph init cannot create multiple graph authorities. Existing `.kkachi-workflow.yaml` files, invalid files, symlinks, and directories fail closed as `graph_already_exists`. Successful init stamps the current project id/name, `managed_by: "kah"`, `source_template`, and `last_applied_event_id`, writes canonical graph YAML atomically, appends `graph.initialized`, and returns the rendered checksum. Approved replacement uses `graph apply`, not `graph init`.
 
-`graph validate` checks the source path, constrained YAML structure, `version: "workflow-graph/v1"`, non-empty `graph_id`, required metadata, unique phase ids, explicit phase `required` fields, edge and gate references, acyclic edges, approval fields, duplicate sections/fields, duplicate gate ids, duplicate approval scopes, and `proposals.policy: "proposal-first"` when present. It rejects `.kkachi/config.yaml`, Kkachi v2 `.kkachi/config/workflows/**`, generated Mermaid/PlantUML files, unsafe paths, missing graph files, and invalid schema content fail-closed. Passing validation exits `0`; failing validation exits `3` and emits the graph result on stdout.
+`graph validate` checks the source path, constrained YAML structure, `version: "workflow-graph/v1"`, non-empty `graph_id`, required metadata, unique phase ids, explicit phase `required` fields, edge and gate references, acyclic edges, approval fields, duplicate sections/fields, duplicate gate ids, duplicate approval scopes, `proposals.policy: "proposal-first"` when present, and read-only `feedback_intake` bounds when declared. It rejects `.kkachi/config.yaml`, Kkachi v2 `.kkachi/config/workflows/**`, generated Mermaid/PlantUML files, unsafe paths, missing graph files, and invalid schema content fail-closed. Passing validation exits `0`; failing validation exits `3` and emits the graph result on stdout.
 
-The accepted graph YAML subset is intentionally narrower than full YAML: top-level fields use `key: value`, sections use a single `section:` header, list rows use inline `- key: value` items followed by indented fields, indentation is spaces-only, string lists are inline (`["item"]`), and scalars are plain or double-quoted. Anchors, aliases, block scalars, nested maps beyond the documented shape, tab indentation, bare `-` list rows, and unquoted inline comments (`value # comment`) are rejected. Quote scalar values when a literal `#` is part of the value.
+The accepted graph YAML subset is intentionally narrower than full YAML: top-level fields use `key: value`, sections use a single `section:` header, list rows use inline `- key: value` items followed by indented fields, indentation is spaces-only, string lists are inline (`["item"]`), integer lists are inline (`[1,2]`), and scalars are plain or double-quoted. Anchors, aliases, block scalars, nested maps beyond the documented shape, tab indentation, bare `-` list rows, and unquoted inline comments (`value # comment`) are rejected. Quote scalar values when a literal `#` is part of the value.
 
-`graph explain` reuses validation and emits graph version, effective source, phases, edges, gates, approval requirements, pending proposals, validation summary, and next action. It is read-only and does not append events, acquire locks, write graph files, create proposals, apply changes, or export diagrams.
+`graph explain` reuses validation and emits graph version, effective source, phases, edges, gates, approval requirements, valid `feedback_intake` bounds when declared, pending proposals, validation summary, and next action. It is read-only and does not append events, acquire locks, write graph files, create proposals, apply changes, or export diagrams.
 
-`graph diff` validates both `--from` and `--to` graph files with the same fail-closed source/schema checks, then emits deterministic semantic changes by stable keys: phases by `id`, edges by `from -> to`, gates by `id`, and approvals by `scope`. It reports added, removed, and modified records plus `risk_flags`, `requires_approval`, `validation_summary`, and `next_action`. `--semantic` is accepted for command clarity; semantic comparison is the only implemented diff mode. Diff does not write graph files, proposal records, events, locks, or exports.
+`graph diff` validates both `--from` and `--to` graph files with the same fail-closed source/schema checks, then emits deterministic semantic changes by stable keys: phases by `id`, edges by `from -> to`, gates by `id`, approvals by `scope`, and the single `feedback_intake` declaration. It reports added, removed, and modified records plus `changed_feedback_intake`, `risk_flags`, `requires_approval`, `validation_summary`, and `next_action`. `--semantic` is accepted for command clarity; semantic comparison is the only implemented diff mode. Diff does not write graph files, proposal records, events, locks, or exports.
 
 `graph propose` requires initialized helper state, project event coherence, one candidate graph input option, and `--reason <text>`. Prefer `--candidate-file <repo-relative-candidate-graph>` for new operator use. Legacy `--patch <repo-relative-candidate-graph>` remains accepted as a compatibility alias for the same complete candidate workflow graph input; it is not a partial patch DSL. KAH validates the current `.kkachi-workflow.yaml` and the candidate, computes the semantic diff, writes `.kkachi/graph/proposals/gprop-000001.json` style proposal records atomically under the project write lock, and appends `graph.proposal_recorded`. Proposal records include proposal id/path, timestamp, reason, base/candidate file and checksum, validation summary, embedded semantic diff, approval requirement, and next action. `approval_required=false` means the semantic diff did not trigger graph approval policy, not that apply can proceed without an audit trail. Successful CLI output also includes the appended event id. Proposal records never apply changes to `.kkachi-workflow.yaml`.
 
@@ -673,9 +685,9 @@ Stable graph JSON output keeps these compact top-level fields:
 
 | Command | Required fields |
 |---|---|
-| `validate --json` | `schema_version`, `status`, `file`, `checksum`, `effective_source`, `errors`, `warnings`, `conflicts`, `next_action` |
-| `explain --json` | `schema_version`, `status`, `graph_version`, `effective_source`, `phases`, `edges`, `gates`, `approval_requirements`, `pending_proposals`, `validation_summary`, `next_action` |
-| `diff --json` | `schema_version`, `status`, `from`, `to`, `changed_phases`, `changed_edges`, `changed_gates`, `changed_approvals`, `risk_flags`, `requires_approval`, `validation_summary`, `next_action` |
+| `validate --json` | `schema_version`, `status`, `file`, `checksum`, `effective_source`, optional `feedback_intake`, `errors`, `warnings`, `conflicts`, `next_action` |
+| `explain --json` | `schema_version`, `status`, `graph_version`, `effective_source`, `phases`, `edges`, `gates`, `approval_requirements`, optional `feedback_intake`, `pending_proposals`, `validation_summary`, `next_action` |
+| `diff --json` | `schema_version`, `status`, `from`, `to`, `changed_phases`, `changed_edges`, `changed_gates`, `changed_approvals`, `changed_feedback_intake`, `risk_flags`, `requires_approval`, `validation_summary`, `next_action` |
 | `propose --json` | `schema_version`, `status`, `proposal_id`, `proposal_path`, `validation_summary`, `semantic_diff_ref`, `approval_required`, `event_id`, `next_action` |
 | `apply --json` | `schema_version`, `status`, `proposal_id`, `approval_ref`, `graph_path`, `new_checksum`, `event_ids`, `next_action` |
 | `export --json` | `schema_version`, `status`, `format`, `output_path`, `source_file`, `source_checksum`, `authoritative: false`, `diagram`, `validation_summary`, `next_action` |
@@ -901,11 +913,11 @@ The following items remain open until roadmap tasks close them:
 Date: 2026-05-21
 Owner: KAH deterministic helper boundary
 Confirming role: Responsible approver / governance evidence record
-Status: graph init, validation/explanation, semantic diff, proposal records, approval-gated apply, non-authoritative export, and compatibility diagnostics implemented
+Status: graph init, validation/explanation, semantic diff, proposal records, approval-gated apply, non-authoritative export, compatibility diagnostics, and read-only feedback-intake graph bounds implemented
 Authority level: `docs/specs.md` remains authoritative for implemented helper behavior and generated visualization export boundaries
 Scope: KAH helper docs only
 Related docs: `README.md`, `roadmap.md`, `compatibility.md`, KHS `docs/sot/workflow-graph-integration.md`
-Decision summary: add `.kkachi-workflow.yaml` as candidate project-level graph state while preserving `.kkachi/config.yaml` as helper config and `phase-plan.yaml` as run-local execution evidence; diagnostics now publish `graph_compatibility` so KHS can fail closed without direct YAML fallback.
+Decision summary: add `.kkachi-workflow.yaml` as candidate project-level graph state while preserving `.kkachi/config.yaml` as helper config and `phase-plan.yaml` as run-local execution evidence; diagnostics now publish `graph_compatibility` so KHS can fail closed without direct YAML fallback; graph validation/projection now recognizes declared feedback-intake bounds without advertising final activation support.
 Evidence/source paths: governance evidence record in kanban task `t_2fb00394`
 Stale/conflict markers: older wording that treats `phase-plan.yaml` as the whole workflow SOT is narrowed to run-local state; prior root-level kkachi config YAML/JSON graph phrasing is superseded by `.kkachi-workflow.yaml` if encountered.
 Open questions: command alias remains an implementation task.
