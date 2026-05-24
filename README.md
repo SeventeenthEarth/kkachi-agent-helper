@@ -2,7 +2,7 @@
 
 `kkachi-agent-helper` is the deterministic local CLI helper for Kkachi project state, run artifacts, locks, schemas, events, diagnostics, and project bootstrap scaffolding. It stays local-first and scriptable: it does not choose a backend, plan work, review code, call network services, or store secrets.
 
-The current implementation covers `corex-001` through `corex-005`, `runwf-001` through `runwf-004`, `gates-001` through `gates-005`, `packg-001` through `packg-004`, `pilot-001` through `pilot-005`, `align-001` through `align-008`, and `graph-001` through `graph-010`.
+The current implementation covers `corex-001` through `corex-005`, `runwf-001` through `runwf-004`, `gates-001` through `gates-005`, `packg-001` through `packg-004`, `pilot-001` through `pilot-005`, `align-001` through `align-008`, and `graph-001` through `graph-011`.
 
 ## Source of truth
 

@@ -21,7 +21,6 @@ This directory is the project archive for `kkachi-agent-helper` docs. It separat
 | `docs/specs.md` | Current KAH helper behavior SOT, including `.kkachi-workflow.yaml` command/schema behavior | KAH owner; governance approval evidence recorded for Kkachi command use | Authoritative for implemented/helper behavior and workflow graph behavior |
 | `docs/roadmap.md` | Active KAH delivery roadmap | KAH owner / responsible approver direction | Planning authority; not implementation authorization by itself |
 | `docs/compatibility.md` | Release-facing KHS/KAH compatibility contract | KAH/KHS integration owners | Compatibility matrix, activation guidance, and graph fallback rules |
-| `docs/sot/external-feedback-intake.md` | Configurable `EXTERNAL_FEEDBACK_INTAKE` implementation record | KAH documentation and implementation planning; responsible review before implementation | Planning SOT plus graph-009 through graph-011 completion checklist |
 | `docs/release-notes-template.md` | Release note template | KAH release owner | Template only |
 | `docs/.omx/` if present | Tool/runtime/agent state | Tooling | Non-authoritative; never a KAH docs SOT |
 
@@ -45,7 +44,7 @@ This directory is the project archive for `kkachi-agent-helper` docs. It separat
 - Kkachi v2 `.kkachi/config/workflows/` is outside KAH/KHS graph scope and must not be used as fallback graph authority.
 - `kkachi-agent-helper graph init`, `graph validate`, `graph explain`, `graph diff`, `graph propose`, `graph apply`, and `graph export` are implemented; `kah graph` remains planned/candidate shorthand unless alias evidence exists.
 - Graph behavior authority now lives in `docs/specs.md`; KHS/KAH graph activation and fallback guidance lives in `docs/compatibility.md`.
-- `docs/sot/external-feedback-intake.md` is the planning SOT for configurable `EXTERNAL_FEEDBACK_INTAKE` support and tracks completed graph-009 through graph-011 implementation slices.
+- Configurable `EXTERNAL_FEEDBACK_INTAKE` behavior lives in `docs/specs.md`; activation and fallback guidance lives in `docs/compatibility.md`; graph-009 through graph-011 implementation history lives in `docs/roadmap.md`.
 
 ## Stale/conflict markers
 
