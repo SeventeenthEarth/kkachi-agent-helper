@@ -279,8 +279,8 @@ func TestGraphDocsSOTAndReadonlyImplementationContract(t *testing.T) {
 		{
 			rel: "docs/specs.md",
 			wants: []string{
-				"graph init, validation/explanation, semantic diff, proposal records, approval-gated apply, non-authoritative graph export, compatibility diagnostics, and graph-policy-driven phase-plan feedback validation are implemented",
-				"Planning graph update date: 2026-05-22",
+				"graph init, validation/explanation, semantic diff, proposal records, approval-gated apply, non-authoritative graph export, compatibility diagnostics, configurable feedback-intake activation evidence, and graph-policy-driven phase-plan feedback validation are implemented",
+				"Planning graph update date: 2026-05-24",
 				"### Project workflow graph note",
 				"This file is the permanent behavior SOT for `.kkachi-workflow.yaml`, the graph command surface, phase-plan validation, and graph compatibility diagnostics.",
 				".kkachi-workflow.yaml          # project-level workflow graph artifact; init/validate/explain/diff/apply implemented",
@@ -306,17 +306,17 @@ func TestGraphDocsSOTAndReadonlyImplementationContract(t *testing.T) {
 		{
 			rel: "docs/compatibility.md",
 			wants: []string{
-				"graph init, validation/explanation, semantic diff, proposal records, approval-gated apply, non-authoritative graph export, compatibility diagnostics, and phase-plan feedback-bound validation implemented",
-				"Configurable `EXTERNAL_FEEDBACK_INTAKE` support is partially implemented for graph validation/projection and phase-plan feedback-bound validation",
+				"graph init, validation/explanation, semantic diff, proposal records, approval-gated apply, non-authoritative graph export, compatibility diagnostics, configurable feedback-intake activation evidence, and phase-plan feedback-bound validation implemented",
+				"Configurable `EXTERNAL_FEEDBACK_INTAKE` support is implemented for graph validation/projection, phase-plan feedback-bound validation, stale-bound migration evidence, diagnostics, and capability activation checks",
 				"Workflow graph compatibility: `.kkachi-workflow.yaml` plus `kkachi-agent-helper graph init`",
 				"KHS must not silently edit `.kkachi-workflow.yaml` as fallback when graph apply support is missing",
 				"Graph source precedence must fail closed",
 				"`kkachi-agent-helper graph init/validate/explain/diff/propose/apply/export` | Implemented graph evidence and visualization surface",
 				"`kah graph` | Planned/candidate shorthand",
 				"Direct YAML edit fallback | Forbidden as normal operation",
-				"`diagnostics export` `graph_compatibility` | Implemented graph support/state diagnostic evidence",
+				"`diagnostics export` `graph_compatibility` | Implemented graph support/state and feedback-intake diagnostic evidence",
 				"## Planning graph record appendix",
-				"Status: graph init/validation/explanation/diff/proposal/apply/export diagnostics compatibility implemented",
+				"Status: graph init/validation/explanation/diff/proposal/apply/export diagnostics compatibility and configurable feedback-intake activation evidence implemented",
 			},
 		},
 		{
@@ -335,6 +335,7 @@ func TestGraphDocsSOTAndReadonlyImplementationContract(t *testing.T) {
 				"workflow_graph_export",
 				"workflow_graph_diagnostics",
 				"workflow_graph_no_direct_yaml_fallback",
+				"workflow_graph_configurable_feedback_intake",
 				"| graph-007 | KHS compatibility diagnostics/capabilities for graph support and no direct YAML fallback | Completed |",
 				"## Planning graph record appendix",
 			},
@@ -345,7 +346,7 @@ func TestGraphDocsSOTAndReadonlyImplementationContract(t *testing.T) {
 				"`docs/specs.md` | Current KAH helper behavior SOT, including `.kkachi-workflow.yaml` command/schema behavior",
 				"Authoritative for implemented/helper behavior and workflow graph behavior",
 				"Compatibility matrix, activation guidance, and graph fallback rules",
-				"`EXTERNAL_FEEDBACK_INTAKE` bounds projection, and phase-plan feedback-bound validation",
+				"`EXTERNAL_FEEDBACK_INTAKE` bounds projection/migration/activation evidence, and phase-plan feedback-bound validation",
 				"`kkachi-agent-helper graph init`, `graph validate`, `graph explain`, `graph diff`, `graph propose`, `graph apply`, and `graph export` are implemented",
 				"graph compatibility diagnostics",
 			},
@@ -467,6 +468,17 @@ func e2eWorkflowGraphWithFeedbackIntake(body string) string {
   max_rounds: 5
   required_rounds: [1]
   optional_rounds: [2,3,4,5]
+`
+}
+
+func e2eStaleFeedbackIntakeWorkflowGraph() string {
+	return e2eValidWorkflowGraph() + `feedback_intake:
+  policy: "EXTERNAL_FEEDBACK_INTAKE"
+  schema_version: "external-feedback-intake/v1"
+  min_rounds: 1
+  max_rounds: 3
+  required_rounds: [1]
+  optional_rounds: [2,3]
 `
 }
 
@@ -1095,6 +1107,27 @@ func TestGraphApplyFailsClosedEndToEnd(t *testing.T) {
 	requireNotContains(t, mustRead(t, filepath.Join(r, ".kkachi", "events.jsonl")), `"type":"graph.applied"`, "failed graph apply events")
 }
 
+func TestGraphFeedbackIntakeMigrationEndToEnd(t *testing.T) {
+	r := repo(t, "graph-feedback-migration")
+	requireCLI(t, r, "project", "init", "--json")
+	writeFile(t, filepath.Join(r, ".kkachi-workflow.yaml"), e2eStaleFeedbackIntakeWorkflowGraph())
+	candidate := "docs/graphs/feedback-migration.yaml"
+	writeFile(t, filepath.Join(r, filepath.FromSlash(candidate)), e2eWorkflowGraphWithFeedbackIntake(e2eValidWorkflowGraph()))
+
+	proposal := requireCLI(t, r, "graph", "propose", "--candidate-file", candidate, "--reason", "migrate stale feedback bounds", "--json")
+	requireContains(t, proposal.stdout, `"proposal_id":"gprop-000001"`, "feedback migration proposal")
+	record := mustRead(t, filepath.Join(r, ".kkachi", "graph", "proposals", "gprop-000001.json"))
+	requireContains(t, record, `"name": "feedback_intake_stale_bounds"`, "feedback migration proposal evidence")
+	requireContains(t, record, `"feedback_intake_changed"`, "feedback migration proposal risk")
+
+	applied := requireCLI(t, r, "graph", "apply", "--proposal", "gprop-000001", "--approval", "audit:feedback-migration", "--json")
+	requireContains(t, applied.stdout, `"approval_ref":"audit:feedback-migration"`, "feedback migration apply")
+	requireContains(t, mustRead(t, filepath.Join(r, ".kkachi-workflow.yaml")), `optional_rounds: [2, 3, 4, 5]`, "feedback migration graph")
+	diagnostics := requireCLI(t, r, "diagnostics", "export", "--json")
+	requireContains(t, diagnostics.stdout, `"feedback_intake":{"status":"pass"`, "feedback migration diagnostics")
+	requireContains(t, diagnostics.stdout, `"effective_bounds":{"policy":"EXTERNAL_FEEDBACK_INTAKE"`, "feedback migration diagnostics")
+}
+
 func TestApprovalRecordsEndToEnd(t *testing.T) {
 	r := repo(t, "approval")
 	requireCLI(t, r, "project", "init", "--json")
@@ -1204,6 +1237,7 @@ func TestReleasePackaging(t *testing.T) {
 	requireContains(t, string(out), `"workflow_graph_export":true`, "capabilities graph export flag")
 	requireContains(t, string(out), `"workflow_graph_diagnostics":true`, "capabilities graph diagnostics flag")
 	requireContains(t, string(out), `"workflow_graph_no_direct_yaml_fallback":true`, "capabilities graph no fallback flag")
+	requireContains(t, string(out), `"workflow_graph_configurable_feedback_intake":true`, "capabilities configurable feedback intake flag")
 	requireContains(t, string(out), `"name":"install"`, "capabilities omitted install")
 	help := exec.Command(artifact, "run", "create", "--help")
 	out, err = help.Output()

@@ -740,6 +740,87 @@ func TestApplyWorkflowGraphAppliesApprovedProposal(t *testing.T) {
 	}
 }
 
+func TestGraphProposalAndApplyAllowStaleFeedbackIntakeMigration(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	writeWorkflowGraph(t, repo, staleFeedbackIntakeWorkflowGraph())
+	candidate := "graphs/candidate.yaml"
+	writeGraphFile(t, repo, candidate, workflowGraphWithFeedbackIntake(validWorkflowGraph()))
+
+	proposal, err := ProposeWorkflowGraph(root, GraphProposeOptions{
+		Patch:  candidate,
+		Reason: "migrate stale feedback intake bounds",
+		Now:    func() time.Time { return time.Date(2026, 5, 24, 1, 2, 3, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatalf("ProposeWorkflowGraph() error = %v", err)
+	}
+	if !proposal.ApprovalRequired {
+		t.Fatalf("proposal = %#v, want approval required for feedback migration", proposal)
+	}
+	var record WorkflowGraphProposalRecord
+	readGraphTestJSON(t, filepath.Join(repo, filepath.FromSlash(proposal.ProposalPath)), &record)
+	if record.ValidationSummary.Base.Status != GraphStatusFail || !graphValidationOnlyFeedbackStaleBounds(record.ValidationSummary.Base) {
+		t.Fatalf("base validation = %#v, want stale-only migration evidence", record.ValidationSummary.Base)
+	}
+	if record.SemanticDiff.Status != GraphStatusPass || !graphStringSliceContains(record.SemanticDiff.RiskFlags, "feedback_intake_changed") {
+		t.Fatalf("semantic diff = %#v, want feedback intake migration risk", record.SemanticDiff)
+	}
+
+	applied, err := ApplyWorkflowGraph(root, GraphApplyOptions{
+		Proposal: proposal.ProposalID,
+		Approval: "audit:feedback-intake-migration",
+		Now:      func() time.Time { return time.Date(2026, 5, 24, 2, 3, 4, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatalf("ApplyWorkflowGraph() error = %v", err)
+	}
+	if applied.Status != GraphStatusPass || applied.ApprovalRef != "audit:feedback-intake-migration" || applied.NewChecksum == "" {
+		t.Fatalf("applied = %#v, want stale feedback intake migration applied", applied)
+	}
+	graph := readGraphTestText(t, filepath.Join(repo, WorkflowGraphDefaultPath))
+	for _, want := range []string{`max_rounds: 5`, `optional_rounds: [2, 3, 4, 5]`, `last_applied_event_id: "evt-000003"`} {
+		if !strings.Contains(graph, want) {
+			t.Fatalf("applied graph = %s, want %s", graph, want)
+		}
+	}
+}
+
+func TestGraphProposalRejectsNonMigrationInvalidBase(t *testing.T) {
+	cases := []struct {
+		name      string
+		base      string
+		candidate string
+	}{
+		{
+			name:      "stale plus invalid edge",
+			base:      strings.Replace(staleFeedbackIntakeWorkflowGraph(), `to: "implement"`, `to: "missing"`, 1),
+			candidate: workflowGraphWithFeedbackIntake(validWorkflowGraph()),
+		},
+		{
+			name:      "candidate omits canonical feedback intake",
+			base:      staleFeedbackIntakeWorkflowGraph(),
+			candidate: validWorkflowGraph(),
+		},
+		{
+			name:      "candidate includes unrelated graph changes",
+			base:      staleFeedbackIntakeWorkflowGraph(),
+			candidate: workflowGraphWithFeedbackIntake(candidateWorkflowGraph()),
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initializedRepo(t)
+			root, _ := DiscoverRoot(repo)
+			writeWorkflowGraph(t, repo, tt.base)
+			writeGraphFile(t, repo, "graphs/candidate.yaml", tt.candidate)
+
+			_, err := ProposeWorkflowGraph(root, GraphProposeOptions{Patch: "graphs/candidate.yaml", Reason: "invalid migration"})
+			assertProblemCode(t, err, "graph_proposal_invalid")
+		})
+	}
+}
+
 func TestApplyWorkflowGraphFailsClosedWithoutMutation(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -1137,6 +1218,17 @@ func validFeedbackIntakeSection() string {
   max_rounds: 5
   required_rounds: [1]
   optional_rounds: [2,3,4,5]
+`
+}
+
+func staleFeedbackIntakeWorkflowGraph() string {
+	return validWorkflowGraph() + `feedback_intake:
+  policy: "EXTERNAL_FEEDBACK_INTAKE"
+  schema_version: "external-feedback-intake/v1"
+  min_rounds: 1
+  max_rounds: 3
+  required_rounds: [1]
+  optional_rounds: [2,3]
 `
 }
 

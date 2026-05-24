@@ -33,17 +33,18 @@ func TestCapabilitiesJSONAtBinaryBoundary(t *testing.T) {
 		} `json:"helper"`
 		ProjectSchemaVersion string `json:"project_schema_version"`
 		CompatibilityFlags   struct {
-			BackendEvidenceRequirements       bool `json:"backend_evidence_requirements"`
-			PhasePlan                         bool `json:"phase_plan"`
-			ArtifactMutation                  bool `json:"artifact_mutation"`
-			ApprovalRecords                   bool `json:"approval_records"`
-			WorkflowGraphReadonly             bool `json:"workflow_graph_readonly"`
-			WorkflowGraphInit                 bool `json:"workflow_graph_init"`
-			WorkflowGraphApply                bool `json:"workflow_graph_apply"`
-			WorkflowGraphExport               bool `json:"workflow_graph_export"`
-			WorkflowGraphDiagnostics          bool `json:"workflow_graph_diagnostics"`
-			WorkflowGraphNoDirectYAMLFallback bool `json:"workflow_graph_no_direct_yaml_fallback"`
-			InstallCommand                    bool `json:"install_command"`
+			BackendEvidenceRequirements             bool `json:"backend_evidence_requirements"`
+			PhasePlan                               bool `json:"phase_plan"`
+			ArtifactMutation                        bool `json:"artifact_mutation"`
+			ApprovalRecords                         bool `json:"approval_records"`
+			WorkflowGraphReadonly                   bool `json:"workflow_graph_readonly"`
+			WorkflowGraphInit                       bool `json:"workflow_graph_init"`
+			WorkflowGraphApply                      bool `json:"workflow_graph_apply"`
+			WorkflowGraphExport                     bool `json:"workflow_graph_export"`
+			WorkflowGraphDiagnostics                bool `json:"workflow_graph_diagnostics"`
+			WorkflowGraphNoDirectYAMLFallback       bool `json:"workflow_graph_no_direct_yaml_fallback"`
+			WorkflowGraphConfigurableFeedbackIntake bool `json:"workflow_graph_configurable_feedback_intake"`
+			InstallCommand                          bool `json:"install_command"`
 		} `json:"compatibility_flags"`
 		OmittedSurfaces []struct {
 			Name   string `json:"name"`
@@ -56,7 +57,7 @@ func TestCapabilitiesJSONAtBinaryBoundary(t *testing.T) {
 	if payload.Helper.Version != "0.1.0" || payload.ProjectSchemaVersion != "0.1" {
 		t.Fatalf("payload versions = %#v, want helper 0.1.0 and schema 0.1", payload)
 	}
-	if !payload.CompatibilityFlags.BackendEvidenceRequirements || !payload.CompatibilityFlags.PhasePlan || !payload.CompatibilityFlags.ArtifactMutation || !payload.CompatibilityFlags.ApprovalRecords || !payload.CompatibilityFlags.WorkflowGraphReadonly || !payload.CompatibilityFlags.WorkflowGraphInit || !payload.CompatibilityFlags.WorkflowGraphApply || !payload.CompatibilityFlags.WorkflowGraphExport || !payload.CompatibilityFlags.WorkflowGraphDiagnostics || !payload.CompatibilityFlags.WorkflowGraphNoDirectYAMLFallback || payload.CompatibilityFlags.InstallCommand {
+	if !payload.CompatibilityFlags.BackendEvidenceRequirements || !payload.CompatibilityFlags.PhasePlan || !payload.CompatibilityFlags.ArtifactMutation || !payload.CompatibilityFlags.ApprovalRecords || !payload.CompatibilityFlags.WorkflowGraphReadonly || !payload.CompatibilityFlags.WorkflowGraphInit || !payload.CompatibilityFlags.WorkflowGraphApply || !payload.CompatibilityFlags.WorkflowGraphExport || !payload.CompatibilityFlags.WorkflowGraphDiagnostics || !payload.CompatibilityFlags.WorkflowGraphNoDirectYAMLFallback || !payload.CompatibilityFlags.WorkflowGraphConfigurableFeedbackIntake || payload.CompatibilityFlags.InstallCommand {
 		t.Fatalf("compatibility flags = %#v, want current align support matrix", payload.CompatibilityFlags)
 	}
 	foundInstall := false

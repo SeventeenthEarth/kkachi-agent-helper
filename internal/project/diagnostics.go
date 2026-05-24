@@ -72,8 +72,16 @@ type DiagnosticsGraphCompatibility struct {
 	StateStatus              string                               `json:"state_status"`
 	NoDirectYAMLFallback     bool                                 `json:"no_direct_yaml_fallback"`
 	Validation               GraphValidationResult                `json:"validation"`
+	FeedbackIntake           DiagnosticsGraphFeedbackIntake       `json:"feedback_intake"`
 	ForbiddenFallbackSources []DiagnosticsForbiddenFallbackSource `json:"forbidden_fallback_sources"`
 	NextAction               string                               `json:"next_action"`
+}
+
+type DiagnosticsGraphFeedbackIntake struct {
+	Status          string                       `json:"status"`
+	EffectiveBounds *WorkflowGraphFeedbackIntake `json:"effective_bounds,omitempty"`
+	Issues          []GraphIssue                 `json:"issues,omitempty"`
+	NextAction      string                       `json:"next_action"`
 }
 
 type DiagnosticsForbiddenFallbackSource struct {
@@ -167,6 +175,7 @@ func diagnosticGraphCompatibility(root Root) DiagnosticsGraphCompatibility {
 		StateStatus:          stateStatus,
 		NoDirectYAMLFallback: true,
 		Validation:           validation,
+		FeedbackIntake:       diagnosticGraphFeedbackIntake(validation),
 		ForbiddenFallbackSources: []DiagnosticsForbiddenFallbackSource{
 			{Source: ".kkachi/config.yaml", Status: "forbidden", Reason: "helper config is never workflow graph authority"},
 			{Source: ".kkachi/config/workflows/", Status: "forbidden", Reason: "Kkachi v2 workflow runtime config is outside KAH/KHS graph authority"},
@@ -175,6 +184,35 @@ func diagnosticGraphCompatibility(root Root) DiagnosticsGraphCompatibility {
 			{Source: "stale .kkachi/ runtime state", Status: "forbidden", Reason: "runtime state is evidence/cache only and cannot replace .kkachi-workflow.yaml"},
 		},
 		NextAction: nextAction,
+	}
+}
+
+func diagnosticGraphFeedbackIntake(validation GraphValidationResult) DiagnosticsGraphFeedbackIntake {
+	if validation.Status == GraphStatusPass && validation.FeedbackIntake != nil {
+		return DiagnosticsGraphFeedbackIntake{
+			Status:          GraphStatusPass,
+			EffectiveBounds: cleanWorkflowGraphFeedbackIntakePtr(validation.FeedbackIntake),
+			Issues:          []GraphIssue{},
+			NextAction:      "Configurable EXTERNAL_FEEDBACK_INTAKE bounds are valid; KHS may activate only when capabilities also advertise workflow_graph_configurable_feedback_intake.",
+		}
+	}
+	issues := append([]GraphIssue{}, validation.Errors...)
+	issues = append(issues, validation.Conflicts...)
+	if validation.Status == GraphStatusPass {
+		return DiagnosticsGraphFeedbackIntake{
+			Status:     "missing",
+			Issues:     []GraphIssue{},
+			NextAction: "Fail closed for configurable feedback intake activation; add feedback_intake through graph proposal/apply evidence before use.",
+		}
+	}
+	status := GraphStatusFail
+	if graphValidationMissing(validation) {
+		status = "missing"
+	}
+	return DiagnosticsGraphFeedbackIntake{
+		Status:     status,
+		Issues:     issues,
+		NextAction: "Fail closed for configurable feedback intake activation; repair stale, missing, or invalid bounds through graph proposal/apply evidence.",
 	}
 }
 

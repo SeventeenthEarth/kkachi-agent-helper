@@ -71,26 +71,27 @@ type capabilityCommandGroup struct {
 }
 
 type compatibilityFlagsOutput struct {
-	ProjectInit                       bool `json:"project_init"`
-	ProjectStatus                     bool `json:"project_status"`
-	ProjectDoctor                     bool `json:"project_doctor"`
-	RunLifecycle                      bool `json:"run_lifecycle"`
-	ArtifactInit                      bool `json:"artifact_init"`
-	ArtifactList                      bool `json:"artifact_list"`
-	ArtifactValidate                  bool `json:"artifact_validate"`
-	ArtifactMutation                  bool `json:"artifact_mutation"`
-	Gates                             bool `json:"gates"`
-	BackendEvidenceRequirements       bool `json:"backend_evidence_requirements"`
-	DiagnosticsExport                 bool `json:"diagnostics_export"`
-	PhasePlan                         bool `json:"phase_plan"`
-	ApprovalRecords                   bool `json:"approval_records"`
-	WorkflowGraphReadonly             bool `json:"workflow_graph_readonly"`
-	WorkflowGraphInit                 bool `json:"workflow_graph_init"`
-	WorkflowGraphApply                bool `json:"workflow_graph_apply"`
-	WorkflowGraphExport               bool `json:"workflow_graph_export"`
-	WorkflowGraphDiagnostics          bool `json:"workflow_graph_diagnostics"`
-	WorkflowGraphNoDirectYAMLFallback bool `json:"workflow_graph_no_direct_yaml_fallback"`
-	InstallCommand                    bool `json:"install_command"`
+	ProjectInit                             bool `json:"project_init"`
+	ProjectStatus                           bool `json:"project_status"`
+	ProjectDoctor                           bool `json:"project_doctor"`
+	RunLifecycle                            bool `json:"run_lifecycle"`
+	ArtifactInit                            bool `json:"artifact_init"`
+	ArtifactList                            bool `json:"artifact_list"`
+	ArtifactValidate                        bool `json:"artifact_validate"`
+	ArtifactMutation                        bool `json:"artifact_mutation"`
+	Gates                                   bool `json:"gates"`
+	BackendEvidenceRequirements             bool `json:"backend_evidence_requirements"`
+	DiagnosticsExport                       bool `json:"diagnostics_export"`
+	PhasePlan                               bool `json:"phase_plan"`
+	ApprovalRecords                         bool `json:"approval_records"`
+	WorkflowGraphReadonly                   bool `json:"workflow_graph_readonly"`
+	WorkflowGraphInit                       bool `json:"workflow_graph_init"`
+	WorkflowGraphApply                      bool `json:"workflow_graph_apply"`
+	WorkflowGraphExport                     bool `json:"workflow_graph_export"`
+	WorkflowGraphDiagnostics                bool `json:"workflow_graph_diagnostics"`
+	WorkflowGraphNoDirectYAMLFallback       bool `json:"workflow_graph_no_direct_yaml_fallback"`
+	WorkflowGraphConfigurableFeedbackIntake bool `json:"workflow_graph_configurable_feedback_intake"`
+	InstallCommand                          bool `json:"install_command"`
 }
 
 type capabilitySurfaceOutput struct {
@@ -2253,26 +2254,27 @@ func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
 			{Name: "graph", Status: capabilityStatusSupported, Subcommands: []string{"init", "validate", "explain", "diff", "propose", "apply", "export"}},
 		},
 		CompatibilityFlags: compatibilityFlagsOutput{
-			ProjectInit:                       true,
-			ProjectStatus:                     true,
-			ProjectDoctor:                     true,
-			RunLifecycle:                      true,
-			ArtifactInit:                      true,
-			ArtifactList:                      true,
-			ArtifactValidate:                  true,
-			ArtifactMutation:                  true,
-			Gates:                             true,
-			BackendEvidenceRequirements:       true,
-			DiagnosticsExport:                 true,
-			PhasePlan:                         true,
-			ApprovalRecords:                   true,
-			WorkflowGraphReadonly:             true,
-			WorkflowGraphInit:                 true,
-			WorkflowGraphApply:                true,
-			WorkflowGraphExport:               true,
-			WorkflowGraphDiagnostics:          true,
-			WorkflowGraphNoDirectYAMLFallback: true,
-			InstallCommand:                    false,
+			ProjectInit:                             true,
+			ProjectStatus:                           true,
+			ProjectDoctor:                           true,
+			RunLifecycle:                            true,
+			ArtifactInit:                            true,
+			ArtifactList:                            true,
+			ArtifactValidate:                        true,
+			ArtifactMutation:                        true,
+			Gates:                                   true,
+			BackendEvidenceRequirements:             true,
+			DiagnosticsExport:                       true,
+			PhasePlan:                               true,
+			ApprovalRecords:                         true,
+			WorkflowGraphReadonly:                   true,
+			WorkflowGraphInit:                       true,
+			WorkflowGraphApply:                      true,
+			WorkflowGraphExport:                     true,
+			WorkflowGraphDiagnostics:                true,
+			WorkflowGraphNoDirectYAMLFallback:       true,
+			WorkflowGraphConfigurableFeedbackIntake: true,
+			InstallCommand:                          false,
 		},
 		DeprecatedSurfaces: []capabilitySurfaceOutput{},
 		OmittedSurfaces: []capabilitySurfaceOutput{

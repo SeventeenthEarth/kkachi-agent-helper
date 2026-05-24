@@ -59,6 +59,9 @@ func TestExportDiagnosticsProjectLevelWhenNoRunAndOutputOverwriteRefused(t *test
 	if bundle.GraphCompatibility.Validation.Status != GraphStatusFail || !graphValidationMissing(bundle.GraphCompatibility.Validation) {
 		t.Fatalf("graph validation = %#v, want missing graph validation evidence", bundle.GraphCompatibility.Validation)
 	}
+	if bundle.GraphCompatibility.FeedbackIntake.Status != "missing" || len(bundle.GraphCompatibility.FeedbackIntake.Issues) == 0 {
+		t.Fatalf("feedback intake diagnostics = %#v, want missing graph evidence", bundle.GraphCompatibility.FeedbackIntake)
+	}
 	if len(bundle.GraphCompatibility.ForbiddenFallbackSources) != 5 {
 		t.Fatalf("forbidden fallback sources = %#v, want deterministic source list", bundle.GraphCompatibility.ForbiddenFallbackSources)
 	}
@@ -149,8 +152,35 @@ func TestExportDiagnosticsReportsGraphCompatibilityState(t *testing.T) {
 	if graph.Validation.Status != GraphStatusPass || graph.Validation.File != WorkflowGraphDefaultPath || graph.Validation.Checksum == "" {
 		t.Fatalf("graph validation = %#v, want passing default graph evidence", graph.Validation)
 	}
+	if graph.FeedbackIntake.Status != "missing" || graph.FeedbackIntake.EffectiveBounds != nil || !strings.Contains(graph.FeedbackIntake.NextAction, "Fail closed") {
+		t.Fatalf("feedback intake = %#v, want missing activation evidence", graph.FeedbackIntake)
+	}
 	if !strings.Contains(graph.NextAction, "graph explain --json") {
 		t.Fatalf("next action = %q, want KHS read-only graph projection guidance", graph.NextAction)
+	}
+}
+
+func TestExportDiagnosticsReportsFeedbackIntakeEvidence(t *testing.T) {
+	repo, root := newInitializedDiagnosticsRoot(t)
+	writeWorkflowGraph(t, repo, workflowGraphWithFeedbackIntake(validWorkflowGraph()))
+
+	bundle, err := ExportDiagnostics(root, DiagnosticsExportOptions{Now: fixedDiagnosticsTime})
+	if err != nil {
+		t.Fatalf("ExportDiagnostics() error = %v", err)
+	}
+	feedback := bundle.GraphCompatibility.FeedbackIntake
+	if feedback.Status != GraphStatusPass || feedback.EffectiveBounds == nil || feedback.EffectiveBounds.MaxRounds != 5 || len(feedback.Issues) != 0 {
+		t.Fatalf("feedback intake = %#v, want passing effective bounds", feedback)
+	}
+
+	writeWorkflowGraph(t, repo, staleFeedbackIntakeWorkflowGraph())
+	bundle, err = ExportDiagnostics(root, DiagnosticsExportOptions{Now: fixedDiagnosticsTime})
+	if err != nil {
+		t.Fatalf("ExportDiagnostics(stale) error = %v", err)
+	}
+	feedback = bundle.GraphCompatibility.FeedbackIntake
+	if feedback.Status != GraphStatusFail || !graphIssueNamed(feedback.Issues, "feedback_intake_stale_bounds") || !strings.Contains(feedback.NextAction, "proposal/apply") {
+		t.Fatalf("feedback intake = %#v, want stale bounds repair evidence", feedback)
 	}
 }
 

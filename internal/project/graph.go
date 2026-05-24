@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -535,7 +536,13 @@ func proposeWorkflowGraphUnlocked(root Root, options GraphProposeOptions) (Graph
 	candidate := loadWorkflowGraph(root, GraphOptions{File: patch})
 	diff := diffLoadedWorkflowGraphs(base, candidate)
 	if diff.Status != GraphStatusPass {
-		return GraphProposalResult{}, graphValidationProblem("graph_proposal_invalid", "cannot record proposal for invalid workflow graph input", "Repair the base graph and candidate graph, then rerun graph propose.", diff.ValidationSummary)
+		if !canRecordFeedbackIntakeMigrationProposal(base, candidate) {
+			return GraphProposalResult{}, graphValidationProblem("graph_proposal_invalid", "cannot record proposal for invalid workflow graph input", "Repair the base graph and candidate graph, then rerun graph propose.", diff.ValidationSummary)
+		}
+		diff = diffLoadedWorkflowGraphsAllowingStaleFeedbackIntakeBase(base, candidate)
+		if !workflowGraphDiffOnlyFeedbackIntake(diff) {
+			return GraphProposalResult{}, graphValidationProblem("graph_proposal_invalid", "cannot record stale feedback intake migration with unrelated graph changes", "Record feedback intake migration separately from other graph changes.", diff.ValidationSummary)
+		}
 	}
 
 	proposalID, proposalPath, err := nextGraphProposalPath(root)
@@ -635,7 +642,8 @@ func applyWorkflowGraphUnlocked(root Root, options GraphApplyOptions) (GraphAppl
 	}
 
 	base := loadWorkflowGraph(root, GraphOptions{File: WorkflowGraphDefaultPath})
-	if base.validation.Status != GraphStatusPass {
+	allowStaleFeedbackMigration := canApplyFeedbackIntakeMigrationProposal(record, base)
+	if base.validation.Status != GraphStatusPass && !allowStaleFeedbackMigration {
 		return GraphApplyResult{}, graphValidationProblem("graph_apply_invalid", "cannot apply proposal while current workflow graph is invalid", "Repair .kkachi-workflow.yaml, then rerun graph apply.", GraphDiffValidationSummary{From: base.validation, To: record.ValidationSummary.Candidate})
 	}
 	if base.validation.Checksum != record.Base.Checksum {
@@ -645,6 +653,9 @@ func applyWorkflowGraphUnlocked(root Root, options GraphApplyOptions) (GraphAppl
 	candidate := loadWorkflowGraph(root, GraphOptions{File: record.Candidate.File})
 	if candidate.validation.Status != GraphStatusPass {
 		return GraphApplyResult{}, graphValidationProblem("graph_apply_invalid", "cannot apply proposal with invalid candidate workflow graph", "Repair the candidate graph or record a new proposal, then rerun graph apply.", GraphDiffValidationSummary{From: base.validation, To: candidate.validation})
+	}
+	if allowStaleFeedbackMigration && !workflowGraphHasCanonicalFeedbackIntake(candidate.validation) {
+		return GraphApplyResult{}, graphValidationProblem("graph_apply_invalid", "cannot apply stale feedback intake migration without valid candidate bounds", "Record a new proposal whose candidate declares min_rounds=1, max_rounds=5, required_rounds=[1], and optional_rounds=[2,3,4,5].", GraphDiffValidationSummary{From: base.validation, To: candidate.validation})
 	}
 	if candidate.validation.Checksum != record.Candidate.Checksum {
 		return GraphApplyResult{}, &Problem{Code: "graph_candidate_checksum_mismatch", Message: "candidate workflow graph no longer matches proposal record", Hint: "Record a new proposal after changing the candidate graph.", Path: record.Candidate.File, Field: "checksum", Expected: record.Candidate.Checksum, Actual: candidate.validation.Checksum}
@@ -1021,7 +1032,25 @@ func graphYAMLIntList(values []int) string {
 }
 
 func diffLoadedWorkflowGraphs(from loadedWorkflowGraph, to loadedWorkflowGraph) GraphDiffResult {
-	result := GraphDiffResult{
+	result := newGraphDiffResult(from, to)
+	if from.validation.Status != GraphStatusPass || to.validation.Status != GraphStatusPass {
+		result.Status = GraphStatusFail
+		result.NextAction = graphNextActionRepair
+		return result
+	}
+	return populateGraphDiffChanges(result, from.graph, to.graph)
+}
+
+func graphDiffEndpoint(validation GraphValidationResult) GraphDiffEndpoint {
+	return GraphDiffEndpoint{File: validation.File, Checksum: validation.Checksum, EffectiveSource: validation.EffectiveSource}
+}
+
+func diffLoadedWorkflowGraphsAllowingStaleFeedbackIntakeBase(from loadedWorkflowGraph, to loadedWorkflowGraph) GraphDiffResult {
+	return populateGraphDiffChanges(newGraphDiffResult(from, to), from.graph, to.graph)
+}
+
+func newGraphDiffResult(from loadedWorkflowGraph, to loadedWorkflowGraph) GraphDiffResult {
+	return GraphDiffResult{
 		SchemaVersion:         WorkflowGraphSchemaVersion,
 		Status:                GraphStatusPass,
 		From:                  graphDiffEndpoint(from.validation),
@@ -1038,24 +1067,73 @@ func diffLoadedWorkflowGraphs(from loadedWorkflowGraph, to loadedWorkflowGraph) 
 		},
 		NextAction: graphNextActionDiffReady,
 	}
-	if from.validation.Status != GraphStatusPass || to.validation.Status != GraphStatusPass {
-		result.Status = GraphStatusFail
-		result.NextAction = graphNextActionRepair
-		return result
-	}
+}
 
-	result.ChangedPhases = diffWorkflowGraphPhases(from.graph.Phases, to.graph.Phases)
-	result.ChangedEdges = diffWorkflowGraphEdges(from.graph.Edges, to.graph.Edges)
-	result.ChangedGates = diffWorkflowGraphGates(from.graph.Gates, to.graph.Gates)
-	result.ChangedApprovals = diffWorkflowGraphApprovals(from.graph.Approvals, to.graph.Approvals)
-	result.ChangedFeedbackIntake = diffWorkflowGraphFeedbackIntake(from.graph.FeedbackIntake, to.graph.FeedbackIntake)
-	result.RiskFlags = workflowGraphRiskFlags(from.graph, to.graph, result)
+func populateGraphDiffChanges(result GraphDiffResult, from WorkflowGraph, to WorkflowGraph) GraphDiffResult {
+	result.ChangedPhases = diffWorkflowGraphPhases(from.Phases, to.Phases)
+	result.ChangedEdges = diffWorkflowGraphEdges(from.Edges, to.Edges)
+	result.ChangedGates = diffWorkflowGraphGates(from.Gates, to.Gates)
+	result.ChangedApprovals = diffWorkflowGraphApprovals(from.Approvals, to.Approvals)
+	result.ChangedFeedbackIntake = diffWorkflowGraphFeedbackIntake(from.FeedbackIntake, to.FeedbackIntake)
+	result.RiskFlags = workflowGraphRiskFlags(from, to, result)
 	result.RequiresApproval = len(result.RiskFlags) > 0
 	return result
 }
 
-func graphDiffEndpoint(validation GraphValidationResult) GraphDiffEndpoint {
-	return GraphDiffEndpoint{File: validation.File, Checksum: validation.Checksum, EffectiveSource: validation.EffectiveSource}
+func canRecordFeedbackIntakeMigrationProposal(base loadedWorkflowGraph, candidate loadedWorkflowGraph) bool {
+	return graphValidationOnlyFeedbackStaleBounds(base.validation) && workflowGraphHasCanonicalFeedbackIntake(candidate.validation)
+}
+
+func canApplyFeedbackIntakeMigrationProposal(record WorkflowGraphProposalRecord, base loadedWorkflowGraph) bool {
+	return graphValidationOnlyFeedbackStaleBounds(base.validation) &&
+		graphValidationOnlyFeedbackStaleBounds(record.ValidationSummary.Base) &&
+		record.ValidationSummary.Candidate.Status == GraphStatusPass &&
+		record.ValidationSummary.Candidate.FeedbackIntake != nil &&
+		workflowGraphDiffOnlyFeedbackIntake(record.SemanticDiff)
+}
+
+func graphValidationOnlyFeedbackStaleBounds(validation GraphValidationResult) bool {
+	if validation.Status != GraphStatusFail || validation.File != WorkflowGraphDefaultPath || len(validation.Errors) == 0 || len(validation.Warnings) != 0 || len(validation.Conflicts) != 0 {
+		return false
+	}
+	for _, issue := range validation.Errors {
+		if issue.Name != "feedback_intake_stale_bounds" {
+			return false
+		}
+	}
+	return true
+}
+
+func workflowGraphHasCanonicalFeedbackIntake(validation GraphValidationResult) bool {
+	if validation.Status != GraphStatusPass || validation.FeedbackIntake == nil {
+		return false
+	}
+	return reflect.DeepEqual(cleanWorkflowGraphFeedbackIntake(*validation.FeedbackIntake), WorkflowGraphFeedbackIntake{
+		Policy:         graphFeedbackIntakePolicy,
+		SchemaVersion:  graphFeedbackIntakeSchema,
+		MinRounds:      1,
+		MaxRounds:      5,
+		RequiredRounds: []int{1},
+		OptionalRounds: []int{2, 3, 4, 5},
+	})
+}
+
+func workflowGraphDiffOnlyFeedbackIntake(diff GraphDiffResult) bool {
+	return diff.Status == GraphStatusPass &&
+		diff.ChangedFeedbackIntake.Changed &&
+		len(diff.ChangedPhases.Added) == 0 &&
+		len(diff.ChangedPhases.Removed) == 0 &&
+		len(diff.ChangedPhases.Modified) == 0 &&
+		len(diff.ChangedEdges.Added) == 0 &&
+		len(diff.ChangedEdges.Removed) == 0 &&
+		len(diff.ChangedEdges.Modified) == 0 &&
+		len(diff.ChangedGates.Added) == 0 &&
+		len(diff.ChangedGates.Removed) == 0 &&
+		len(diff.ChangedGates.Modified) == 0 &&
+		len(diff.ChangedApprovals.Added) == 0 &&
+		len(diff.ChangedApprovals.Removed) == 0 &&
+		len(diff.ChangedApprovals.Modified) == 0 &&
+		slices.Equal(diff.RiskFlags, []string{"feedback_intake_changed"})
 }
 
 func diffWorkflowGraphPhases(from []WorkflowGraphPhase, to []WorkflowGraphPhase) WorkflowGraphPhaseChanges {

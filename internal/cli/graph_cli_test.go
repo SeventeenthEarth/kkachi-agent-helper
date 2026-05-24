@@ -320,6 +320,43 @@ func TestGraphProposeAcceptsCandidateFileAliasAndClarifiesAuditEvidence(t *testi
 	}
 }
 
+func TestGraphProposeAndApplyStaleFeedbackIntakeMigration(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	writeCLIGraph(t, repo, cliStaleFeedbackIntakeWorkflowGraph())
+	candidate := "graphs/feedback-candidate.yaml"
+	writeCLIGraphFile(t, repo, candidate, cliWorkflowGraphWithFeedbackIntake(cliValidWorkflowGraph()))
+	stdout.Reset()
+	stderr.Reset()
+
+	exitCode := runWithOptions([]string{"graph", "propose", "--candidate-file", candidate, "--reason", "migrate stale feedback intake", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	if exitCode != ExitOK {
+		t.Fatalf("propose exitCode = %d, want %d stderr=%s stdout=%s", exitCode, ExitOK, stderr.String(), stdout.String())
+	}
+	var proposal project.GraphProposalResult
+	if err := json.Unmarshal(stdout.Bytes(), &proposal); err != nil {
+		t.Fatalf("graph propose output is not JSON: %v\n%s", err, stdout.String())
+	}
+	if !proposal.ApprovalRequired {
+		t.Fatalf("proposal = %#v, want feedback migration approval evidence required", proposal)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	exitCode = runWithOptions([]string{"graph", "apply", "--proposal", proposal.ProposalID, "--approval", "audit:feedback-migration", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	if exitCode != ExitOK {
+		t.Fatalf("apply exitCode = %d, want %d stderr=%s stdout=%s", exitCode, ExitOK, stderr.String(), stdout.String())
+	}
+	graph := readCLITestText(t, filepath.Join(repo, project.WorkflowGraphDefaultPath))
+	if !strings.Contains(graph, `max_rounds: 5`) || !strings.Contains(graph, `optional_rounds: [2, 3, 4, 5]`) {
+		t.Fatalf("applied graph = %s, want migrated feedback intake bounds", graph)
+	}
+}
+
 func TestGraphApplyJSONAndHumanOutput(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
@@ -661,6 +698,17 @@ func cliWorkflowGraphWithFeedbackIntake(body string) string {
   max_rounds: 5
   required_rounds: [1]
   optional_rounds: [2,3,4,5]
+`
+}
+
+func cliStaleFeedbackIntakeWorkflowGraph() string {
+	return cliValidWorkflowGraph() + `feedback_intake:
+  policy: "EXTERNAL_FEEDBACK_INTAKE"
+  schema_version: "external-feedback-intake/v1"
+  min_rounds: 1
+  max_rounds: 3
+  required_rounds: [1]
+  optional_rounds: [2,3]
 `
 }
 

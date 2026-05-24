@@ -20,7 +20,7 @@ The intended policy is:
 - Rounds 2 through 5 are optional continuation rounds.
 - Five loops are never mandatory.
 
-This document does not claim final advertised support. KAH may advertise configurable external feedback intake support only after `graph-011` migration/proposal handling, diagnostics/capabilities, permanent docs, and tests are aligned. `graph-009` implements graph schema handling, and `graph-010` implements phase-plan feedback-bound validation without final activation advertisement.
+KAH advertises configurable external feedback intake support only through the completed `graph-011` capability and diagnostics evidence. `graph-009` implements graph schema handling, `graph-010` implements phase-plan feedback-bound validation, and `graph-011` closes migration/proposal handling, diagnostics/capabilities, permanent docs, and tests.
 
 ## Authority model
 
@@ -219,15 +219,15 @@ Finish the support loop last: migration evidence, diagnostics, capabilities, and
 
 ### Checklist
 
-- [ ] Migration reports stale `1..3` or `max3` before repair.
-- [ ] Migration requires explicit graph proposal or audit evidence.
-- [ ] Proposal/diff output flags feedback-bound changes as risk-bearing.
-- [ ] Diagnostics report effective min/max bounds when valid.
-- [ ] Diagnostics report missing, invalid, stale, unsupported, or conflicting bounds without treating those reports as diagnostics export failures.
-- [ ] `capabilities --json` includes the final configurable feedback intake support flag.
-- [ ] README, specs, compatibility docs, and roadmap are aligned with implemented behavior.
-- [ ] Docs-contract tests prove public docs do not overclaim support.
-- [ ] Focused unit, integration, E2E, `go vet ./...`, and `make test-prepare` pass.
+- [x] Migration reports stale `1..3` or `max3` before repair.
+- [x] Migration requires explicit graph proposal or audit evidence.
+- [x] Proposal/diff output flags feedback-bound changes as risk-bearing.
+- [x] Diagnostics report effective min/max bounds when valid.
+- [x] Diagnostics report missing, invalid, stale, unsupported, or conflicting bounds without treating those reports as diagnostics export failures.
+- [x] `capabilities --json` includes the final configurable feedback intake support flag.
+- [x] README, specs, compatibility docs, and roadmap are aligned with implemented behavior.
+- [x] Docs-contract tests prove public docs do not overclaim support.
+- [x] Focused unit, integration, E2E, `go vet ./...`, and `make test-prepare` pass.
 
 ### Acceptance criteria
 
@@ -245,7 +245,7 @@ Finish the support loop last: migration evidence, diagnostics, capabilities, and
 
 ## Final support rule
 
-KAH may advertise configurable external feedback intake support only after `graph-011` completes. Before that point, intermediate graph tasks may add docs, validation, or internal behavior, but KHS activation must fail closed unless the effective binary advertises the final support flag and diagnostics prove the required graph/run state.
+KAH advertises configurable external feedback intake support after `graph-011` completion through `workflow_graph_configurable_feedback_intake=true` and diagnostics `graph_compatibility.feedback_intake.status=="pass"`. KHS activation must fail closed unless both signals are present in the effective binary/project state.
 
 ## Verification guidance
 
