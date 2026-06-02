@@ -116,7 +116,7 @@ func checkGateUnlocked(root Root, options GateCheckOptions) (GateCheckResult, er
 	result.ReportPath = reportPath.Relative
 	appendResult, err := appendEventWithStatusMutation(root, AppendEventOptions{Type: gateEventType(result.Status), RunID: metadata.RunID, Payload: gateEventPayload(result), Now: options.Now}, func(status map[string]any, occurredAt string) error {
 		// Write the report before metadata/status so fail-closed state preserves the gate evidence for the appended event.
-		if _, err := writeGateReport(reportPath, result, occurredAt); err != nil {
+		if _, err := writeGateReport(root, reportPath, result, occurredAt); err != nil {
 			return err
 		}
 		metadata.GateState[gate] = gateStateSummary(result.Status, nextID, occurredAt, len(result.Checks), len(result.MissingEvidence), reportPath.Relative)

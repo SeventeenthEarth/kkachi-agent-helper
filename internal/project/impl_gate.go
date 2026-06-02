@@ -1,7 +1,9 @@
 package project
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -105,7 +107,11 @@ func checkFinalGate(root Root, metadata RunMetadata, _ string) (GateCheckResult,
 	}
 
 	for _, gate := range requiredGates {
-		checks = append(checks, checkRequiredGatePass(metadata, gate))
+		gateCheck := checkRequiredGatePass(metadata, gate)
+		checks = append(checks, gateCheck)
+		if gateCheck.Status == GateStatusPass {
+			checks = append(checks, checkRequiredGateFreshness(root, metadata, gate))
+		}
 	}
 
 	return gateResultFromChecks(metadata.RunID, GateFinal, checks), nil
@@ -132,4 +138,64 @@ func checkRequiredGatePass(metadata RunMetadata, gate string) GateCheck {
 		return GateCheck{Name: gate + "_gate", Status: GateStatusPass, Path: "", Message: fmt.Sprintf("%s gate passed", gate), Field: "gate_state[" + gate + "].status", Expected: GateStatusPass, Actual: status}
 	}
 	return GateCheck{Name: gate + "_gate", Status: GateStatusFail, Path: "", Message: fmt.Sprintf("%s gate did not pass", gate), Hint: fmt.Sprintf("Resolve the %s gate failure and re-run gate check before gate final.", gate), Field: "gate_state[" + gate + "].status", Expected: GateStatusPass, Actual: status}
+}
+
+func checkRequiredGateFreshness(root Root, metadata RunMetadata, gate string) GateCheck {
+	state, ok := metadata.GateState[gate].(map[string]any)
+	if !ok {
+		return GateCheck{Name: gate + "_gate_freshness", Status: GateStatusFail, Message: fmt.Sprintf("%s gate state is missing freshness metadata", gate), Hint: fmt.Sprintf("Re-run gate check %s %s, then re-run gate final.", metadata.RunID, gate), Field: "gate_state", Expected: "gate report with evidence fingerprints", Actual: "missing"}
+	}
+	reportRelative, ok := state["report_path"].(string)
+	if !ok || strings.TrimSpace(reportRelative) == "" {
+		return GateCheck{Name: gate + "_gate_freshness", Status: GateStatusFail, Message: fmt.Sprintf("%s gate state lacks a report path", gate), Hint: fmt.Sprintf("Re-run gate check %s %s to write a report with evidence fingerprints.", metadata.RunID, gate), Field: "gate_state[" + gate + "].report_path", Expected: "non-empty report path", Actual: "missing"}
+	}
+	reportPath, err := ResolveRelativePath(root, reportRelative)
+	if err != nil {
+		return GateCheck{Name: gate + "_gate_freshness", Status: GateStatusFail, Path: reportRelative, Message: fmt.Sprintf("%s gate report path is invalid", gate), Hint: fmt.Sprintf("Re-run gate check %s %s after repairing gate state.", metadata.RunID, gate), Field: "report_path", Expected: "safe report path", Actual: err.Error()}
+	}
+	data, err := os.ReadFile(reportPath.Absolute)
+	if err != nil {
+		return GateCheck{Name: gate + "_gate_freshness", Status: GateStatusFail, Path: reportPath.Relative, Message: fmt.Sprintf("%s gate report is missing or unreadable", gate), Hint: fmt.Sprintf("Re-run gate check %s %s to regenerate the gate report.", metadata.RunID, gate), Field: "report_path", Expected: "readable gate report", Actual: err.Error()}
+	}
+	var report gateReport
+	if err := json.Unmarshal(data, &report); err != nil {
+		return GateCheck{Name: gate + "_gate_freshness", Status: GateStatusFail, Path: reportPath.Relative, Message: fmt.Sprintf("%s gate report is malformed", gate), Hint: fmt.Sprintf("Re-run gate check %s %s to regenerate the gate report.", metadata.RunID, gate), Field: "json", Expected: "valid gate report JSON", Actual: err.Error()}
+	}
+	if report.Gate != gate || report.Status != GateStatusPass {
+		return GateCheck{Name: gate + "_gate_freshness", Status: GateStatusFail, Path: reportPath.Relative, Message: fmt.Sprintf("%s gate report does not match a passing gate", gate), Hint: fmt.Sprintf("Re-run gate check %s %s before final verification.", metadata.RunID, gate), Field: "gate_report", Expected: gate + ":" + GateStatusPass, Actual: report.Gate + ":" + report.Status}
+	}
+	expectedPaths := passingArtifactEvidencePaths(metadata.RunID, report.Checks)
+	if len(expectedPaths) > 0 && len(report.Evidence) == 0 {
+		return GateCheck{Name: gate + "_gate_freshness", Status: GateStatusFail, Path: reportPath.Relative, Message: fmt.Sprintf("%s gate report lacks evidence fingerprints", gate), Hint: fmt.Sprintf("Re-run gate check %s %s with the current helper, then re-run gate final.", metadata.RunID, gate), Field: "evidence", Expected: "fingerprints for gate evidence artifacts", Actual: "missing"}
+	}
+	seen := map[string]bool{}
+	for _, evidence := range report.Evidence {
+		seen[evidence.Path] = true
+		current, err := hashGateReportEvidence(root, evidence.Path)
+		if err != nil {
+			return GateCheck{Name: gate + "_gate_freshness", Status: GateStatusFail, Path: evidence.Path, Message: fmt.Sprintf("%s gate evidence cannot be rechecked", gate), Hint: fmt.Sprintf("Repair the evidence artifact and re-run gate check %s %s.", metadata.RunID, gate), Field: "path", Expected: "readable evidence artifact", Actual: err.Error()}
+		}
+		if current.Size != evidence.Size || current.SHA256 != evidence.SHA256 {
+			return GateCheck{Name: gate + "_gate_freshness", Status: GateStatusFail, Path: evidence.Path, Message: fmt.Sprintf("%s gate evidence changed after the gate pass", gate), Hint: fmt.Sprintf("Re-run gate check %s %s after updating evidence, then re-run gate final.", metadata.RunID, gate), Field: "sha256", Expected: evidence.SHA256, Actual: current.SHA256}
+		}
+	}
+	for _, path := range expectedPaths {
+		if !seen[path] {
+			return GateCheck{Name: gate + "_gate_freshness", Status: GateStatusFail, Path: reportPath.Relative, Message: fmt.Sprintf("%s gate report is missing an evidence fingerprint", gate), Hint: fmt.Sprintf("Re-run gate check %s %s with the current helper.", metadata.RunID, gate), Field: "evidence", Expected: path, Actual: "missing"}
+		}
+	}
+	return GateCheck{Name: gate + "_gate_freshness", Status: GateStatusPass, Path: reportPath.Relative, Message: fmt.Sprintf("%s gate evidence is unchanged since gate pass", gate), Field: "report_path", Actual: reportPath.Relative}
+}
+
+func passingArtifactEvidencePaths(runID string, checks []GateCheck) []string {
+	paths := []string{}
+	seen := map[string]bool{}
+	for _, check := range checks {
+		path := strings.TrimSpace(check.Path)
+		if check.Status == GateStatusPass && path != "" && gateReportEvidencePath(runID, path) && !seen[path] {
+			paths = append(paths, path)
+			seen[path] = true
+		}
+	}
+	return paths
 }

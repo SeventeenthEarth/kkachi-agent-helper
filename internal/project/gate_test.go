@@ -1025,6 +1025,41 @@ func TestCheckGateFinalPassesAndFails(t *testing.T) {
 	}
 }
 
+func TestCheckGateFinalFailsWhenPriorGateEvidenceChanges(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+		t.Fatalf("InitArtifacts() error = %v", err)
+	}
+	passAllPriorGates(t, root, repo, created.Metadata.RunID)
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "verification.md", "Status: complete\nVerdict: pass\nRetest: after feedback\n")
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "final-report.md", "Status: complete\nReport: done\n")
+
+	stale, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateFinal, Now: testRunNow(15)})
+	if err != nil {
+		t.Fatalf("CheckGate(final stale) error = %v", err)
+	}
+	if stale.Status != GateStatusFail || !gateCheckStatus(stale.Checks, "verification_gate_freshness", GateStatusFail) {
+		t.Fatalf("stale = %#v, want verification freshness failure", stale)
+	}
+
+	if _, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateVerification, Now: testRunNow(16)}); err != nil {
+		t.Fatalf("CheckGate(verification refresh) error = %v", err)
+	}
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "final-report.md", "Status: complete\nReport: done\n")
+	fresh, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateFinal, Now: testRunNow(17)})
+	if err != nil {
+		t.Fatalf("CheckGate(final fresh) error = %v", err)
+	}
+	if fresh.Status != GateStatusPass || !gateCheckStatus(fresh.Checks, "verification_gate_freshness", GateStatusPass) {
+		t.Fatalf("fresh = %#v, want final pass after verification gate refresh", fresh)
+	}
+}
+
 func TestCheckGateFinalRequiresBackendGateWhenManifestRequires(t *testing.T) {
 	repo := initializedRepo(t)
 	root, _ := DiscoverRoot(repo)
