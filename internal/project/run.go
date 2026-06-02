@@ -424,6 +424,16 @@ func validateCreateRunOptions(options CreateRunOptions) error {
 	if backendEvidence != "" && !allowed(backendEvidence, BackendEvidenceAuto, BackendEvidenceRequired, BackendEvidenceNotApplicable) {
 		return &Problem{Code: "run_metadata_invalid", Message: "run create contains an invalid backend evidence declaration", Hint: "Use --backend-evidence auto, required, or not_applicable.", Field: "backend_evidence", Expected: "auto, required, or not_applicable", Actual: backendEvidence}
 	}
+	if err := validateWorkPathSOTPolicy(strings.TrimSpace(options.WorkPath), strings.TrimSpace(options.SOTPolicy), "run create"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateWorkPathSOTPolicy(workPath string, sotPolicy string, context string) error {
+	if workPath == "B_discovery_shaping" && sotPolicy == "existing_sot_basis" {
+		return &Problem{Code: "run_field_incompatible", Message: context + " contains incompatible work path and SOT policy", Hint: "Use work path A_development_execution for work based on an existing SOT, or choose minimal_sot_before_code/full_sot_before_code for Path B discovery shaping.", Field: "sot_policy", Expected: "minimal_sot_before_code or full_sot_before_code", Actual: sotPolicy}
+	}
 	return nil
 }
 

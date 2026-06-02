@@ -182,6 +182,21 @@ func TestCreateRunValidatesRequiredAndEnums(t *testing.T) {
 	}
 }
 
+func TestCreateRunRejectsDiscoveryPathWithExistingSOTPolicy(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.WorkPath = "B_discovery_shaping"
+	options.SOTPolicy = "existing_sot_basis"
+
+	_, err := CreateRun(root, options)
+	assertProblemCode(t, err, "run_field_incompatible")
+	problem := err.(*Problem)
+	if problem.Field != "sot_policy" || problem.Expected != "minimal_sot_before_code or full_sot_before_code" {
+		t.Fatalf("problem = %#v, want sot policy compatibility guidance", problem)
+	}
+}
+
 func TestRunLifecycleTransitionsUpdateMetadataStatusAndEvents(t *testing.T) {
 	repo := initializedRepo(t)
 	root, _ := DiscoverRoot(repo)

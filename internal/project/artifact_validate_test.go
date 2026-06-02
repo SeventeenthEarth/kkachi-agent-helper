@@ -63,16 +63,19 @@ func TestValidateArtifactsChecksPathSOTEligibility(t *testing.T) {
 	root, _ := DiscoverRoot(repo)
 	options := deterministicCreateRunOptions()
 	options.WorkPath = "B_discovery_shaping"
-	options.SOTPolicy = "existing_sot_basis"
+	options.SOTPolicy = "minimal_sot_before_code"
 	options.ExecutionMode = "research"
 	created, err := CreateRun(root, options)
 	if err != nil {
 		t.Fatalf("CreateRun() error = %v", err)
 	}
+	metadata := created.Metadata
+	metadata.SOTPolicy = "existing_sot_basis"
+	writeRunMetadataForTest(t, repo, metadata)
 	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
 		t.Fatalf("InitArtifacts() error = %v", err)
 	}
-	writeIntakeClassification(t, repo, created.Metadata, "")
+	writeIntakeClassification(t, repo, metadata, "")
 
 	result, err := ValidateArtifacts(root, ArtifactValidateOptions{RunID: created.Metadata.RunID})
 	if err != nil {
@@ -135,6 +138,10 @@ func TestValidateArtifactsPathSOTEligibilityMatrix(t *testing.T) {
 			options := deterministicCreateRunOptions()
 			options.WorkPath = tt.workPath
 			options.SOTPolicy = tt.sotPolicy
+			mutateToInvalidPathBExistingSOT := tt.workPath == "B_discovery_shaping" && tt.sotPolicy == "existing_sot_basis"
+			if mutateToInvalidPathBExistingSOT {
+				options.SOTPolicy = "minimal_sot_before_code"
+			}
 			if tt.workPath == "B_discovery_shaping" {
 				options.ExecutionMode = "research"
 			}
@@ -142,10 +149,15 @@ func TestValidateArtifactsPathSOTEligibilityMatrix(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CreateRun() error = %v", err)
 			}
+			metadata := created.Metadata
+			if mutateToInvalidPathBExistingSOT {
+				metadata.SOTPolicy = tt.sotPolicy
+				writeRunMetadataForTest(t, repo, metadata)
+			}
 			if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
 				t.Fatalf("InitArtifacts() error = %v", err)
 			}
-			writeIntakeClassification(t, repo, created.Metadata, "")
+			writeIntakeClassification(t, repo, metadata, "")
 
 			result, err := ValidateArtifacts(root, ArtifactValidateOptions{RunID: created.Metadata.RunID})
 			if err != nil {

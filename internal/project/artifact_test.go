@@ -80,6 +80,7 @@ func TestListArtifactsUsesManifestBeforeAndAfterInit(t *testing.T) {
 	root, _ := DiscoverRoot(repo)
 	options := deterministicCreateRunOptions()
 	options.WorkPath = "B_discovery_shaping"
+	options.SOTPolicy = "minimal_sot_before_code"
 	options.ExecutionMode = "research"
 	created, err := CreateRun(root, options)
 	if err != nil {
