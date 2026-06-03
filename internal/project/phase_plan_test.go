@@ -283,6 +283,99 @@ phases:
 	}
 }
 
+func TestPhasePlanUsesWorkflowGraphRequiredPhases(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	writeWorkflowGraph(t, repo, workflowGraphWithFeedbackIntake(`version: "workflow-graph/v1"
+graph_id: "graph-test"
+metadata:
+  project: "kkachi-test"
+  created_by: "human"
+  managed_by: "kah"
+  source_template: "test-template"
+  last_applied_event_id: "evt-000001"
+phases:
+  - id: "plan"
+    title: "Plan"
+    owner_layer: "khs"
+    required: true
+  - id: "request-feedback-1"
+    title: "Initial Feedback"
+    owner_layer: "khs"
+    required: true
+  - id: "handle-feedback-1"
+    title: "Handle Initial Feedback"
+    owner_layer: "khs"
+    required: true
+  - id: "request-feedback-2"
+    title: "Official GLM Octo Review Request"
+    owner_layer: "khs"
+    required: true
+  - id: "handle-feedback-2"
+    title: "Handle Official GLM Octo Feedback"
+    owner_layer: "khs"
+    required: true
+  - id: "final"
+    title: "Pre-Commit Template Report"
+    owner_layer: "khs"
+    required: true
+edges:
+  - from: "plan"
+    to: "request-feedback-1"
+  - from: "request-feedback-1"
+    to: "handle-feedback-1"
+  - from: "handle-feedback-1"
+    to: "request-feedback-2"
+  - from: "request-feedback-2"
+    to: "handle-feedback-2"
+  - from: "handle-feedback-2"
+    to: "final"
+proposals:
+  policy: "proposal-first"
+`))
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	initialized, err := InitPhasePlan(root, PhasePlanInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)})
+	if err != nil {
+		t.Fatalf("InitPhasePlan() error = %v", err)
+	}
+	if !phaseRowPresent(initialized.Plan.Phases, "request-feedback-2") || !phaseRowPresent(initialized.Plan.Phases, "handle-feedback-2") || !phaseRowPresent(initialized.Plan.Phases, "intake") {
+		t.Fatalf("phase plan rows = %#v, want graph-required GLM rows plus baseline KHS rows", initialized.Plan.Phases)
+	}
+
+	path := filepath.Join(repo, ".kkachi", "runs", created.Metadata.RunID, "phase-plan.yaml")
+	if err := os.WriteFile(path, []byte(`version: "0.1"
+run_id: "`+created.Metadata.RunID+`"
+phases:
+  - id: "plan"
+    status: "complete"
+    evidence: "plan.md"
+  - id: "request-feedback-1"
+    status: "not_applicable"
+    reason: "No initial feedback."
+  - id: "handle-feedback-1"
+    status: "not_applicable"
+    reason: "No initial feedback."
+  - id: "handle-feedback-2"
+    status: "complete"
+    evidence: "glm-octo-feedback.md"
+  - id: "final"
+    status: "complete"
+    evidence: "final-report.md"
+`), 0o600); err != nil {
+		t.Fatalf("write phase plan: %v", err)
+	}
+	result, err := ValidatePhasePlan(root, PhasePlanValidationOptions{RunID: created.Metadata.RunID, Final: true})
+	if err != nil {
+		t.Fatalf("ValidatePhasePlan() error = %v", err)
+	}
+	if result.Status != PhasePlanStatusFail || !phaseCheckFailed(result.Checks, "required_phases") {
+		t.Fatalf("checks = %#v, want missing graph-required request-feedback-2 failure", result.Checks)
+	}
+}
+
 func TestValidatePhasePlanFinalChecksDeclaredOptionalFeedbackEvidence(t *testing.T) {
 	repo := initializedRepo(t)
 	root, _ := DiscoverRoot(repo)
@@ -430,6 +523,15 @@ phases:
 func phaseCheckFailed(checks []PhasePlanCheck, name string) bool {
 	for _, check := range checks {
 		if check.Name == name && check.Status == PhasePlanStatusFail {
+			return true
+		}
+	}
+	return false
+}
+
+func phaseRowPresent(rows []PhaseRow, id string) bool {
+	for _, row := range rows {
+		if row.ID == id {
 			return true
 		}
 	}

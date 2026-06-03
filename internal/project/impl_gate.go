@@ -100,6 +100,9 @@ func checkDocsUpdateArtifact(root Root, runID string) GateCheck {
 
 func checkFinalGate(root Root, metadata RunMetadata, _ string) (GateCheckResult, error) {
 	checks := []GateCheck{checkFinalReportArtifact(root, metadata.RunID)}
+	if workflowGraphGateDeclared(root, "precommit-template-required") {
+		checks = append(checks, checkPrecommitReportTemplate(root, metadata.RunID))
+	}
 
 	requiredGates := []string{GateIntake, GateSOT, GateRoadmap, GatePlan, GateImplementation, GateReview, GateVerification, GateDocs}
 	if backendGateRequired(metadata) {
@@ -123,6 +126,52 @@ func checkFinalReportArtifact(root Root, runID string) GateCheck {
 		return failure
 	}
 	return validateMarkdownGateArtifact(markdownGateArtifactRule{Name: "final_report", Artifact: "final-report.md"}, path, content)
+}
+
+func checkPrecommitReportTemplate(root Root, runID string) GateCheck {
+	path, content, failure, ok := readGateArtifact(root, runID, "final-report.md", "precommit_report_template")
+	if !ok {
+		return failure
+	}
+	base := validateMarkdownGateArtifact(markdownGateArtifactRule{Name: "precommit_report_template", Artifact: "final-report.md"}, path, content)
+	if base.Status != GateStatusPass {
+		return base
+	}
+	lower := strings.ToLower(string(content))
+	requiredTokens := []string{
+		"status: complete",
+		"verdict:",
+		"enhance test",
+		"ai slop cleaner",
+		"docs / roadmap",
+		"blue/red/orange/gray",
+		"glm octo",
+		"재리뷰",
+		"추천 커밋 메시지",
+	}
+	missing := []string{}
+	for _, token := range requiredTokens {
+		if !strings.Contains(lower, strings.ToLower(token)) {
+			missing = append(missing, token)
+		}
+	}
+	if len(missing) > 0 {
+		return GateCheck{Name: "precommit_report_template", Status: GateStatusFail, Path: path, Message: "final report does not follow the required pre-commit template", Hint: "Use the pre-commit completion report template: status/verdict, Enhance Test, AI Slop Cleaner, Docs/Roadmap, Blue/Red/Orange/Gray review, GLM Octo, post-Octo re-review, and recommended commit message.", Field: "final-report.md", Expected: strings.Join(requiredTokens, ","), Actual: "missing " + strings.Join(missing, ",")}
+	}
+	return GateCheck{Name: "precommit_report_template", Status: GateStatusPass, Path: path, Message: "final report follows the required pre-commit template"}
+}
+
+func workflowGraphGateDeclared(root Root, gateID string) bool {
+	loaded := loadWorkflowGraph(root, GraphOptions{File: WorkflowGraphDefaultPath})
+	if loaded.validation.Status != GraphStatusPass {
+		return false
+	}
+	for _, gate := range loaded.graph.Gates {
+		if gate.ID == gateID {
+			return true
+		}
+	}
+	return false
 }
 
 func checkRequiredGatePass(metadata RunMetadata, gate string) GateCheck {

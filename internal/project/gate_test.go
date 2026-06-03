@@ -1025,6 +1025,93 @@ func TestCheckGateFinalPassesAndFails(t *testing.T) {
 	}
 }
 
+func TestCheckGateFinalEnforcesPrecommitTemplateWhenGraphGateExists(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	writeWorkflowGraph(t, repo, workflowGraphWithFeedbackIntake(`version: "workflow-graph/v1"
+graph_id: "graph-test"
+metadata:
+  project: "kkachi-test"
+  created_by: "human"
+  managed_by: "kah"
+  source_template: "test-template"
+  last_applied_event_id: "evt-000001"
+phases:
+  - id: "plan"
+    title: "Plan"
+    owner_layer: "khs"
+    required: true
+  - id: "implement"
+    title: "Implement"
+    owner_layer: "khs"
+    required: true
+  - id: "final"
+    title: "Final"
+    owner_layer: "khs"
+    required: true
+edges:
+  - from: "plan"
+    to: "implement"
+  - from: "implement"
+    to: "final"
+gates:
+  - id: "precommit-template-required"
+    requires: ["final"]
+proposals:
+  policy: "proposal-first"
+`))
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+		t.Fatalf("InitArtifacts() error = %v", err)
+	}
+	passAllPriorGates(t, root, repo, created.Metadata.RunID)
+
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "final-report.md", "Status: complete\nReport: done\n")
+	failed, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateFinal, Now: testRunNow(15)})
+	if err != nil {
+		t.Fatalf("CheckGate(final template fail) error = %v", err)
+	}
+	if failed.Status != GateStatusFail || !gateCheckStatus(failed.Checks, "precommit_report_template", GateStatusFail) {
+		t.Fatalf("failed = %#v, want precommit_report_template failure", failed)
+	}
+
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "final-report.md", `# Pre-Commit Completion Report
+Status: complete
+Verdict: PASS
+
+## Enhance Test
+Done.
+
+## AI Slop Cleaner / Optimize
+Done.
+
+## Docs / Roadmap
+Done.
+
+## Blue/Red/Orange/Gray Review
+Done.
+
+## GLM Octo Review
+Done.
+
+## 재리뷰
+Done.
+
+## 추천 커밋 메시지
+[TEST] done
+`)
+	passed, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateFinal, Now: testRunNow(16)})
+	if err != nil {
+		t.Fatalf("CheckGate(final template pass) error = %v", err)
+	}
+	if passed.Status != GateStatusPass || !gateCheckStatus(passed.Checks, "precommit_report_template", GateStatusPass) {
+		t.Fatalf("passed = %#v, want precommit_report_template pass", passed)
+	}
+}
+
 func TestCheckGateFinalFailsWhenPriorGateEvidenceChanges(t *testing.T) {
 	repo := initializedRepo(t)
 	root, _ := DiscoverRoot(repo)

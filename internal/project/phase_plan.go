@@ -156,7 +156,7 @@ func initPhasePlanUnlocked(root Root, options PhasePlanInitOptions) (PhasePlanIn
 	} else if !os.IsNotExist(err) {
 		return PhasePlanInitResult{}, &Problem{Code: "path_inspection_failed", Message: "cannot inspect phase plan path", Hint: "Check run directory permissions before initializing the phase plan.", Path: path.Relative, Field: "path", Expected: "inspectable path", Actual: err.Error()}
 	}
-	plan := defaultPhasePlan(metadata.RunID, path.Relative)
+	plan := defaultPhasePlan(metadata.RunID, path.Relative, phasePlanRequiredPhaseIDs(root))
 	content := encodePhasePlan(plan)
 	appendResult, err := appendEventWithStatusMutation(root, AppendEventOptions{Type: "phase_plan.initialized", RunID: metadata.RunID, Payload: map[string]any{"path": path.Relative, "phase_count": len(plan.Phases)}, Now: options.Now}, func(map[string]any, string) error {
 		return writeNewFileAtomically(path, content)
@@ -258,7 +258,8 @@ func ValidatePhasePlan(root Root, options PhasePlanValidationOptions) (PhasePlan
 		return PhasePlanValidationResult{}, err
 	}
 	policy := resolvePhasePlanFeedbackPolicy(root, plan.Path)
-	checks := validatePhasePlanChecksWithApprovals(root, plan, options.Final, &policy)
+	requiredPhaseIDs := phasePlanRequiredPhaseIDs(root)
+	checks := validatePhasePlanChecksWithApprovals(root, plan, options.Final, &policy, requiredPhaseIDs)
 	status := PhasePlanStatusPass
 	for _, check := range checks {
 		if check.Status == PhasePlanStatusFail {
@@ -269,12 +270,33 @@ func ValidatePhasePlan(root Root, options PhasePlanValidationOptions) (PhasePlan
 	return PhasePlanValidationResult{RunID: metadata.RunID, Path: plan.Path, Final: options.Final, Status: status, Checks: checks, Plan: plan}, nil
 }
 
-func defaultPhasePlan(runID string, path string) PhasePlan {
-	phases := make([]PhaseRow, 0, len(defaultPhaseIDs))
-	for _, id := range defaultPhaseIDs {
+func defaultPhasePlan(runID string, path string, requiredPhaseIDs []string) PhasePlan {
+	phases := make([]PhaseRow, 0, len(requiredPhaseIDs))
+	for _, id := range requiredPhaseIDs {
 		phases = append(phases, PhaseRow{ID: id, Status: PhaseStatusPending})
 	}
 	return PhasePlan{Version: PhasePlanVersion, RunID: runID, Path: path, Phases: phases}
+}
+
+func phasePlanRequiredPhaseIDs(root Root) []string {
+	ids := append([]string{}, defaultPhaseIDs...)
+	seen := map[string]bool{}
+	for _, id := range ids {
+		seen[id] = true
+	}
+	loaded := loadWorkflowGraph(root, GraphOptions{File: WorkflowGraphDefaultPath})
+	if loaded.validation.Status != GraphStatusPass {
+		return ids
+	}
+	for _, phase := range loaded.graph.Phases {
+		id := strings.TrimSpace(phase.ID)
+		if id == "" || !phase.Required || seen[id] {
+			continue
+		}
+		ids = append(ids, id)
+		seen[id] = true
+	}
+	return ids
 }
 
 func phasePlanPath(root Root, runID string) (SafePath, error) {
@@ -307,7 +329,7 @@ func readPhasePlan(root Root, runID string) (PhasePlan, error) {
 }
 
 func validatePhasePlanShape(plan PhasePlan) (PhasePlanValidationResult, error) {
-	checks := validatePhasePlanChecks(plan, false, nil)
+	checks := validatePhasePlanChecks(plan, false, nil, defaultPhaseIDs)
 	for _, check := range checks {
 		if check.Status == PhasePlanStatusFail && (check.Name == "version" || check.Name == "run_id" || check.Name == "phase_id" || check.Name == "phase_status" || check.Name == "duplicate_phase") {
 			return PhasePlanValidationResult{}, &Problem{Code: "phase_plan_invalid", Message: check.Message, Hint: check.Hint, Path: check.Path, Field: check.Field, Expected: check.Expected, Actual: check.Actual}
@@ -316,7 +338,7 @@ func validatePhasePlanShape(plan PhasePlan) (PhasePlanValidationResult, error) {
 	return PhasePlanValidationResult{RunID: plan.RunID, Path: plan.Path, Status: PhasePlanStatusPass, Checks: checks, Plan: plan}, nil
 }
 
-func validatePhasePlanChecks(plan PhasePlan, final bool, feedbackPolicy *phasePlanFeedbackPolicy) []PhasePlanCheck {
+func validatePhasePlanChecks(plan PhasePlan, final bool, feedbackPolicy *phasePlanFeedbackPolicy, requiredPhaseIDs []string) []PhasePlanCheck {
 	checks := []PhasePlanCheck{}
 	add := func(check PhasePlanCheck) {
 		if check.Status == "" {
@@ -376,7 +398,7 @@ func validatePhasePlanChecks(plan PhasePlan, final bool, feedbackPolicy *phasePl
 	}
 
 	missing := []string{}
-	for _, id := range defaultPhaseIDs {
+	for _, id := range requiredPhaseIDs {
 		if _, ok := seen[id]; !ok {
 			missing = append(missing, id)
 		}
@@ -384,19 +406,19 @@ func validatePhasePlanChecks(plan PhasePlan, final bool, feedbackPolicy *phasePl
 	if len(missing) == 0 {
 		add(PhasePlanCheck{Name: "required_phases", Message: "required phase rows are present"})
 	} else {
-		add(PhasePlanCheck{Name: "required_phases", Status: PhasePlanStatusFail, Message: "required phase rows are missing", Hint: "Initialize or update phase-plan.yaml with all KHS-declared required rows.", Field: "phases[].id", Expected: strings.Join(defaultPhaseIDs, ","), Actual: strings.Join(missing, ",")})
+		add(PhasePlanCheck{Name: "required_phases", Status: PhasePlanStatusFail, Message: "required phase rows are missing", Hint: "Initialize or update phase-plan.yaml with all KHS-declared required rows.", Field: "phases[].id", Expected: strings.Join(requiredPhaseIDs, ","), Actual: strings.Join(missing, ",")})
 	}
 
 	feedbackChecks := validateFeedbackPhases(seen, plan.Path, feedbackPolicy)
 	checks = append(checks, feedbackChecks...)
 	if final {
-		checks = append(checks, validateFinalPhaseState(plan, seen)...)
+		checks = append(checks, validateFinalPhaseState(plan, seen, requiredPhaseIDs)...)
 	}
 	return checks
 }
 
-func validatePhasePlanChecksWithApprovals(root Root, plan PhasePlan, final bool, feedbackPolicy *phasePlanFeedbackPolicy) []PhasePlanCheck {
-	checks := validatePhasePlanChecks(plan, final, feedbackPolicy)
+func validatePhasePlanChecksWithApprovals(root Root, plan PhasePlan, final bool, feedbackPolicy *phasePlanFeedbackPolicy, requiredPhaseIDs []string) []PhasePlanCheck {
+	checks := validatePhasePlanChecks(plan, final, feedbackPolicy, requiredPhaseIDs)
 	if final {
 		checks = append(checks, validateFinalApprovalState(root, plan)...)
 	}
@@ -559,11 +581,11 @@ func graphValidationIssueSummary(issues []GraphIssue) string {
 	return strings.Join(parts, ",")
 }
 
-func validateFinalPhaseState(plan PhasePlan, seen map[string]PhaseRow) []PhasePlanCheck {
+func validateFinalPhaseState(plan PhasePlan, seen map[string]PhaseRow, requiredPhaseIDs []string) []PhasePlanCheck {
 	checks := []PhasePlanCheck{}
 	nonTerminal := []string{}
 	missingEvidence := []string{}
-	for _, id := range finalPhaseIDs(seen) {
+	for _, id := range finalPhaseIDs(seen, requiredPhaseIDs) {
 		phase, ok := seen[id]
 		if !ok {
 			continue
@@ -588,8 +610,8 @@ func validateFinalPhaseState(plan PhasePlan, seen map[string]PhaseRow) []PhasePl
 	return checks
 }
 
-func finalPhaseIDs(seen map[string]PhaseRow) []string {
-	result := append([]string{}, defaultPhaseIDs...)
+func finalPhaseIDs(seen map[string]PhaseRow, requiredPhaseIDs []string) []string {
+	result := append([]string{}, requiredPhaseIDs...)
 	included := map[string]bool{}
 	for _, id := range result {
 		included[id] = true
