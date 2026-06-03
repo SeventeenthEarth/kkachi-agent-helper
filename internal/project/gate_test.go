@@ -476,7 +476,7 @@ func TestCheckGateMarkdownArtifactFailures(t *testing.T) {
 	}
 }
 
-func TestCheckGateRefusesUnknownAndCoherenceMismatchWithoutMutation(t *testing.T) {
+func TestCheckGateBlocksUnknownWorkflowGateAndCoherenceMismatchWithoutMutation(t *testing.T) {
 	repo := initializedRepo(t)
 	root, _ := DiscoverRoot(repo)
 	created, err := CreateRun(root, deterministicCreateRunOptions())
@@ -484,12 +484,24 @@ func TestCheckGateRefusesUnknownAndCoherenceMismatchWithoutMutation(t *testing.T
 		t.Fatalf("CreateRun() error = %v", err)
 	}
 	before := len(runEventLines(t, repo))
-	_, err = CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: "bogus", Now: testRunNow(4)})
-	assertProblemCode(t, err, "gate_unknown")
-	if after := len(runEventLines(t, repo)); after != before {
-		t.Fatalf("event count changed from %d to %d for unknown gate", before, after)
+	unknown, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: "bogus", Now: testRunNow(4)})
+	if err != nil {
+		t.Fatalf("CheckGate(unknown workflow gate) error = %v", err)
+	}
+	if unknown.Status != GateStatusBlocked || !gateCheckStatus(unknown.Checks, "workflow_graph", GateStatusBlocked) {
+		t.Fatalf("unknown = %#v, want blocked workflow_graph check", unknown)
+	}
+	if after := len(runEventLines(t, repo)); after != before+1 {
+		t.Fatalf("event count changed from %d to %d for unknown workflow gate", before, after)
 	}
 
+	repo = initializedRepo(t)
+	root, _ = DiscoverRoot(repo)
+	created, err = CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	before = len(runEventLines(t, repo))
 	appendCrashEvent(t, repo, "evt-000003", created.Metadata.RunID)
 	_, err = CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateIntake, Now: testRunNow(4)})
 	assertProblemCode(t, err, "last_event_id_mismatch")
@@ -1025,7 +1037,7 @@ func TestCheckGateFinalPassesAndFails(t *testing.T) {
 	}
 }
 
-func TestCheckGateFinalEnforcesPrecommitTemplateWhenGraphGateExists(t *testing.T) {
+func TestWorkflowGateChecksAndFinalRequiredGateAreDeclarative(t *testing.T) {
 	repo := initializedRepo(t)
 	root, _ := DiscoverRoot(repo)
 	writeWorkflowGraph(t, repo, workflowGraphWithFeedbackIntake(`version: "workflow-graph/v1"
@@ -1057,6 +1069,19 @@ edges:
 gates:
   - id: "precommit-template-required"
     requires: ["final"]
+    final_required: true
+    checks:
+      - type: "markdown.field"
+        path: "final-report.md"
+        field: "Status"
+        equals: "complete"
+      - type: "markdown.field"
+        path: "final-report.md"
+        field: "Verdict"
+        one_of: ["pass", "fail"]
+      - type: "text.contains_all"
+        path: "final-report.md"
+        tokens: ["Enhance Test", "AI Slop Cleaner", "Docs / Roadmap", "Blue/Red/Orange/Gray", "GLM Octo", "재리뷰", "추천 커밋 메시지"]
 proposals:
   policy: "proposal-first"
 `))
@@ -1070,12 +1095,19 @@ proposals:
 	passAllPriorGates(t, root, repo, created.Metadata.RunID)
 
 	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "final-report.md", "Status: complete\nReport: done\n")
-	failed, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateFinal, Now: testRunNow(15)})
+	customFail, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: "precommit-template-required", Now: testRunNow(15)})
 	if err != nil {
-		t.Fatalf("CheckGate(final template fail) error = %v", err)
+		t.Fatalf("CheckGate(custom template fail) error = %v", err)
 	}
-	if failed.Status != GateStatusFail || !gateCheckStatus(failed.Checks, "precommit_report_template", GateStatusFail) {
-		t.Fatalf("failed = %#v, want precommit_report_template failure", failed)
+	if customFail.Status != GateStatusFail || !gateCheckStatus(customFail.Checks, "precommit-template-required_check_02", GateStatusFail) {
+		t.Fatalf("customFail = %#v, want declarative markdown/text failure", customFail)
+	}
+	finalFail, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateFinal, Now: testRunNow(16)})
+	if err != nil {
+		t.Fatalf("CheckGate(final custom gate fail) error = %v", err)
+	}
+	if finalFail.Status != GateStatusFail || !gateCheckStatus(finalFail.Checks, "precommit-template-required_gate", GateStatusFail) {
+		t.Fatalf("finalFail = %#v, want final_required workflow gate failure", finalFail)
 	}
 
 	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "final-report.md", `# Pre-Commit Completion Report
@@ -1103,12 +1135,168 @@ Done.
 ## 추천 커밋 메시지
 [TEST] done
 `)
-	passed, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateFinal, Now: testRunNow(16)})
+	customPass, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: "precommit-template-required", Now: testRunNow(17)})
+	if err != nil {
+		t.Fatalf("CheckGate(custom template pass) error = %v", err)
+	}
+	if customPass.Status != GateStatusPass || !gateCheckStatus(customPass.Checks, "precommit-template-required_check_03", GateStatusPass) {
+		t.Fatalf("customPass = %#v, want declarative template pass", customPass)
+	}
+	finalPass, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateFinal, Now: testRunNow(18)})
 	if err != nil {
 		t.Fatalf("CheckGate(final template pass) error = %v", err)
 	}
-	if passed.Status != GateStatusPass || !gateCheckStatus(passed.Checks, "precommit_report_template", GateStatusPass) {
-		t.Fatalf("passed = %#v, want precommit_report_template pass", passed)
+	if finalPass.Status != GateStatusPass || !gateCheckStatus(finalPass.Checks, "precommit-template-required_gate", GateStatusPass) || !gateCheckStatus(finalPass.Checks, "precommit-template-required_gate_freshness", GateStatusPass) {
+		t.Fatalf("finalPass = %#v, want final pass with workflow gate pass/freshness", finalPass)
+	}
+}
+
+func TestPrecommitTemplateDoesNotRequireGLMWhenWorkflowOmitsToken(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	writeWorkflowGraph(t, repo, workflowGraphWithFeedbackIntake(`version: "workflow-graph/v1"
+graph_id: "graph-test"
+metadata:
+  project: "kkachi-test"
+  created_by: "human"
+  managed_by: "kah"
+  source_template: "test-template"
+  last_applied_event_id: "evt-000001"
+phases:
+  - id: "final"
+    title: "Final"
+    owner_layer: "khs"
+    required: true
+gates:
+  - id: "precommit-template-required"
+    requires: ["final"]
+    checks:
+      - type: "markdown.field"
+        path: "final-report.md"
+        field: "Status"
+        equals: "complete"
+      - type: "text.contains_all"
+        path: "final-report.md"
+        tokens: ["Enhance Test", "추천 커밋 메시지"]
+proposals:
+  policy: "proposal-first"
+`))
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+		t.Fatalf("InitArtifacts() error = %v", err)
+	}
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "final-report.md", "Status: complete\n\n## Enhance Test\nDone.\n\n## 추천 커밋 메시지\n[TEST] done\n")
+	result, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: "precommit-template-required", Now: testRunNow(5)})
+	if err != nil {
+		t.Fatalf("CheckGate(custom no GLM) error = %v", err)
+	}
+	if result.Status != GateStatusPass || gateCheckStatus(result.Checks, "precommit-template-required_check_02", GateStatusFail) {
+		t.Fatalf("result = %#v, want pass without GLM token when workflow omits it", result)
+	}
+}
+
+func TestWorkflowGateCheckNameMessageHintShapeReport(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	writeWorkflowGraph(t, repo, workflowGraphWithFeedbackIntake(`version: "workflow-graph/v1"
+graph_id: "graph-test"
+metadata:
+  project: "kkachi-test"
+  created_by: "human"
+  managed_by: "kah"
+phases:
+  - id: "final"
+    title: "Final"
+    owner_layer: "khs"
+    required: true
+gates:
+  - id: "precommit-template-required"
+    requires: ["final"]
+    checks:
+      - type: "text.contains_all"
+        name: "precommit_report_template"
+        path: "final-report.md"
+        tokens: ["status: complete", "verdict:", "enhance test", "ai slop cleaner", "docs / roadmap", "blue/red/orange/gray", "glm octo", "재리뷰", "추천 커밋 메시지"]
+        message: "final report does not follow the required pre-commit template"
+        hint: "Use the pre-commit completion report template: status/verdict, Enhance Test, AI Slop Cleaner, Docs/Roadmap, Blue/Red/Orange/Gray review, GLM Octo, post-Octo re-review, and recommended commit message."
+proposals:
+  policy: "proposal-first"
+`))
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+		t.Fatalf("InitArtifacts() error = %v", err)
+	}
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "final-report.md", "Status: complete\n")
+
+	result, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: "precommit-template-required", Now: testRunNow(5)})
+	if err != nil {
+		t.Fatalf("CheckGate(precommit template) error = %v", err)
+	}
+	if result.Status != GateStatusFail || len(result.Checks) != 1 {
+		t.Fatalf("result = %#v, want one failing check", result)
+	}
+	check := result.Checks[0]
+	if check.Name != "precommit_report_template" || check.Message != "final report does not follow the required pre-commit template" || !strings.Contains(check.Hint, "pre-commit completion report template") || !strings.Contains(check.Expected, "glm octo") {
+		t.Fatalf("check = %#v, want preserved name/message/hint/tokens", check)
+	}
+}
+
+func TestWorkflowGateSupportsArtifactTextAndPhaseStatusChecks(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	writeWorkflowGraph(t, repo, workflowGraphWithFeedbackIntake(`version: "workflow-graph/v1"
+graph_id: "graph-test"
+metadata:
+  project: "kkachi-test"
+  created_by: "human"
+  managed_by: "kah"
+phases:
+  - id: "final"
+    title: "Final"
+    owner_layer: "khs"
+    required: true
+gates:
+  - id: "custom-evidence-required"
+    requires: ["final"]
+    checks:
+      - type: "artifact.exists"
+        path: "final-report.md"
+      - type: "text.contains"
+        path: "final-report.md"
+        token: "Needle Evidence"
+      - type: "phase.status"
+        phase: "final"
+        status: "complete"
+proposals:
+  policy: "proposal-first"
+`))
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+		t.Fatalf("InitArtifacts() error = %v", err)
+	}
+	if _, err := InitPhasePlan(root, PhasePlanInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(5)}); err != nil {
+		t.Fatalf("InitPhasePlan() error = %v", err)
+	}
+	if _, err := SetPhasePlanPhase(root, PhasePlanSetOptions{RunID: created.Metadata.RunID, PhaseID: "final", Status: PhaseStatusComplete, Evidence: "final-report.md", Now: testRunNow(6)}); err != nil {
+		t.Fatalf("SetPhasePlanPhase(final) error = %v", err)
+	}
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "final-report.md", "Status: complete\nNeedle Evidence: present\n")
+
+	result, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: "custom-evidence-required", Now: testRunNow(7)})
+	if err != nil {
+		t.Fatalf("CheckGate(custom evidence) error = %v", err)
+	}
+	if result.Status != GateStatusPass || !gateCheckStatus(result.Checks, "custom-evidence-required_check_01", GateStatusPass) || !gateCheckStatus(result.Checks, "custom-evidence-required_check_02", GateStatusPass) || !gateCheckStatus(result.Checks, "custom-evidence-required_check_03", GateStatusPass) {
+		t.Fatalf("result = %#v, want artifact.exists/text.contains/phase.status pass", result)
 	}
 }
 

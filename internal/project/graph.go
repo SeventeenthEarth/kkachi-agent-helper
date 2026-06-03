@@ -307,8 +307,27 @@ type WorkflowGraphEdge struct {
 }
 
 type WorkflowGraphGate struct {
-	ID       string   `json:"id"`
-	Requires []string `json:"requires"`
+	ID            string               `json:"id"`
+	Requires      []string             `json:"requires"`
+	FinalRequired bool                 `json:"final_required,omitempty"`
+	Checks        []WorkflowGraphCheck `json:"checks"`
+
+	seenFields map[string]bool
+}
+
+type WorkflowGraphCheck struct {
+	Type    string   `json:"type"`
+	Name    string   `json:"name,omitempty"`
+	Path    string   `json:"path,omitempty"`
+	Field   string   `json:"field,omitempty"`
+	Equals  string   `json:"equals,omitempty"`
+	OneOf   []string `json:"one_of,omitempty"`
+	Token   string   `json:"token,omitempty"`
+	Tokens  []string `json:"tokens,omitempty"`
+	Phase   string   `json:"phase,omitempty"`
+	Status  string   `json:"status,omitempty"`
+	Message string   `json:"message,omitempty"`
+	Hint    string   `json:"hint,omitempty"`
 
 	seenFields map[string]bool
 }
@@ -965,6 +984,36 @@ func encodeWorkflowGraph(graph WorkflowGraph) []byte {
 			builder.WriteString("    requires: ")
 			builder.WriteString(graphYAMLStringList(gate.Requires))
 			builder.WriteString("\n")
+			if gate.FinalRequired {
+				builder.WriteString("    final_required: true\n")
+			}
+			if len(gate.Checks) > 0 {
+				builder.WriteString("    checks:\n")
+				for _, check := range gate.Checks {
+					builder.WriteString("      - type: ")
+					builder.WriteString(yamlQuotedScalar(check.Type))
+					builder.WriteString("\n")
+					writeWorkflowGraphCheckScalar(&builder, "name", check.Name)
+					writeWorkflowGraphCheckScalar(&builder, "path", check.Path)
+					writeWorkflowGraphCheckScalar(&builder, "field", check.Field)
+					writeWorkflowGraphCheckScalar(&builder, "equals", check.Equals)
+					if len(check.OneOf) > 0 {
+						builder.WriteString("        one_of: ")
+						builder.WriteString(graphYAMLStringList(check.OneOf))
+						builder.WriteString("\n")
+					}
+					writeWorkflowGraphCheckScalar(&builder, "token", check.Token)
+					if len(check.Tokens) > 0 {
+						builder.WriteString("        tokens: ")
+						builder.WriteString(graphYAMLStringList(check.Tokens))
+						builder.WriteString("\n")
+					}
+					writeWorkflowGraphCheckScalar(&builder, "phase", check.Phase)
+					writeWorkflowGraphCheckScalar(&builder, "status", check.Status)
+					writeWorkflowGraphCheckScalar(&builder, "message", check.Message)
+					writeWorkflowGraphCheckScalar(&builder, "hint", check.Hint)
+				}
+			}
 		}
 	}
 	if len(graph.Approvals) > 0 {
@@ -1007,6 +1056,17 @@ func encodeWorkflowGraph(graph WorkflowGraph) []byte {
 		builder.WriteString("\n")
 	}
 	return []byte(builder.String())
+}
+
+func writeWorkflowGraphCheckScalar(builder *strings.Builder, key string, value string) {
+	if value == "" {
+		return
+	}
+	builder.WriteString("        ")
+	builder.WriteString(key)
+	builder.WriteString(": ")
+	builder.WriteString(yamlQuotedScalar(value))
+	builder.WriteString("\n")
 }
 
 func graphYAMLStringList(values []string) string {
@@ -1303,7 +1363,24 @@ func cleanWorkflowGraphGate(gate WorkflowGraphGate) WorkflowGraphGate {
 	if gate.Requires == nil {
 		gate.Requires = []string{}
 	}
+	if gate.Checks == nil {
+		gate.Checks = []WorkflowGraphCheck{}
+	}
+	for i := range gate.Checks {
+		gate.Checks[i] = cleanWorkflowGraphCheck(gate.Checks[i])
+	}
 	return gate
+}
+
+func cleanWorkflowGraphCheck(check WorkflowGraphCheck) WorkflowGraphCheck {
+	check.seenFields = nil
+	if check.OneOf == nil {
+		check.OneOf = []string{}
+	}
+	if check.Tokens == nil {
+		check.Tokens = []string{}
+	}
+	return check
 }
 
 func canonicalWorkflowGraphGate(gate WorkflowGraphGate) WorkflowGraphGate {
@@ -1646,8 +1723,22 @@ func parseWorkflowGraph(data []byte, path string) graphDocument {
 	var phase *WorkflowGraphPhase
 	var edge *WorkflowGraphEdge
 	var gate *WorkflowGraphGate
+	var check *WorkflowGraphCheck
 	var approval *WorkflowGraphApproval
+	flushCheck := func() {
+		if check != nil {
+			if gate == nil {
+				doc.errors = append(doc.errors, GraphIssue{Name: "graph_yaml", Path: path, Message: "workflow graph check appears outside a gate row", Field: "checks", Expected: "check below gates list item", Actual: check.Type})
+			} else {
+				item := *check
+				item.seenFields = nil
+				gate.Checks = append(gate.Checks, item)
+			}
+			check = nil
+		}
+	}
 	flush := func() {
+		flushCheck()
 		if phase != nil {
 			item := *phase
 			item.seenFields = nil
@@ -1731,8 +1822,18 @@ func parseWorkflowGraph(data []byte, path string) graphDocument {
 			continue
 		}
 		if strings.HasPrefix(line, "- ") {
-			flush()
 			item := strings.TrimSpace(strings.TrimPrefix(line, "- "))
+			if section == "gates" && indent > 2 {
+				if gate == nil {
+					addParseError(lineNo, "checks", "workflow graph check appears outside a gate row", "check below gates list item", line)
+					continue
+				}
+				flushCheck()
+				check = &WorkflowGraphCheck{seenFields: map[string]bool{}}
+				setGraphCheckField(&doc, lineNo, item, check)
+				continue
+			}
+			flush()
 			switch section {
 			case "phases":
 				phase = &WorkflowGraphPhase{seenFields: map[string]bool{}}
@@ -1751,6 +1852,10 @@ func parseWorkflowGraph(data []byte, path string) graphDocument {
 		}
 		if section == "metadata" || section == "proposals" || section == "feedback_intake" {
 			setGraphMappingField(&doc, section, lineNo, line)
+			continue
+		}
+		if section == "gates" && check != nil && indent > 4 {
+			setGraphCheckField(&doc, lineNo, line, check)
 			continue
 		}
 		setGraphListItemField(&doc, section, lineNo, line, phase, edge, gate, approval)
@@ -1994,8 +2099,19 @@ func setGraphListItemField(doc *graphDocument, section string, lineNo int, line 
 				return
 			}
 			gate.Requires = items
+		case "final_required":
+			value, ok := parseYAMLBool(parsed)
+			if !ok {
+				doc.errors = append(doc.errors, GraphIssue{Name: "graph_yaml", Message: "gate final_required field is invalid", Field: key, Expected: "true or false", Actual: parsed, Line: lineNo})
+				return
+			}
+			gate.FinalRequired = value
+		case "checks":
+			if strings.TrimSpace(value) != "" {
+				doc.errors = append(doc.errors, GraphIssue{Name: "graph_yaml", Message: "gate checks field must be a nested list", Field: key, Expected: "checks: followed by nested check rows", Actual: value, Line: lineNo})
+			}
 		default:
-			doc.errors = append(doc.errors, GraphIssue{Name: "graph_yaml", Message: "gate field is unsupported", Field: key, Expected: "id or requires", Actual: key, Line: lineNo})
+			doc.errors = append(doc.errors, GraphIssue{Name: "graph_yaml", Message: "gate field is unsupported", Field: key, Expected: "id, requires, final_required, or checks", Actual: key, Line: lineNo})
 		}
 	case "approvals":
 		if approval == nil {
@@ -2015,6 +2131,66 @@ func setGraphListItemField(doc *graphDocument, section string, lineNo int, line 
 		}
 	default:
 		doc.errors = append(doc.errors, GraphIssue{Name: "graph_yaml", Message: "workflow graph section does not accept item fields", Field: section, Expected: "phases, edges, gates, or approvals", Actual: section, Line: lineNo})
+	}
+}
+
+func setGraphCheckField(doc *graphDocument, lineNo int, line string, check *WorkflowGraphCheck) {
+	key, value, ok := strings.Cut(line, ":")
+	if !ok {
+		doc.errors = append(doc.errors, GraphIssue{Name: "graph_yaml", Message: "workflow graph check line is invalid", Field: "checks", Expected: "key: value line", Actual: line, Line: lineNo})
+		return
+	}
+	key = strings.TrimSpace(key)
+	value = strings.TrimSpace(value)
+	parsed, err := parseWorkflowGraphScalar(value)
+	if err != nil && !strings.HasPrefix(value, "[") {
+		doc.errors = append(doc.errors, GraphIssue{Name: "graph_yaml", Message: "workflow graph check scalar is invalid", Field: key, Expected: "string scalar", Actual: err.Error(), Line: lineNo})
+		return
+	}
+	if check == nil {
+		doc.errors = append(doc.errors, GraphIssue{Name: "graph_yaml", Message: "check field appears outside a check row", Field: key, Expected: "field below checks list item", Actual: fmt.Sprintf("line %d", lineNo), Line: lineNo})
+		return
+	}
+	if !markGraphField(doc, check.seenFields, lineNo, key) {
+		return
+	}
+	switch key {
+	case "type":
+		check.Type = parsed
+	case "name":
+		check.Name = parsed
+	case "path":
+		check.Path = parsed
+	case "field":
+		check.Field = parsed
+	case "equals":
+		check.Equals = parsed
+	case "one_of":
+		items, err := parseYAMLStringList(value)
+		if err != nil {
+			doc.errors = append(doc.errors, GraphIssue{Name: "graph_yaml", Message: "check one_of list is invalid", Field: key, Expected: "inline string list", Actual: err.Error(), Line: lineNo})
+			return
+		}
+		check.OneOf = items
+	case "token":
+		check.Token = parsed
+	case "tokens":
+		items, err := parseYAMLStringList(value)
+		if err != nil {
+			doc.errors = append(doc.errors, GraphIssue{Name: "graph_yaml", Message: "check tokens list is invalid", Field: key, Expected: "inline string list", Actual: err.Error(), Line: lineNo})
+			return
+		}
+		check.Tokens = items
+	case "phase":
+		check.Phase = parsed
+	case "status":
+		check.Status = parsed
+	case "message":
+		check.Message = parsed
+	case "hint":
+		check.Hint = parsed
+	default:
+		doc.errors = append(doc.errors, GraphIssue{Name: "graph_yaml", Message: "workflow graph check field is unsupported", Field: key, Expected: "type, name, path, field, equals, one_of, token, tokens, phase, status, message, or hint", Actual: key, Line: lineNo})
 	}
 }
 
@@ -2212,6 +2388,9 @@ func validateWorkflowGraph(graph WorkflowGraph, path string) []GraphIssue {
 				add("gate_requires", "gates[].requires", "gate requirement phase is not declared", "declared phase id", required)
 			}
 		}
+		for _, check := range gate.Checks {
+			validateWorkflowGraphCheck(add, gate.ID, check, phaseIDs)
+		}
 	}
 	if len(duplicateGates) > 0 {
 		sort.Strings(duplicateGates)
@@ -2242,6 +2421,67 @@ func validateWorkflowGraph(graph WorkflowGraph, path string) []GraphIssue {
 	}
 	errors = append(errors, validateWorkflowGraphFeedbackIntake(graph.FeedbackIntake, path)...)
 	return errors
+}
+
+func validateWorkflowGraphCheck(add func(string, string, string, string, string), gateID string, check WorkflowGraphCheck, phaseIDs map[string]bool) {
+	checkType := strings.TrimSpace(check.Type)
+	fieldPrefix := "gates[" + gateID + "].checks[]"
+	if checkType == "" {
+		add("gate_check_type", fieldPrefix+".type", "workflow gate check type is required", workflowGraphCheckTypes(), "missing")
+		return
+	}
+	switch checkType {
+	case "artifact.exists":
+		if strings.TrimSpace(check.Path) == "" {
+			add("gate_check_path", fieldPrefix+".path", "artifact.exists check requires path", "non-empty artifact path", "missing")
+		}
+	case "markdown.field":
+		if strings.TrimSpace(check.Path) == "" {
+			add("gate_check_path", fieldPrefix+".path", "markdown.field check requires path", "non-empty artifact path", "missing")
+		}
+		if strings.TrimSpace(check.Field) == "" {
+			add("gate_check_field", fieldPrefix+".field", "markdown.field check requires field", "non-empty markdown field", "missing")
+		}
+		if strings.TrimSpace(check.Equals) == "" && len(check.OneOf) == 0 {
+			add("gate_check_expected", fieldPrefix+".equals", "markdown.field check requires equals or one_of", "equals or one_of", "missing")
+		}
+		if strings.TrimSpace(check.Equals) != "" && len(check.OneOf) > 0 {
+			add("gate_check_expected", fieldPrefix+".equals", "markdown.field check must not mix equals and one_of", "equals or one_of", "both")
+		}
+	case "text.contains":
+		if strings.TrimSpace(check.Path) == "" {
+			add("gate_check_path", fieldPrefix+".path", "text.contains check requires path", "non-empty artifact path", "missing")
+		}
+		if strings.TrimSpace(check.Token) == "" {
+			add("gate_check_token", fieldPrefix+".token", "text.contains check requires token", "non-empty token", "missing")
+		}
+	case "text.contains_all":
+		if strings.TrimSpace(check.Path) == "" {
+			add("gate_check_path", fieldPrefix+".path", "text.contains_all check requires path", "non-empty artifact path", "missing")
+		}
+		if len(check.Tokens) == 0 {
+			add("gate_check_tokens", fieldPrefix+".tokens", "text.contains_all check requires tokens", "one or more tokens", "missing")
+		}
+	case "phase.status":
+		if strings.TrimSpace(check.Phase) == "" {
+			add("gate_check_phase", fieldPrefix+".phase", "phase.status check requires phase", "declared phase id", "missing")
+		} else if !phaseIDs[check.Phase] {
+			add("gate_check_phase", fieldPrefix+".phase", "phase.status check phase is not declared", "declared phase id", check.Phase)
+		}
+		if !knownPhaseStatus(check.Status) {
+			actual := check.Status
+			if actual == "" {
+				actual = "missing"
+			}
+			add("gate_check_status", fieldPrefix+".status", "phase.status check status is invalid", strings.Join(phaseStatuses, ","), actual)
+		}
+	default:
+		add("gate_check_type", fieldPrefix+".type", "workflow gate check type is unsupported", workflowGraphCheckTypes(), checkType)
+	}
+}
+
+func workflowGraphCheckTypes() string {
+	return "artifact.exists,markdown.field,text.contains,text.contains_all,phase.status"
 }
 
 func validateWorkflowGraphFeedbackIntake(feedback *WorkflowGraphFeedbackIntake, path string) []GraphIssue {

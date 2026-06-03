@@ -1935,7 +1935,16 @@ func TestGateCheckCLIJSONHumanAndPlanFailure(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	assertCLIErrorCode(t, runWithOptions([]string{"gate", "check", created.RunID, "bogus", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitUsage, "gate_unknown")
+	if code := runWithOptions([]string{"gate", "check", created.RunID, "bogus", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitSafety {
+		t.Fatalf("workflow gate check unknown exit = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var unknown gateCheckOutput
+	if err := json.Unmarshal(stdout.Bytes(), &unknown); err != nil {
+		t.Fatalf("decode blocked workflow gate check: %v\n%s", err, stdout.String())
+	}
+	if unknown.Status != project.GateStatusBlocked || !cliGateCheckStatus(unknown.Checks, "workflow_graph", project.GateStatusBlocked) {
+		t.Fatalf("unknown = %#v, want blocked workflow_graph check", unknown)
+	}
 	stdout.Reset()
 	stderr.Reset()
 	assertCLIErrorCode(t, runWithOptions([]string{"gate", "check", created.RunID, "   ", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}), stdout, stderr, ExitUsage, "gate_unknown")

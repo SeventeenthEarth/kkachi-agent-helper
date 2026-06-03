@@ -1556,9 +1556,9 @@ func parseGateCheckArgs(args []string) (string, string, *cliError) {
 		}
 		return "", "", &cliError{Code: "gate_check_arguments_required", Message: "gate check requires a run id and gate name", Hint: gateUsageHint(), ExitCode: ExitUsage, Field: "arguments", Expected: "gate check <run_id> <gate>", Actual: actual}
 	}
-	gate := args[2]
-	if !knownGate(gate) {
-		return "", "", &cliError{Code: "gate_unknown", Message: "gate is not defined", Hint: "Use one of: " + strings.Join(project.KnownGates(), ", ") + ".", ExitCode: ExitUsage, Field: "gate", Expected: strings.Join(project.KnownGates(), ","), Actual: gate}
+	gate := strings.TrimSpace(args[2])
+	if gate == "" {
+		return "", "", &cliError{Code: "gate_unknown", Message: "gate is empty", Hint: "Use a built-in gate or a gate declared in .kkachi-workflow.yaml.", ExitCode: ExitUsage, Field: "gate", Expected: "non-empty gate name", Actual: args[2]}
 	}
 	return args[1], gate, nil
 }

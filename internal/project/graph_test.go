@@ -124,6 +124,58 @@ func TestExplainWorkflowGraphNormalizesNestedArrays(t *testing.T) {
 	}
 }
 
+func TestValidateWorkflowGraphAcceptsDeclarativeGateChecks(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	writeWorkflowGraph(t, repo, minimalWorkflowGraph()+`gates:
+  - id: "custom-gate"
+    requires: ["plan"]
+    final_required: true
+    checks:
+      - type: "artifact.exists"
+        path: "final-report.md"
+      - type: "markdown.field"
+        path: "final-report.md"
+        field: "Status"
+        equals: "complete"
+      - type: "text.contains"
+        path: "final-report.md"
+        token: "Needle"
+      - type: "text.contains_all"
+        path: "final-report.md"
+        tokens: ["A", "B"]
+      - type: "phase.status"
+        phase: "plan"
+        status: "complete"
+`)
+
+	result := ValidateWorkflowGraph(root, GraphOptions{})
+	if result.Status != GraphStatusPass || len(result.Errors) != 0 {
+		t.Fatalf("validation = %#v, want pass", result)
+	}
+	explained := ExplainWorkflowGraph(root, GraphOptions{})
+	if len(explained.Gates) != 1 || !explained.Gates[0].FinalRequired || len(explained.Gates[0].Checks) != 5 {
+		t.Fatalf("gates = %#v, want final_required gate with five checks", explained.Gates)
+	}
+}
+
+func TestValidateWorkflowGraphRejectsUnsupportedDeclarativeGateCheck(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	writeWorkflowGraph(t, repo, minimalWorkflowGraph()+`gates:
+  - id: "custom-gate"
+    requires: ["final"]
+    checks:
+      - type: "regex.magic"
+        path: "final-report.md"
+`)
+
+	result := ValidateWorkflowGraph(root, GraphOptions{})
+	if result.Status != GraphStatusFail || !graphIssueNamed(result.Errors, "gate_check_type") {
+		t.Fatalf("validation = %#v, want unsupported gate_check_type failure", result)
+	}
+}
+
 func TestInitWorkflowGraphFromKHSDefault(t *testing.T) {
 	repo := initializedRepo(t)
 	root, _ := DiscoverRoot(repo)

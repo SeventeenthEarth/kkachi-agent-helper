@@ -87,10 +87,7 @@ func checkGateUnlocked(root Root, options GateCheckOptions) (GateCheckResult, er
 		options.Now = func() time.Time { return time.Now().UTC() }
 	}
 	gate := strings.TrimSpace(options.Gate)
-	definition, ok := gateRegistry[gate]
-	if !ok {
-		return GateCheckResult{}, unknownGateProblem(gate)
-	}
+	definition, builtIn := gateRegistry[gate]
 	metadata, metadataPath, err := ReadRunMetadata(root, options.RunID)
 	if err != nil {
 		return GateCheckResult{}, err
@@ -99,7 +96,12 @@ func checkGateUnlocked(root Root, options GateCheckOptions) (GateCheckResult, er
 		return GateCheckResult{}, err
 	}
 
-	result, err := checkGateResult(root, metadata, metadataPath.Relative, definition)
+	var result GateCheckResult
+	if builtIn {
+		result, err = checkGateResult(root, metadata, metadataPath.Relative, definition)
+	} else {
+		result, err = checkWorkflowGate(root, metadata, gate)
+	}
 	if err != nil {
 		return GateCheckResult{}, err
 	}
@@ -299,8 +301,16 @@ func gateResultFromChecks(runID string, gate string, checks []GateCheck) GateChe
 	status := GateStatusPass
 	missing := []string{}
 	for _, check := range checks {
-		if check.Status == GateStatusFail {
+		switch check.Status {
+		case GateStatusFail:
 			status = GateStatusFail
+			if check.Path != "" {
+				missing = appendUnique(missing, check.Path)
+			}
+		case GateStatusBlocked:
+			if status != GateStatusFail {
+				status = GateStatusBlocked
+			}
 			if check.Path != "" {
 				missing = appendUnique(missing, check.Path)
 			}

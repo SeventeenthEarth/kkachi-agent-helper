@@ -148,6 +148,8 @@ Graph source and evidence precedence is explicit. Applied `.kkachi-workflow.yaml
 
 KAH fails closed when graph-managed workflow support is required but `.kkachi-workflow.yaml` is missing, invalid, ambiguous, duplicated, or conflicts with KHS phase policy or run-local `phase-plan.yaml`; when direct manual edits lack validation/proposal/apply/audit evidence; when candidate graph changes affect gates, approvals, review policy, or dependencies without approval/audit evidence; or when KHS asks KAH to use imperative workflow-policy commands.
 
+Workflow graph gates are additive to built-in gates. Built-in gate names are evaluated first; otherwise `gate check <run_id> <gate_id>` falls back to a graph-declared gate with deterministic `checks`. Existing gates that declare only `id` and `requires` remain valid graph rows. A graph gate may set `final_required: true`, causing `gate final` to require that graph gate's current pass report and freshness. Supported check types are fixed: `artifact.exists`, `markdown.field`, `text.contains`, `text.contains_all`, and `phase.status`; no regex, expression language, command execution, or fallback policy is supported. Optional check `name`, `message`, and `hint` fields only shape the emitted gate report and do not change evaluation semantics.
+
 `EXTERNAL_FEEDBACK_INTAKE` graph policy is implemented for graph schema validation/projection, phase-plan feedback-bound validation, explicit stale-bound migration evidence, diagnostics, and capability activation evidence. When present, `.kkachi-workflow.yaml` must declare:
 
 ```yaml
