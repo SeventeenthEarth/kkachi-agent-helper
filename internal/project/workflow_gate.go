@@ -134,17 +134,15 @@ func evaluateWorkflowGateCheck(root Root, runID string, gateID string, index int
 		if !ok {
 			return failure
 		}
-		missing := []string{}
-		body := strings.ToLower(string(content))
-		for _, token := range check.Tokens {
-			if !strings.Contains(body, strings.ToLower(token)) {
-				missing = append(missing, token)
-			}
-		}
+		missing := missingTextTokens(content, check.Tokens)
 		if len(missing) == 0 {
 			return GateCheck{Name: name, Status: GateStatusPass, Path: path, Message: "workflow gate text tokens are present", Field: "tokens", Expected: strings.Join(check.Tokens, ","), Actual: "present"}
 		}
 		return GateCheck{Name: name, Status: GateStatusFail, Path: path, Message: workflowCheckMessage(check, "workflow gate text tokens are missing"), Hint: workflowCheckHint(check, "Add the configured tokens to the gate artifact or remove this check from the workflow."), Field: "tokens", Expected: strings.Join(check.Tokens, ","), Actual: "missing " + strings.Join(missing, ",")}
+	case "gitignore.contains_all":
+		return evaluateGitignoreContainsAllCheck(root, name, check)
+	case "codegraph.evidence":
+		return evaluateCodeGraphEvidenceCheck(root, runID, name, check)
 	case "phase.status":
 		plan, err := readPhasePlan(root, runID)
 		if err != nil {
@@ -162,6 +160,169 @@ func evaluateWorkflowGateCheck(root Root, runID string, gateID string, index int
 	default:
 		return GateCheck{Name: name, Status: GateStatusBlocked, Message: "workflow gate check type is unsupported", Hint: "Use a supported declarative workflow gate check type.", Field: "type", Expected: workflowGraphCheckTypes(), Actual: check.Type}
 	}
+}
+
+func evaluateGitignoreContainsAllCheck(root Root, name string, check WorkflowGraphCheck) GateCheck {
+	gitignorePath := strings.TrimSpace(check.Path)
+	if gitignorePath == "" {
+		gitignorePath = ".gitignore"
+	}
+	path, content, failure, ok := readWorkflowRepositoryFile(root, gitignorePath, name)
+	if !ok {
+		return failure
+	}
+	missing := missingGitignoreEntries(content, check.Tokens)
+	if len(missing) == 0 {
+		return GateCheck{Name: name, Status: GateStatusPass, Path: path, Message: "workflow gate gitignore entries are present", Field: "tokens", Expected: strings.Join(check.Tokens, ","), Actual: "present"}
+	}
+	return GateCheck{Name: name, Status: GateStatusFail, Path: path, Message: workflowCheckMessage(check, "workflow gate gitignore entries are missing"), Hint: workflowCheckHint(check, "Add the configured runtime/tool directories to .gitignore or remove this check from the workflow."), Field: "tokens", Expected: strings.Join(check.Tokens, ","), Actual: "missing " + strings.Join(missing, ",")}
+}
+
+func evaluateCodeGraphEvidenceCheck(root Root, runID string, name string, check WorkflowGraphCheck) GateCheck {
+	artifact := strings.TrimSpace(check.Path)
+	if artifact == "" {
+		artifact = "codegraph-evidence.md"
+	}
+	path, content, failure, ok := readWorkflowRunFile(root, runID, artifact, name)
+	if !ok {
+		return failure
+	}
+	fields := parseMarkdownFields(string(content))
+	status := strings.ToLower(strings.TrimSpace(fields["status"]))
+	allowedStatuses := check.OneOf
+	if len(allowedStatuses) == 0 {
+		allowedStatuses = []string{"complete", "degraded"}
+	}
+	if !containsFolded(allowedStatuses, status) {
+		actual := status
+		if actual == "" {
+			actual = "missing"
+		}
+		return GateCheck{Name: name, Status: GateStatusFail, Path: path, Message: "CodeGraph evidence status is not allowed", Hint: workflowCheckHint(check, "Record CodeGraph evidence with Status: complete, or explicitly configure accepted statuses for this workflow check."), Field: "status", Expected: strings.Join(allowedStatuses, ","), Actual: actual}
+	}
+	markers := check.Tokens
+	if len(markers) == 0 {
+		markers = []string{"codegraph index", "codegraph init -i", "codegraph unavailable", "codegraph deferred"}
+	}
+	if containsAnyTextToken(content, markers) {
+		return GateCheck{Name: name, Status: GateStatusPass, Path: path, Message: "CodeGraph workflow evidence is recorded", Field: "tokens", Expected: strings.Join(markers, ","), Actual: "present"}
+	}
+	return GateCheck{Name: name, Status: GateStatusFail, Path: path, Message: workflowCheckMessage(check, "CodeGraph workflow evidence marker is missing"), Hint: workflowCheckHint(check, "Record the CodeGraph command, deferred no-code bootstrap reason, or explicit unavailable/degraded reason in the evidence artifact."), Field: "tokens", Expected: strings.Join(markers, ","), Actual: "missing"}
+}
+
+func readWorkflowRunFile(root Root, runID string, artifact string, checkName string) (string, []byte, GateCheck, bool) {
+	if !runIDPattern.MatchString(runID) {
+		return "", nil, GateCheck{Name: checkName, Status: GateStatusFail, Message: "workflow run artifact path is invalid", Hint: "Use an active KAH run id before checking workflow gates.", Field: "run_id", Expected: "run-YYYYMMDDTHHMMSSZ-<12hex>", Actual: runID}, false
+	}
+	artifact = strings.TrimSpace(artifact)
+	artifactRel, err := normalizeRelativePath(artifact)
+	if err != nil {
+		return "", nil, GateCheck{Name: checkName, Status: GateStatusFail, Message: "workflow run artifact path is invalid", Hint: "Use a run-local path without absolute paths, root aliases, or parent-directory traversal.", Field: "path", Expected: "run-local relative path", Actual: err.Error()}, false
+	}
+	path, err := ResolveRelativePath(root, filepath.ToSlash(filepath.Join(RunRootPath, runID, artifactRel)))
+	if err != nil {
+		return "", nil, GateCheck{Name: checkName, Status: GateStatusFail, Message: "workflow run artifact path is invalid", Hint: "Use a run-local path without parent-directory traversal.", Field: "path", Expected: artifact, Actual: err.Error()}, false
+	}
+	return readWorkflowSafePath(path, checkName, "required workflow run artifact is missing", "Run artifact init, then record the configured workflow evidence.")
+}
+
+func readWorkflowRepositoryFile(root Root, relative string, checkName string) (string, []byte, GateCheck, bool) {
+	path, err := ResolveRelativePath(root, relative)
+	if err != nil {
+		return "", nil, GateCheck{Name: checkName, Status: GateStatusFail, Message: "workflow repository file path is invalid", Hint: "Use a repository-relative path in the workflow check.", Field: "path", Expected: relative, Actual: err.Error()}, false
+	}
+	return readWorkflowSafePath(path, checkName, "required workflow repository file is missing", "Create the configured repository file before checking this workflow gate.")
+}
+
+func readWorkflowSafePath(path SafePath, checkName string, missingMessage string, missingHint string) (string, []byte, GateCheck, bool) {
+	info, err := os.Lstat(path.Absolute)
+	if os.IsNotExist(err) {
+		return path.Relative, nil, GateCheck{Name: checkName, Status: GateStatusFail, Path: path.Relative, Message: missingMessage, Hint: missingHint, Field: "path", Expected: "existing regular file", Actual: "missing"}, false
+	}
+	if err != nil {
+		return path.Relative, nil, GateCheck{Name: checkName, Status: GateStatusFail, Path: path.Relative, Message: "cannot inspect workflow file", Hint: "Check repository permissions before checking workflow gates.", Field: "path", Expected: "inspectable regular file", Actual: err.Error()}, false
+	}
+	if !info.Mode().IsRegular() {
+		actual := "non-regular"
+		if info.IsDir() {
+			actual = "directory"
+		}
+		return path.Relative, nil, GateCheck{Name: checkName, Status: GateStatusFail, Path: path.Relative, Message: "workflow file must be a regular file", Hint: "Move the conflicting path or adjust the workflow check.", Field: "path", Expected: "regular file", Actual: actual}, false
+	}
+	content, err := os.ReadFile(path.Absolute)
+	if err != nil {
+		return path.Relative, nil, GateCheck{Name: checkName, Status: GateStatusFail, Path: path.Relative, Message: "cannot read workflow file", Hint: "Check repository permissions before checking workflow gates.", Field: "path", Expected: "readable file", Actual: err.Error()}, false
+	}
+	return path.Relative, content, GateCheck{}, true
+}
+
+func missingTextTokens(content []byte, tokens []string) []string {
+	missing := []string{}
+	body := strings.ToLower(string(content))
+	for _, token := range tokens {
+		if !strings.Contains(body, strings.ToLower(token)) {
+			missing = append(missing, token)
+		}
+	}
+	return missing
+}
+
+func containsAnyTextToken(content []byte, tokens []string) bool {
+	body := strings.ToLower(string(content))
+	for _, token := range tokens {
+		if strings.Contains(body, strings.ToLower(token)) {
+			return true
+		}
+	}
+	return false
+}
+
+func missingGitignoreEntries(content []byte, tokens []string) []string {
+	present := map[string]bool{}
+	for _, line := range strings.Split(string(content), "\n") {
+		entry := normalizeGitignoreEntry(line)
+		if entry != "" {
+			present[entry] = true
+		}
+	}
+	missing := []string{}
+	for _, token := range tokens {
+		if !gitignoreEntryPresent(present, token) {
+			missing = append(missing, token)
+		}
+	}
+	return missing
+}
+
+func normalizeGitignoreEntry(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.HasPrefix(value, "#") {
+		return ""
+	}
+	return strings.ReplaceAll(value, "\\", "/")
+}
+
+func gitignoreEntryPresent(present map[string]bool, expected string) bool {
+	expected = normalizeGitignoreEntry(expected)
+	if expected == "" {
+		return true
+	}
+	if present[expected] {
+		return true
+	}
+	if strings.HasSuffix(expected, "/") {
+		return present[strings.TrimSuffix(expected, "/")]
+	}
+	return present[expected+"/"]
+}
+
+func containsFolded(values []string, target string) bool {
+	for _, value := range values {
+		if strings.EqualFold(strings.TrimSpace(value), strings.TrimSpace(target)) {
+			return true
+		}
+	}
+	return false
 }
 
 func workflowCheckName(gateID string, index int, check WorkflowGraphCheck) string {

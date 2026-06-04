@@ -1300,6 +1300,63 @@ proposals:
 	}
 }
 
+func TestWorkflowGateSupportsCodeGraphAndGitignoreChecks(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	writeWorkflowGraph(t, repo, workflowGraphWithFeedbackIntake(`version: "workflow-graph/v1"
+graph_id: "graph-test"
+metadata:
+  project: "kkachi-test"
+  created_by: "human"
+  managed_by: "kah"
+phases:
+  - id: "final"
+    title: "Final"
+    owner_layer: "khs"
+    required: true
+gates:
+  - id: "codegraph-hygiene-required"
+    requires: ["final"]
+    checks:
+      - type: "codegraph.evidence"
+        name: "codegraph_evidence"
+        path: "codegraph-evidence.md"
+        one_of: ["complete"]
+        tokens: ["codegraph index", "codegraph init -i"]
+      - type: "gitignore.contains_all"
+        name: "runtime_dirs_ignored"
+        tokens: [".kkachi/", ".codegraph/", ".omx/", ".omc/", ".claude-octopus/"]
+proposals:
+  policy: "proposal-first"
+`))
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+		t.Fatalf("InitArtifacts() error = %v", err)
+	}
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "codegraph-evidence.md", "Status: complete\nCommand: codegraph index .\n")
+	mustWriteFile(t, filepath.Join(repo, ".gitignore"), []byte(".kkachi/\n.codegraph/\n.omx/\n.claude-octopus/\n"))
+
+	failed, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: "codegraph-hygiene-required", Now: testRunNow(5)})
+	if err != nil {
+		t.Fatalf("CheckGate(codegraph hygiene fail) error = %v", err)
+	}
+	if failed.Status != GateStatusFail || !gateCheckStatus(failed.Checks, "codegraph_evidence", GateStatusPass) || !gateCheckStatus(failed.Checks, "runtime_dirs_ignored", GateStatusFail) || !strings.Contains(failed.Checks[1].Actual, ".omc/") {
+		t.Fatalf("failed = %#v, want missing .omc/ gitignore failure", failed)
+	}
+
+	mustWriteFile(t, filepath.Join(repo, ".gitignore"), []byte(".kkachi/\n.codegraph/\n.omx/\n.omc/\n.claude-octopus/\n"))
+	passed, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: "codegraph-hygiene-required", Now: testRunNow(6)})
+	if err != nil {
+		t.Fatalf("CheckGate(codegraph hygiene pass) error = %v", err)
+	}
+	if passed.Status != GateStatusPass || !gateCheckStatus(passed.Checks, "codegraph_evidence", GateStatusPass) || !gateCheckStatus(passed.Checks, "runtime_dirs_ignored", GateStatusPass) {
+		t.Fatalf("passed = %#v, want codegraph evidence and gitignore pass", passed)
+	}
+}
+
 func TestCheckGateFinalFailsWhenPriorGateEvidenceChanges(t *testing.T) {
 	repo := initializedRepo(t)
 	root, _ := DiscoverRoot(repo)

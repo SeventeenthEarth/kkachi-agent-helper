@@ -2461,6 +2461,24 @@ func validateWorkflowGraphCheck(add func(string, string, string, string, string)
 		}
 		if len(check.Tokens) == 0 {
 			add("gate_check_tokens", fieldPrefix+".tokens", "text.contains_all check requires tokens", "one or more tokens", "missing")
+		} else if hasBlankString(check.Tokens) {
+			add("gate_check_tokens", fieldPrefix+".tokens", "text.contains_all check tokens must be non-empty", "non-empty tokens", "blank")
+		}
+	case "gitignore.contains_all":
+		if len(check.Tokens) == 0 {
+			add("gate_check_tokens", fieldPrefix+".tokens", "gitignore.contains_all check requires tokens", "one or more .gitignore entries", "missing")
+		} else if hasBlankString(check.Tokens) {
+			add("gate_check_tokens", fieldPrefix+".tokens", "gitignore.contains_all check tokens must be non-empty", "non-empty .gitignore entries", "blank")
+		}
+	case "codegraph.evidence":
+		if strings.TrimSpace(check.Equals) != "" {
+			add("gate_check_expected", fieldPrefix+".equals", "codegraph.evidence check does not support equals", "one_of statuses and/or tokens", "equals")
+		}
+		if hasBlankString(check.OneOf) {
+			add("gate_check_status", fieldPrefix+".one_of", "codegraph.evidence one_of statuses must be non-empty", "non-empty statuses", "blank")
+		}
+		if hasBlankString(check.Tokens) {
+			add("gate_check_tokens", fieldPrefix+".tokens", "codegraph.evidence marker tokens must be non-empty", "non-empty marker tokens", "blank")
 		}
 	case "phase.status":
 		if strings.TrimSpace(check.Phase) == "" {
@@ -2481,7 +2499,16 @@ func validateWorkflowGraphCheck(add func(string, string, string, string, string)
 }
 
 func workflowGraphCheckTypes() string {
-	return "artifact.exists,markdown.field,text.contains,text.contains_all,phase.status"
+	return "artifact.exists,markdown.field,text.contains,text.contains_all,gitignore.contains_all,codegraph.evidence,phase.status"
+}
+
+func hasBlankString(values []string) bool {
+	for _, value := range values {
+		if strings.TrimSpace(value) == "" {
+			return true
+		}
+	}
+	return false
 }
 
 func validateWorkflowGraphFeedbackIntake(feedback *WorkflowGraphFeedbackIntake, path string) []GraphIssue {

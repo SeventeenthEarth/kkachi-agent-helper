@@ -144,6 +144,12 @@ func TestValidateWorkflowGraphAcceptsDeclarativeGateChecks(t *testing.T) {
       - type: "text.contains_all"
         path: "final-report.md"
         tokens: ["A", "B"]
+      - type: "gitignore.contains_all"
+        tokens: [".kkachi/", ".codegraph/", ".omx/", ".omc/", ".claude-octopus/"]
+      - type: "codegraph.evidence"
+        path: "codegraph-evidence.md"
+        one_of: ["complete", "degraded"]
+        tokens: ["codegraph index", "codegraph init -i"]
       - type: "phase.status"
         phase: "plan"
         status: "complete"
@@ -154,8 +160,8 @@ func TestValidateWorkflowGraphAcceptsDeclarativeGateChecks(t *testing.T) {
 		t.Fatalf("validation = %#v, want pass", result)
 	}
 	explained := ExplainWorkflowGraph(root, GraphOptions{})
-	if len(explained.Gates) != 1 || !explained.Gates[0].FinalRequired || len(explained.Gates[0].Checks) != 5 {
-		t.Fatalf("gates = %#v, want final_required gate with five checks", explained.Gates)
+	if len(explained.Gates) != 1 || !explained.Gates[0].FinalRequired || len(explained.Gates[0].Checks) != 7 {
+		t.Fatalf("gates = %#v, want final_required gate with seven checks", explained.Gates)
 	}
 }
 
@@ -173,6 +179,22 @@ func TestValidateWorkflowGraphRejectsUnsupportedDeclarativeGateCheck(t *testing.
 	result := ValidateWorkflowGraph(root, GraphOptions{})
 	if result.Status != GraphStatusFail || !graphIssueNamed(result.Errors, "gate_check_type") {
 		t.Fatalf("validation = %#v, want unsupported gate_check_type failure", result)
+	}
+}
+
+func TestValidateWorkflowGraphRejectsBlankDeclarativeGateCheckValues(t *testing.T) {
+	issues := []GraphIssue{}
+	add := func(name string, field string, message string, expected string, actual string) {
+		issues = append(issues, GraphIssue{Name: name, Field: field, Message: message, Expected: expected, Actual: actual})
+	}
+	phases := map[string]bool{"final": true}
+
+	validateWorkflowGraphCheck(add, "custom-gate", WorkflowGraphCheck{Type: "text.contains_all", Path: "final-report.md", Tokens: []string{""}}, phases)
+	validateWorkflowGraphCheck(add, "custom-gate", WorkflowGraphCheck{Type: "gitignore.contains_all", Tokens: []string{".kkachi/", " "}}, phases)
+	validateWorkflowGraphCheck(add, "custom-gate", WorkflowGraphCheck{Type: "codegraph.evidence", OneOf: []string{""}, Tokens: []string{"codegraph index", ""}}, phases)
+
+	if !graphIssueNamed(issues, "gate_check_tokens") || !graphIssueNamed(issues, "gate_check_status") {
+		t.Fatalf("issues = %#v, want blank token/status failures", issues)
 	}
 }
 
