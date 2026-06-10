@@ -217,6 +217,29 @@ func TestArtifactManifestExecutionModes(t *testing.T) {
 	}
 }
 
+func TestArtifactManifestTokenEconomyArtifactRequiredOnlyForToken001(t *testing.T) {
+	tokenTask := tokenEconomyTaskID
+	otherTask := "token-002"
+	base := RunMetadata{
+		WorkPath:        "A_development_execution",
+		WorkMode:        "standard",
+		ExecutionMode:   "adapter_qa",
+		BackendEvidence: BackendEvidenceNotApplicable,
+	}
+	base.TaskID = &tokenTask
+	if got := ArtifactManifest(base); !containsString(got, tokenEconomyArtifact) {
+		t.Fatalf("ArtifactManifest(token-001) = %#v, missing %s", got, tokenEconomyArtifact)
+	}
+	base.TaskID = &otherTask
+	if got := ArtifactManifest(base); containsString(got, tokenEconomyArtifact) {
+		t.Fatalf("ArtifactManifest(token-002) = %#v, want no token-economy artifact", got)
+	}
+	base.TaskID = nil
+	if got := ArtifactManifest(base); containsString(got, tokenEconomyArtifact) {
+		t.Fatalf("ArtifactManifest(nil task) = %#v, want no token-economy artifact", got)
+	}
+}
+
 func containsString(values []string, target string) bool {
 	for _, value := range values {
 		if value == target {

@@ -3,7 +3,7 @@
 Date: 2026-06-09
 Owner: KAH deterministic helper layer
 Confirming role: Red `t_ba846dc4`, Orange `t_6d420a08`, and Gray `t_f5896baa` planning review accepted the original token-001 scope with no blocking findings; TOKEN-007 through TOKEN-010 / token-002 extension review accepted by Red `t_8726167f`, Orange `t_c037afad`, and focused Gray re-review `t_148f5ff0` after Gray `t_32211704` requested traceability fixes
-Status: accepted planning SOT for the KAH side of KAS token-economy work; no implementation, release, KAS install/update/uninstall, KAB activation, Hermes runtime change, profile mutation, or auth/token/gateway/provider/model mutation is authorized by this document alone
+Status: accepted SOT for the KAH side of KAS token-economy work; token-001 deterministic evidence gate is implemented; no release, KAS install/update/uninstall, KAB activation, Hermes runtime change, profile mutation, or auth/token/gateway/provider/model mutation is authorized by this document alone
 Authority level: accepted planning source of truth for future KAH mechanical evidence gates supporting KAS token-economy and English-output work
 Scope: `kkachi-agent-helper` roadmap, specs, schemas, gate/artifact/diagnostics planning, and future deterministic tests. KAS owns workflow policy, prompt contracts, lifecycle semantics, and operator-facing language; KAB owns backend bridge/session control; Hermes runtime remains stock.
 Related docs: `docs/README.md`, `docs/roadmap.md`, `docs/specs.md`, `docs/compatibility.md`, KAS `docs/sot/token-economy-and-agent-instruction-contract.md`
@@ -95,11 +95,11 @@ A future implementation PR is not complete until it provides:
 
 The roadmap registrations for this SOT are `token-001` and `token-002` under the `token` epic in `docs/roadmap.md`.
 
-`token-001` is a planned KAH implementation item for compact English output, artifact-first detail references, repo-local agent-instruction evidence, project KAS lifecycle evidence, and explicit mutation-approval evidence.
+`token-001` is an implemented KAH evidence gate for compact English output, artifact-first detail references, repo-local agent-instruction evidence, project KAS lifecycle evidence, and explicit mutation-approval evidence. The implementation is the `token-economy` gate over canonical `token-economy-evidence.json` with schema version `token001.v1`.
 
 `token-002` is a planned KAH implementation item for verification profile evidence, no-agent runner artifacts, reversible evidence summaries, compact review bundles, no-agent watcher terminal reports, and change-aware verification matrix evidence.
 
-This SOT only registers the items and constrains future implementation; it does not implement either gate.
+This SOT records token-001 as implemented by KAH and only registers/constrains token-002 for future implementation.
 
 ## 7. Promotion rule
 

@@ -77,15 +77,15 @@ func TestSchemaValidateInitializedProjectFiles(t *testing.T) {
 			}
 		})
 	}
-	if len(result.SchemaPaths) != 6 || !containsString(result.SchemaPaths, ".kkachi/schemas/config.schema.json") || !containsString(result.SchemaPaths, ".kkachi/schemas/bridge-session-snapshot.schema.json") {
-		t.Fatalf("schema paths = %#v, want six canonical schema paths including config and bridge-session-snapshot", result.SchemaPaths)
+	if len(result.SchemaPaths) != 7 || !containsString(result.SchemaPaths, ".kkachi/schemas/config.schema.json") || !containsString(result.SchemaPaths, ".kkachi/schemas/bridge-session-snapshot.schema.json") || !containsString(result.SchemaPaths, ".kkachi/schemas/token-economy-evidence.schema.json") {
+		t.Fatalf("schema paths = %#v, want seven canonical schema paths including config, bridge-session-snapshot, and token-economy-evidence", result.SchemaPaths)
 	}
 }
 
 func TestSchemaRegistryContracts(t *testing.T) {
 	names := CanonicalSchemaNames()
-	if len(names) != 6 {
-		t.Fatalf("CanonicalSchemaNames() = %#v, want six schemas", names)
+	if len(names) != 7 {
+		t.Fatalf("CanonicalSchemaNames() = %#v, want seven schemas", names)
 	}
 	names[0] = "mutated"
 	if CanonicalSchemaNames()[0] == "mutated" {
@@ -107,8 +107,12 @@ func TestSchemaRegistryContracts(t *testing.T) {
 			if object["type"] != "object" {
 				t.Fatalf("type = %#v, want object", object["type"])
 			}
-			if !schemaRequiresField(object, "version") {
-				t.Fatalf("required = %#v, want version required", object["required"])
+			requiredVersionField := "version"
+			if name == SchemaTokenEconomyEvidence {
+				requiredVersionField = "schema_version"
+			}
+			if !schemaRequiresField(object, requiredVersionField) {
+				t.Fatalf("required = %#v, want %s required", object["required"], requiredVersionField)
 			}
 			properties, ok := object["properties"].(map[string]any)
 			if !ok || len(properties) == 0 {
@@ -118,6 +122,29 @@ func TestSchemaRegistryContracts(t *testing.T) {
 				t.Fatalf("additionalProperties = %#v, want true", object["additionalProperties"])
 			}
 		})
+	}
+}
+
+func TestSchemaValidateTokenEconomyEvidence(t *testing.T) {
+	repo, root, runID := tokenEconomyRunWithArtifacts(t)
+	writeTokenEconomyReferencedArtifacts(t, repo, runID)
+	writeTokenEconomyEvidence(t, repo, runID, validTokenEconomyEvidence(t, repo, runID))
+
+	validated, err := ValidateSchemaFile(root, SchemaValidateOptions{File: tokenRunPath(runID, tokenEconomyArtifact), Schema: SchemaTokenEconomyEvidence})
+	if err != nil {
+		t.Fatalf("ValidateSchemaFile(token-economy) error = %v", err)
+	}
+	if validated.Status != "pass" || !schemaTestCheck(validated.Checks, "schema_version", "pass") || !schemaTestCheck(validated.Checks, "mutation_approval_evidence.status", "pass") {
+		t.Fatalf("validated = %#v, want token-economy schema pass", validated)
+	}
+
+	writeTokenEconomyEvidence(t, repo, runID, notApplicableTokenEconomyEvidence(runID, false))
+	failed, err := ValidateSchemaFile(root, SchemaValidateOptions{File: tokenRunPath(runID, tokenEconomyArtifact), Schema: ".kkachi/schemas/token-economy-evidence.schema.json"})
+	if err != nil {
+		t.Fatalf("ValidateSchemaFile(token-economy local schema) error = %v", err)
+	}
+	if failed.Status != "fail" || !schemaTestCheck(failed.Checks, "scope.reason", "fail") {
+		t.Fatalf("failed = %#v, want missing not_applicable reason failure", failed)
 	}
 }
 
@@ -196,7 +223,7 @@ func TestSchemaExportAllIdempotentAndConflictFailures(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExportSchemas(all unchanged) error = %v", err)
 	}
-	if len(unchanged.Schemas) != 6 || len(unchanged.Unchanged) != 6 || len(unchanged.Written) != 0 || unchanged.EventID != "" {
+	if len(unchanged.Schemas) != 7 || len(unchanged.Unchanged) != 7 || len(unchanged.Written) != 0 || unchanged.EventID != "" {
 		t.Fatalf("unchanged = %#v, want all schemas unchanged without event", unchanged)
 	}
 

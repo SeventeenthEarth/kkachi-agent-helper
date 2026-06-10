@@ -20,6 +20,7 @@ const (
 	SchemaRunMetadata           = "run-metadata"
 	SchemaSelectedCLI           = "selected-cli"
 	SchemaBridgeSessionSnapshot = "bridge-session-snapshot"
+	SchemaTokenEconomyEvidence  = "token-economy-evidence"
 
 	schemaExportedEventType = "schema.exported"
 
@@ -35,6 +36,7 @@ var canonicalSchemaNames = []string{
 	SchemaRunMetadata,
 	SchemaSelectedCLI,
 	SchemaBridgeSessionSnapshot,
+	SchemaTokenEconomyEvidence,
 }
 
 type SchemaCheck struct {
@@ -322,6 +324,8 @@ func validateContentAgainstSchema(schemaName, relative string, content []byte) [
 		return validateSelectedCLIObject(relative, object)
 	case SchemaBridgeSessionSnapshot:
 		return validateBridgeSnapshotObject(relative, object)
+	case SchemaTokenEconomyEvidence:
+		return validateTokenEconomyEvidenceSchema(relative, content)
 	default:
 		return []SchemaCheck{schemaPass("schema", relative, "schema is registered")}
 	}
@@ -685,6 +689,44 @@ func schemaObject(name string) map[string]any {
 			"state":           map[string]any{"type": "string", "minLength": 1},
 			"lifecycle_class": map[string]any{"type": "string", "minLength": 1},
 			"open_pendings":   map[string]any{"type": "integer", "minimum": 0},
+		}
+	case SchemaTokenEconomyEvidence:
+		object["description"] = "token-001 token-economy and English-output mechanical evidence artifact."
+		object["required"] = []string{"schema_version", "run_id", "task_id", "task_class", "scope", "compact_output_policy", "artifact_first_detail", "agent_instruction_evidence", "final_report_evidence", "kas_lifecycle_evidence", "mutation_approval_evidence"}
+		statusProperty := map[string]any{"enum": []string{GateStatusPass, GateStatusNotApplicable}}
+		refProperty := map[string]any{
+			"type":     "object",
+			"required": []string{"path"},
+			"properties": map[string]any{
+				"path":     map[string]any{"type": "string", "minLength": 1},
+				"checksum": map[string]any{"type": "string", "pattern": "^sha256:[0-9a-fA-F]{64}$"},
+				"markers":  map[string]any{"type": "array", "items": map[string]any{"type": "string", "minLength": 1}},
+			},
+			"additionalProperties": true,
+		}
+		sectionProperty := map[string]any{
+			"type":     "object",
+			"required": []string{"status"},
+			"properties": map[string]any{
+				"status":        statusProperty,
+				"reason":        map[string]any{"type": "string"},
+				"evidence_refs": map[string]any{"type": "array", "items": refProperty},
+				"detail_ref":    refProperty,
+			},
+			"additionalProperties": true,
+		}
+		object["properties"] = map[string]any{
+			"schema_version":             map[string]any{"const": tokenEconomySchemaVersion},
+			"run_id":                     map[string]any{"type": "string", "pattern": "^run-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$"},
+			"task_id":                    map[string]any{"const": tokenEconomyTaskID},
+			"task_class":                 map[string]any{"type": "string", "minLength": 1},
+			"scope":                      sectionProperty,
+			"compact_output_policy":      sectionProperty,
+			"artifact_first_detail":      sectionProperty,
+			"agent_instruction_evidence": sectionProperty,
+			"final_report_evidence":      sectionProperty,
+			"kas_lifecycle_evidence":     map[string]any{"type": "object"},
+			"mutation_approval_evidence": map[string]any{"type": "object"},
 		}
 	}
 	if _, ok := object["properties"]; !ok {

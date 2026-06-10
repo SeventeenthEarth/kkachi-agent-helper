@@ -2,7 +2,7 @@
 
 `kkachi-agent-helper` is the deterministic local CLI helper for Kkachi project state, run artifacts, locks, schemas, events, diagnostics, and project bootstrap scaffolding. It stays local-first and scriptable: it does not choose a backend, plan work, review code, call network services, or store secrets.
 
-The current implementation covers `corex-001` through `corex-005`, `runwf-001` through `runwf-004`, `gates-001` through `gates-005`, `packg-001` through `packg-004`, `pilot-001` through `pilot-005`, `align-001` through `align-008`, and `graph-001` through `graph-011`.
+The current implementation covers `corex-001` through `corex-005`, `runwf-001` through `runwf-004`, `gates-001` through `gates-005`, `packg-001` through `packg-004`, `pilot-001` through `pilot-005`, `align-001` through `align-008`, `graph-001` through `graph-012`, and `token-001`.
 
 ## Source of truth
 
@@ -108,7 +108,7 @@ kkachi-agent-helper --help
 kkachi-agent-helper [--json] <command>
 ```
 
-`capabilities --json` is the stable machine-readable command-surface report for KHS activation checks. It includes helper build info, the embedded project schema version, supported command groups, compatibility flags such as artifact mutation, phase-plan support, approval records, read-only workflow graph support, workflow graph init/apply/export/diagnostics support, explicit no-direct-YAML-fallback graph support, configurable feedback-intake graph support, and explicit omitted surfaces such as the removed `install` command.
+`capabilities --json` is the stable machine-readable command-surface report for KHS activation checks. It includes helper build info, the embedded project schema version, supported command groups, compatibility flags such as artifact mutation, phase-plan support, approval records, read-only workflow graph support, workflow graph init/apply/export/diagnostics support, explicit no-direct-YAML-fallback graph support, configurable feedback-intake graph support, token-economy evidence gate support, and explicit omitted surfaces such as the removed `install` command.
 
 Help is project-independent and exits `0`. Use `kkachi-agent-helper <command> --help`, supported subcommand topics such as `kkachi-agent-helper project init --help` and `kkachi-agent-helper run create --help`, or `kkachi-agent-helper help <command> [subcommand]` for required arguments, options, and JSON behavior. Implemented command groups have group help pages, including `schema`, `event`, `lock`, `phase-plan`, `approval`, and `graph`. `--json` with help emits structured help JSON; compatibility automation should still prefer `capabilities --json`.
 
@@ -163,11 +163,13 @@ kkachi-agent-helper artifact validate <run_id> [--gate intake] [--json]
 kkachi-agent-helper artifact write <run_id> <artifact_path> --from <repo-relative-file> [--json]
 kkachi-agent-helper artifact append <run_id> <artifact_path> --from <repo-relative-file> [--json]
 kkachi-agent-helper artifact set-status <run_id> <artifact_path> --status <pending|complete|not_applicable> [--reason <text>] [--json]
-kkachi-agent-helper gate check <run_id> <intake|sot|roadmap|plan|backend|implementation|review|verification|docs|final> [--json]
+kkachi-agent-helper gate check <run_id> <intake|sot|roadmap|plan|backend|implementation|review|verification|docs|final|token-economy> [--json]
 kkachi-agent-helper gate final <run_id> [--json]
 ```
 
 Backend JSON evidence is schema-owned. Write `selected-cli.json` and `bridge-session-snapshot.json` with `artifact write`; do not run generic `artifact set-status ... --status complete` on those files. KAH rejects that with `artifact_status_not_applicable` so fields such as `selected-cli.json.status=supported|degraded` are not overwritten. Use `gate check backend` to validate backend evidence completion.
+
+`gate check <run_id> token-economy` is the deterministic token-001 evidence gate. It is active only for `task_id=token-001`; other tasks emit `not_applicable`. For token-001 runs, it validates the canonical `token-economy-evidence.json` artifact with schema version `token001.v1`, repository-confined evidence refs, optional `sha256:<64hex>` checksums, and marker checks. The gate emits only `pass`, `fail`, or `not_applicable`; invalid or missing evidence fails closed with exit code `3`.
 
 Phase plans:
 
@@ -206,7 +208,7 @@ kkachi-agent-helper graph export --format mermaid|plantuml [--output <path>] [--
 Schemas and migrations:
 
 ```sh
-kkachi-agent-helper schema validate <file> --schema <config|status|event|run-metadata|selected-cli|bridge-session-snapshot> [--json]
+kkachi-agent-helper schema validate <file> --schema <config|status|event|run-metadata|selected-cli|bridge-session-snapshot|token-economy-evidence> [--json]
 kkachi-agent-helper schema export [--schema <name>|--all] [--dry-run] [--json]
 kkachi-agent-helper schema migrate --from <version> --to <version> [--dry-run] [--json]
 ```

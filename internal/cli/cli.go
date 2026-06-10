@@ -91,6 +91,7 @@ type compatibilityFlagsOutput struct {
 	WorkflowGraphDiagnostics                bool `json:"workflow_graph_diagnostics"`
 	WorkflowGraphNoDirectYAMLFallback       bool `json:"workflow_graph_no_direct_yaml_fallback"`
 	WorkflowGraphConfigurableFeedbackIntake bool `json:"workflow_graph_configurable_feedback_intake"`
+	TokenEconomyEvidenceGate                bool `json:"token_economy_evidence_gate"`
 	InstallCommand                          bool `json:"install_command"`
 }
 
@@ -1522,7 +1523,7 @@ func runGateCommand(args []string, root project.Root, stdout io.Writer, stderr i
 			return cliErr.ExitCode
 		}
 		writeGateCheckResult(stdout, result, jsonMode)
-		if result.Status == project.GateStatusPass {
+		if result.Status == project.GateStatusPass || result.Status == project.GateStatusNotApplicable {
 			return ExitOK
 		}
 		return ExitSafety
@@ -2274,6 +2275,7 @@ func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
 			WorkflowGraphDiagnostics:                true,
 			WorkflowGraphNoDirectYAMLFallback:       true,
 			WorkflowGraphConfigurableFeedbackIntake: true,
+			TokenEconomyEvidenceGate:                true,
 			InstallCommand:                          false,
 		},
 		DeprecatedSurfaces: []capabilitySurfaceOutput{},

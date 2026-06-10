@@ -672,7 +672,7 @@ func TestProjectInitCreatesStateAndRefusesOverwrite(t *testing.T) {
 	if payload.ProjectID == "" || payload.ProjectName == "" || payload.InitialEventID != "evt-000001" {
 		t.Fatalf("payload = %#v, want project identity and initial event", payload)
 	}
-	if len(payload.CreatedPaths) != 5 || len(payload.SchemaPaths) != 6 {
+	if len(payload.CreatedPaths) != 5 || len(payload.SchemaPaths) != 7 {
 		t.Fatalf("paths = %#v/%#v, want state and schema paths", payload.CreatedPaths, payload.SchemaPaths)
 	}
 

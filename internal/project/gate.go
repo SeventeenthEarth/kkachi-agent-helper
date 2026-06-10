@@ -17,11 +17,13 @@ const (
 	GateReview         = "review"
 	GateVerification   = "verification"
 	GateDocs           = "docs"
+	GateTokenEconomy   = "token-economy"
 	GateFinal          = "final"
 
-	GateStatusPass    = "pass"
-	GateStatusFail    = "fail"
-	GateStatusBlocked = "blocked"
+	GateStatusPass          = "pass"
+	GateStatusFail          = "fail"
+	GateStatusBlocked       = "blocked"
+	GateStatusNotApplicable = "not_applicable"
 )
 
 var gateDefinitions = []GateDefinition{
@@ -34,6 +36,7 @@ var gateDefinitions = []GateDefinition{
 	{Name: GateReview, Implemented: true, Description: "review and red-team evidence artifacts"},
 	{Name: GateVerification, Implemented: true, Description: "test-log and verification verdict artifacts"},
 	{Name: GateDocs, Implemented: true, Description: "docs-update decision artifacts"},
+	{Name: GateTokenEconomy, Implemented: true, Description: "token-001 token-economy and English-output evidence contract"},
 	{Name: GateFinal, Implemented: true, Description: "all required gates pass and final-report.md exists"},
 }
 
@@ -169,6 +172,8 @@ func checkGateResult(root Root, metadata RunMetadata, metadataRelative string, d
 		return checkVerificationGate(root, metadata)
 	case GateDocs:
 		return checkDocsGate(root, metadata)
+	case GateTokenEconomy:
+		return checkTokenEconomyGate(root, metadata)
 	case GateFinal:
 		return checkFinalGate(root, metadata, metadataRelative)
 	}
@@ -348,6 +353,8 @@ func gateEventType(status string) string {
 		return "gate.passed"
 	case GateStatusFail:
 		return "gate.failed"
+	case GateStatusNotApplicable:
+		return "gate.checked"
 	default:
 		return "gate.checked"
 	}

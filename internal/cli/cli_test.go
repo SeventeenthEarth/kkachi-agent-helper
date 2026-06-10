@@ -109,7 +109,7 @@ func TestCapabilitiesJSONOutputIsProjectIndependent(t *testing.T) {
 		t.Fatalf("project schema version = %q, want %q", payload.ProjectSchemaVersion, project.SchemaVersion)
 	}
 	flags := payload.CompatibilityFlags
-	if !flags.ProjectInit || !flags.RunLifecycle || !flags.ArtifactInit || !flags.ArtifactList || !flags.ArtifactValidate || !flags.ArtifactMutation || !flags.Gates || !flags.BackendEvidenceRequirements || !flags.DiagnosticsExport || !flags.PhasePlan || !flags.ApprovalRecords || !flags.WorkflowGraphReadonly || !flags.WorkflowGraphInit || !flags.WorkflowGraphApply || !flags.WorkflowGraphExport || !flags.WorkflowGraphDiagnostics || !flags.WorkflowGraphNoDirectYAMLFallback || !flags.WorkflowGraphConfigurableFeedbackIntake {
+	if !flags.ProjectInit || !flags.RunLifecycle || !flags.ArtifactInit || !flags.ArtifactList || !flags.ArtifactValidate || !flags.ArtifactMutation || !flags.Gates || !flags.BackendEvidenceRequirements || !flags.DiagnosticsExport || !flags.PhasePlan || !flags.ApprovalRecords || !flags.WorkflowGraphReadonly || !flags.WorkflowGraphInit || !flags.WorkflowGraphApply || !flags.WorkflowGraphExport || !flags.WorkflowGraphDiagnostics || !flags.WorkflowGraphNoDirectYAMLFallback || !flags.WorkflowGraphConfigurableFeedbackIntake || !flags.TokenEconomyEvidenceGate {
 		t.Fatalf("compatibility flags = %#v, want implemented surfaces enabled", flags)
 	}
 	if flags.InstallCommand {
@@ -449,7 +449,7 @@ func TestProjectInitJSONOutput(t *testing.T) {
 	if payload.InitialEventID != "evt-000001" {
 		t.Fatalf("initial event id = %q, want evt-000001", payload.InitialEventID)
 	}
-	if len(payload.CreatedPaths) != 5 || len(payload.SchemaPaths) != 6 {
+	if len(payload.CreatedPaths) != 5 || len(payload.SchemaPaths) != 7 {
 		t.Fatalf("payload paths = %#v/%#v, want created and schema paths", payload.CreatedPaths, payload.SchemaPaths)
 	}
 }
@@ -823,8 +823,8 @@ func TestSchemaExportCLIWritesAllIdempotentAndRespectsLocks(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &exported); err != nil {
 		t.Fatalf("schema export stdout is not JSON: %v\n%s", err, stdout.String())
 	}
-	if exported.EventID != "evt-000002" || len(exported.Schemas) != 6 || len(exported.Written) != 1 || exported.Written[0] != ".kkachi/schemas/config.schema.json" || len(exported.Unchanged) != 5 {
-		t.Fatalf("exported = %#v, want one refreshed config schema, five unchanged, and evt-000002", exported)
+	if exported.EventID != "evt-000002" || len(exported.Schemas) != 7 || len(exported.Written) != 1 || exported.Written[0] != ".kkachi/schemas/config.schema.json" || len(exported.Unchanged) != 6 {
+		t.Fatalf("exported = %#v, want one refreshed config schema, six unchanged, and evt-000002", exported)
 	}
 	if !strings.Contains(readCLIText(t, filepath.Join(repo, ".kkachi", "events.jsonl")), `"type":"schema.exported"`) {
 		t.Fatalf("events missing schema.exported")
@@ -839,7 +839,7 @@ func TestSchemaExportCLIWritesAllIdempotentAndRespectsLocks(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &exported); err != nil {
 		t.Fatalf("idempotent export stdout is not JSON: %v\n%s", err, stdout.String())
 	}
-	if exported.EventID != "" || len(exported.Written) != 0 || len(exported.Unchanged) != 6 {
+	if exported.EventID != "" || len(exported.Written) != 0 || len(exported.Unchanged) != 7 {
 		t.Fatalf("idempotent exported = %#v, want no writes and no event", exported)
 	}
 
@@ -2031,6 +2031,67 @@ func TestGateCheckBackendCLIJSONHumanAndStateUpdates(t *testing.T) {
 	}
 }
 
+func TestGateCheckTokenEconomyCLIExitSemantics(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions(runCreateArgs("Token gate", "--execution-mode", "adapter_qa", "--task-id", "token-001", "--json"), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("run create exit = %d stderr=%s", code, stderr.String())
+	}
+	var created runCreateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
+		t.Fatalf("decode create: %v\n%s", err, stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"artifact", "init", created.RunID, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("artifact init exit = %d stderr=%s", code, stderr.String())
+	}
+
+	notApplicable := map[string]any{
+		"schema_version": "token001.v1",
+		"run_id":         created.RunID,
+		"task_id":        "token-001",
+		"task_class":     "development",
+	}
+	for _, field := range []string{"scope", "compact_output_policy", "artifact_first_detail", "agent_instruction_evidence", "final_report_evidence", "kas_lifecycle_evidence", "mutation_approval_evidence"} {
+		notApplicable[field] = map[string]any{"status": "not_applicable", "reason": "Not applicable in this CLI fixture."}
+	}
+	writeCLIJSONArtifact(t, repo, created.RunID, "token-economy-evidence.json", notApplicable)
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"gate", "check", created.RunID, project.GateTokenEconomy, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("token n/a gate exit = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var na gateCheckOutput
+	if err := json.Unmarshal(stdout.Bytes(), &na); err != nil {
+		t.Fatalf("decode token n/a gate: %v\n%s", err, stdout.String())
+	}
+	if na.Status != project.GateStatusNotApplicable {
+		t.Fatalf("token gate = %#v, want not_applicable", na)
+	}
+
+	notApplicable["mutation_approval_evidence"] = map[string]any{"status": "pass", "mutation_scope": "broad", "claimed_broad_mutations": []string{"provider mutation"}}
+	writeCLIJSONArtifact(t, repo, created.RunID, "token-economy-evidence.json", notApplicable)
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"gate", "check", created.RunID, project.GateTokenEconomy, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitSafety {
+		t.Fatalf("token fail gate exit = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var failed gateCheckOutput
+	if err := json.Unmarshal(stdout.Bytes(), &failed); err != nil {
+		t.Fatalf("decode token failed gate: %v\n%s", err, stdout.String())
+	}
+	if failed.Status != project.GateStatusFail || !cliGateCheckStatus(failed.Checks, "mutation_approval_refs", project.GateStatusFail) {
+		t.Fatalf("failed = %#v, want mutation approval failure", failed)
+	}
+}
+
 func TestRunCreateBackendEvidenceRequiredProductionWrite(t *testing.T) {
 	repo := tempGitRepo(t)
 	var stdout bytes.Buffer
@@ -2367,7 +2428,7 @@ func TestDiagnosticsExportRedactsBundleAndWritesOutput(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &bundle); err != nil {
 		t.Fatalf("diagnostics stdout is not JSON: %v\n%s", err, stdout.String())
 	}
-	if bundle.RunID != created.RunID || len(bundle.SchemaVersions) != 6 || len(bundle.GateReports) == 0 || len(bundle.SelectedArtifacts) == 0 {
+	if bundle.RunID != created.RunID || len(bundle.SchemaVersions) != 7 || len(bundle.GateReports) == 0 || len(bundle.SelectedArtifacts) == 0 {
 		t.Fatalf("bundle = %#v, want run, schemas, gate reports, and selected artifacts", bundle)
 	}
 	if bundle.GraphCompatibility.SupportStatus != "supported" || bundle.GraphCompatibility.StateStatus != "missing" || !bundle.GraphCompatibility.NoDirectYAMLFallback {

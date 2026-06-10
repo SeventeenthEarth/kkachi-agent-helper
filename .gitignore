@@ -1,6 +1,7 @@
 .omx
 .omc
 .claude-octopus
+.claude/
 
 bin/
 
