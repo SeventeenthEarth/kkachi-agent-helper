@@ -325,7 +325,7 @@ func ListArtifacts(root Root, runID string) (ArtifactListResult, error) {
 
 func ArtifactManifest(metadata RunMetadata) []string {
 	required := []string{"intake-classification.md", "acceptance-criteria.md", "test-log.md", "verification.md", "docs-update.md", "final-report.md"}
-	if metadata.TaskID != nil && strings.TrimSpace(*metadata.TaskID) == "token-001" {
+	if metadata.TaskID != nil && (strings.TrimSpace(*metadata.TaskID) == "token-001" || strings.TrimSpace(*metadata.TaskID) == "token-002") {
 		required = append(required, "token-economy-evidence.json")
 	}
 	if metadata.WorkPath == "A_development_execution" {

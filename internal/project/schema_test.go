@@ -138,6 +138,17 @@ func TestSchemaValidateTokenEconomyEvidence(t *testing.T) {
 		t.Fatalf("validated = %#v, want token-economy schema pass", validated)
 	}
 
+	repo2, root2, runID2 := token002RunWithArtifacts(t)
+	writeToken002ReferencedArtifacts(t, repo2, runID2)
+	writeTokenEconomyEvidence(t, repo2, runID2, validToken002EconomyEvidence(t, repo2, runID2))
+	token002Validated, err := ValidateSchemaFile(root2, SchemaValidateOptions{File: tokenRunPath(runID2, tokenEconomyArtifact), Schema: SchemaTokenEconomyEvidence})
+	if err != nil {
+		t.Fatalf("ValidateSchemaFile(token-economy token-002) error = %v", err)
+	}
+	if token002Validated.Status != "pass" || !schemaTestCheck(token002Validated.Checks, "verification_profile_evidence.status", "pass") || !schemaTestCheck(token002Validated.Checks, "change_verification_matrix_evidence.status", "pass") {
+		t.Fatalf("token002Validated = %#v, want token-002 schema pass", token002Validated)
+	}
+
 	writeTokenEconomyEvidence(t, repo, runID, notApplicableTokenEconomyEvidence(runID, false))
 	failed, err := ValidateSchemaFile(root, SchemaValidateOptions{File: tokenRunPath(runID, tokenEconomyArtifact), Schema: ".kkachi/schemas/token-economy-evidence.schema.json"})
 	if err != nil {

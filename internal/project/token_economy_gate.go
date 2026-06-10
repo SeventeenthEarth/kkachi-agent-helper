@@ -11,9 +11,12 @@ import (
 )
 
 const (
-	tokenEconomyArtifact      = "token-economy-evidence.json"
-	tokenEconomySchemaVersion = "token001.v1"
-	tokenEconomyTaskID        = "token-001"
+	tokenEconomyArtifact                = "token-economy-evidence.json"
+	tokenEconomySchemaVersion           = "token001.v1"
+	tokenEconomyTaskID                  = "token-001"
+	tokenEconomyToken002SchemaVersion   = "token002.v1"
+	tokenEconomyToken002TaskID          = "token-002"
+	tokenEconomySupportedSchemaVersions = "token001.v1,token002.v1"
 )
 
 var tokenEconomyChecksumPattern = regexp.MustCompile(`^sha256:[0-9a-fA-F]{64}$`)
@@ -67,8 +70,9 @@ type tokenMutationEvidence struct {
 }
 
 func checkTokenEconomyGate(root Root, metadata RunMetadata) (GateCheckResult, error) {
-	if metadata.TaskID == nil || strings.TrimSpace(*metadata.TaskID) != tokenEconomyTaskID {
-		check := GateCheck{Name: "token_task_scope", Status: GateStatusNotApplicable, Message: "token-economy evidence is only required for token-001 runs", Field: "task_id", Expected: tokenEconomyTaskID, Actual: metadataTaskID(metadata)}
+	taskID := metadataTaskID(metadata)
+	if taskID != tokenEconomyTaskID && taskID != tokenEconomyToken002TaskID {
+		check := GateCheck{Name: "token_task_scope", Status: GateStatusNotApplicable, Message: "token-economy evidence is only required for token-001 or token-002 runs", Field: "task_id", Expected: tokenEconomyTaskID + " or " + tokenEconomyToken002TaskID, Actual: taskID}
 		return GateCheckResult{RunID: metadata.RunID, Gate: GateTokenEconomy, Status: GateStatusNotApplicable, Checks: []GateCheck{check}}, nil
 	}
 
@@ -79,7 +83,7 @@ func checkTokenEconomyGate(root Root, metadata RunMetadata) (GateCheckResult, er
 	}
 	info, err := os.Lstat(path.Absolute)
 	if os.IsNotExist(err) {
-		check := GateCheck{Name: "token_economy_artifact", Status: GateStatusFail, Path: path.Relative, Message: "required token-economy evidence artifact is missing", Hint: "Write token-economy-evidence.json for token-001 before checking the gate.", Field: "path", Expected: "existing regular file", Actual: "missing"}
+		check := GateCheck{Name: "token_economy_artifact", Status: GateStatusFail, Path: path.Relative, Message: "required token-economy evidence artifact is missing", Hint: "Write token-economy-evidence.json for the token task before checking the gate.", Field: "path", Expected: "existing regular file", Actual: "missing"}
 		return gateResultFromChecks(metadata.RunID, GateTokenEconomy, []GateCheck{check}), nil
 	}
 	if err != nil {
@@ -111,6 +115,14 @@ func validateTokenEconomyEvidence(root Root, metadata RunMetadata, relative stri
 		}
 		return append(checks, GateCheck{Name: "token_economy_json", Status: GateStatusFail, Path: relative, Message: "token-economy evidence is malformed JSON", Hint: "Write token-economy-evidence.json as a JSON object.", Field: "json", Expected: "JSON object", Actual: actual})
 	}
+	if metadataTaskID(metadata) == tokenEconomyToken002TaskID {
+		return append(checks, validateToken002EconomyEvidence(root, metadata, relative, content, raw)...)
+	}
+	return append(checks, validateToken001EconomyEvidence(root, metadata, relative, content, raw)...)
+}
+
+func validateToken001EconomyEvidence(root Root, metadata RunMetadata, relative string, content []byte, raw map[string]any) []GateCheck {
+	checks := []GateCheck{}
 	checks = append(checks, rejectToken002OnlyFields(relative, raw)...)
 
 	var evidence tokenEconomyEvidence
@@ -386,6 +398,22 @@ func validateTokenEconomyEvidenceSchema(relative string, content []byte) []Schem
 		}
 		return []SchemaCheck{schemaFail("json", relative, "file is not valid token-economy JSON", "Fix the file so it contains one JSON object before validating again.", "json", "JSON object", actual)}
 	}
+	schemaVersion, _ := raw["schema_version"].(string)
+	switch schemaVersion {
+	case tokenEconomySchemaVersion:
+		return validateToken001EconomyEvidenceSchema(relative, raw)
+	case tokenEconomyToken002SchemaVersion:
+		return validateToken002EconomyEvidenceSchema(relative, raw)
+	default:
+		actual := schemaVersion
+		if strings.TrimSpace(actual) == "" {
+			actual = "missing"
+		}
+		return []SchemaCheck{schemaFail("schema_version", relative, "token-economy schema version is unsupported", "Use an explicitly supported token-economy schema version.", "schema_version", tokenEconomySupportedSchemaVersions, actual)}
+	}
+}
+
+func validateToken001EconomyEvidenceSchema(relative string, raw map[string]any) []SchemaCheck {
 	var evidence tokenEconomyEvidence
 	_ = mapToStruct(raw, &evidence)
 	checks := []SchemaCheck{}

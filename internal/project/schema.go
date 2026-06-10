@@ -691,7 +691,7 @@ func schemaObject(name string) map[string]any {
 			"open_pendings":   map[string]any{"type": "integer", "minimum": 0},
 		}
 	case SchemaTokenEconomyEvidence:
-		object["description"] = "token-001 token-economy and English-output mechanical evidence artifact."
+		object["description"] = "token-001/token-002 token-economy and English-output mechanical evidence artifact."
 		object["required"] = []string{"schema_version", "run_id", "task_id", "task_class", "scope", "compact_output_policy", "artifact_first_detail", "agent_instruction_evidence", "final_report_evidence", "kas_lifecycle_evidence", "mutation_approval_evidence"}
 		statusProperty := map[string]any{"enum": []string{GateStatusPass, GateStatusNotApplicable}}
 		refProperty := map[string]any{

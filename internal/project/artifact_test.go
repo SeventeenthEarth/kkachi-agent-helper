@@ -217,22 +217,27 @@ func TestArtifactManifestExecutionModes(t *testing.T) {
 	}
 }
 
-func TestArtifactManifestTokenEconomyArtifactRequiredOnlyForToken001(t *testing.T) {
-	tokenTask := tokenEconomyTaskID
-	otherTask := "token-002"
+func TestArtifactManifestTokenEconomyArtifactRequiredForSupportedTokenTasks(t *testing.T) {
+	token001Task := tokenEconomyTaskID
+	token002Task := tokenEconomyToken002TaskID
+	otherTask := "token-003"
 	base := RunMetadata{
 		WorkPath:        "A_development_execution",
 		WorkMode:        "standard",
 		ExecutionMode:   "adapter_qa",
 		BackendEvidence: BackendEvidenceNotApplicable,
 	}
-	base.TaskID = &tokenTask
+	base.TaskID = &token001Task
 	if got := ArtifactManifest(base); !containsString(got, tokenEconomyArtifact) {
 		t.Fatalf("ArtifactManifest(token-001) = %#v, missing %s", got, tokenEconomyArtifact)
 	}
+	base.TaskID = &token002Task
+	if got := ArtifactManifest(base); !containsString(got, tokenEconomyArtifact) {
+		t.Fatalf("ArtifactManifest(token-002) = %#v, missing %s", got, tokenEconomyArtifact)
+	}
 	base.TaskID = &otherTask
 	if got := ArtifactManifest(base); containsString(got, tokenEconomyArtifact) {
-		t.Fatalf("ArtifactManifest(token-002) = %#v, want no token-economy artifact", got)
+		t.Fatalf("ArtifactManifest(token-003) = %#v, want no token-economy artifact", got)
 	}
 	base.TaskID = nil
 	if got := ArtifactManifest(base); containsString(got, tokenEconomyArtifact) {

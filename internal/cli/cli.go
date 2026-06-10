@@ -92,6 +92,7 @@ type compatibilityFlagsOutput struct {
 	WorkflowGraphNoDirectYAMLFallback       bool `json:"workflow_graph_no_direct_yaml_fallback"`
 	WorkflowGraphConfigurableFeedbackIntake bool `json:"workflow_graph_configurable_feedback_intake"`
 	TokenEconomyEvidenceGate                bool `json:"token_economy_evidence_gate"`
+	TokenEconomyToken002EvidenceGate        bool `json:"token_economy_token002_evidence_gate"`
 	InstallCommand                          bool `json:"install_command"`
 }
 
@@ -2276,6 +2277,7 @@ func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
 			WorkflowGraphNoDirectYAMLFallback:       true,
 			WorkflowGraphConfigurableFeedbackIntake: true,
 			TokenEconomyEvidenceGate:                true,
+			TokenEconomyToken002EvidenceGate:        true,
 			InstallCommand:                          false,
 		},
 		DeprecatedSurfaces: []capabilitySurfaceOutput{},
