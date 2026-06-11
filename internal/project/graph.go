@@ -24,27 +24,43 @@ const (
 	GraphStatusPass = "pass"
 	GraphStatusFail = "fail"
 
-	graphEffectiveSourceProject = "project_file"
-	graphNextActionValid        = "Graph is valid; KHS may use this read-only evidence."
-	graphNextActionRepair       = "Repair .kkachi-workflow.yaml, then rerun graph validate."
-	graphNextActionDiffReady    = "Review the semantic diff; record a proposal before applying graph changes."
-	graphNextActionProposal     = "Record an approval or audit evidence reference, then run graph apply --approval <evidence-ref>; proposal storage does not apply graph changes."
-	graphNextActionInitialized  = "Graph is initialized; run graph validate or graph explain for read-only evidence."
-	graphNextActionApplied      = "Graph proposal applied; run graph validate or graph explain for updated evidence."
-	graphNextActionExported     = "Graph diagram exported as a non-authoritative generated artifact; do not use it as workflow graph source of truth."
-	graphInitEventType          = "graph.initialized"
-	graphProposalEventType      = "graph.proposal_recorded"
-	graphApplyEventType         = "graph.applied"
-	graphProposalDir            = ".kkachi/graph/proposals"
-	graphTemplateKHSDefault     = "khs-default"
-	graphTemplateSourceBuiltin  = "built_in"
-	graphTemplateSourcePath     = "path"
-	graphExportFormatMermaid    = "mermaid"
-	graphExportFormatPlantUML   = "plantuml"
-	graphFeedbackIntakePolicy   = "EXTERNAL_FEEDBACK_INTAKE"
-	graphFeedbackIntakeSchema   = "external-feedback-intake/v1"
-	graphIssueGraphFile         = "graph_file"
-	graphIssueActualMissing     = "missing"
+	graphEffectiveSourceProject  = "project_file"
+	graphNextActionValid         = "Graph is valid; KHS may use this read-only evidence."
+	graphNextActionRepair        = "Repair .kkachi-workflow.yaml, then rerun graph validate."
+	graphNextActionDiffReady     = "Review the semantic diff; record a proposal before applying graph changes."
+	graphNextActionProposal      = "Record an approval or audit evidence reference, then run graph apply --approval <evidence-ref>; proposal storage does not apply graph changes."
+	graphNextActionInitialized   = "Graph is initialized; run graph validate or graph explain for read-only evidence."
+	graphNextActionApplied       = "Graph proposal applied; run graph validate or graph explain for updated evidence."
+	graphNextActionExported      = "Graph diagram exported as a non-authoritative generated artifact; do not use it as workflow graph source of truth."
+	graphInitEventType           = "graph.initialized"
+	graphProposalEventType       = "graph.proposal_recorded"
+	graphApplyEventType          = "graph.applied"
+	graphProposalDir             = ".kkachi/graph/proposals"
+	graphTemplateKHSDefault      = "khs-default"
+	graphTemplateSourceBuiltin   = "built_in"
+	graphTemplateSourcePath      = "path"
+	graphExportFormatMermaid     = "mermaid"
+	graphExportFormatPlantUML    = "plantuml"
+	graphFeedbackIntakePolicy    = "EXTERNAL_FEEDBACK_INTAKE"
+	graphFeedbackIntakeSchema    = "external-feedback-intake/v1"
+	graphIssueGraphFile          = "graph_file"
+	graphIssueActualMissing      = "missing"
+	GraphReasonGraphMissing      = "graph_missing"
+	GraphReasonGraphValid        = "graph_valid"
+	GraphReasonInvalidSchema     = "graph_invalid_schema"
+	GraphReasonParseError        = "graph_parse_error"
+	GraphReasonSourceViolation   = "graph_source_precedence_violation"
+	GraphReasonChecksumMismatch  = "graph_checksum_mismatch"
+	GraphReasonAuditMissing      = "graph_audit_missing"
+	GraphReasonFeedbackMissing   = "graph_feedback_intake_missing"
+	GraphReasonFeedbackStale     = "graph_feedback_intake_stale_bounds"
+	GraphReasonFeedbackInvalid   = "graph_feedback_intake_invalid"
+	GraphReasonManualUnverified  = "graph_manual_edit_unverified"
+	GraphReasonPhaseConflict     = "graph_conflicts_with_phase_plan"
+	GraphReasonApplyApproval     = "graph_apply_requires_approval"
+	GraphReasonRepairSupported   = "graph_repair_candidate_supported"
+	GraphReasonRepairUnsupported = "graph_repair_candidate_unsupported"
+	GraphReasonForbiddenFallback = "forbidden_fallback_source_detected"
 )
 
 var graphProposalIDPattern = regexp.MustCompile(`^gprop-(\d{6})\.json$`)
@@ -99,6 +115,7 @@ type GraphValidationResult struct {
 	Checksum        string                       `json:"checksum"`
 	EffectiveSource string                       `json:"effective_source"`
 	FeedbackIntake  *WorkflowGraphFeedbackIntake `json:"feedback_intake,omitempty"`
+	ReasonCodes     []string                     `json:"reason_codes"`
 	Errors          []GraphIssue                 `json:"errors"`
 	Warnings        []GraphIssue                 `json:"warnings"`
 	Conflicts       []GraphIssue                 `json:"conflicts"`
@@ -116,6 +133,7 @@ type GraphExplanationResult struct {
 	ApprovalRequirements []WorkflowGraphApproval      `json:"approval_requirements"`
 	FeedbackIntake       *WorkflowGraphFeedbackIntake `json:"feedback_intake,omitempty"`
 	PendingProposals     []string                     `json:"pending_proposals"`
+	ReasonCodes          []string                     `json:"reason_codes"`
 	ValidationSummary    GraphValidationResult        `json:"validation_summary"`
 	NextAction           string                       `json:"next_action"`
 }
@@ -387,6 +405,7 @@ func ExplainWorkflowGraph(root Root, options GraphOptions) GraphExplanationResul
 		Gates:                []WorkflowGraphGate{},
 		ApprovalRequirements: []WorkflowGraphApproval{},
 		PendingProposals:     []string{},
+		ReasonCodes:          loaded.validation.ReasonCodes,
 		ValidationSummary:    loaded.validation,
 		NextAction:           loaded.validation.NextAction,
 	}
@@ -1635,7 +1654,7 @@ func loadWorkflowGraph(root Root, options GraphOptions) loadedWorkflowGraph {
 	}
 	return loadedWorkflowGraph{
 		graph: doc.graph,
-		validation: GraphValidationResult{
+		validation: withGraphValidationReasonCodes(GraphValidationResult{
 			SchemaVersion:   WorkflowGraphSchemaVersion,
 			Status:          status,
 			File:            path.Relative,
@@ -1646,7 +1665,7 @@ func loadWorkflowGraph(root Root, options GraphOptions) loadedWorkflowGraph {
 			Warnings:        []GraphIssue{},
 			Conflicts:       []GraphIssue{},
 			NextAction:      nextAction,
-		},
+		}),
 	}
 }
 
@@ -1701,7 +1720,7 @@ func isGeneratedDiagramPath(path string) bool {
 }
 
 func failedGraphValidation(file string, errors []GraphIssue) GraphValidationResult {
-	return GraphValidationResult{
+	return withGraphValidationReasonCodes(GraphValidationResult{
 		SchemaVersion:   WorkflowGraphSchemaVersion,
 		Status:          GraphStatusFail,
 		File:            file,
@@ -1711,6 +1730,99 @@ func failedGraphValidation(file string, errors []GraphIssue) GraphValidationResu
 		Warnings:        []GraphIssue{},
 		Conflicts:       []GraphIssue{},
 		NextAction:      graphNextActionRepair,
+	})
+}
+
+func withGraphValidationReasonCodes(validation GraphValidationResult) GraphValidationResult {
+	validation.ReasonCodes = graphValidationReasonCodes(validation)
+	return validation
+}
+
+func graphValidationReasonCodes(validation GraphValidationResult) []string {
+	collector := map[string]bool{}
+	add := func(code string) {
+		if strings.TrimSpace(code) != "" {
+			collector[code] = true
+		}
+	}
+	if validation.Status == GraphStatusPass {
+		add(GraphReasonGraphValid)
+	} else if graphValidationOnlyFeedbackStaleBounds(validation) {
+		add(GraphReasonRepairSupported)
+	} else {
+		add(GraphReasonRepairUnsupported)
+	}
+	for _, issue := range append(append([]GraphIssue{}, validation.Errors...), validation.Conflicts...) {
+		for _, code := range graphIssueReasonCodes(issue) {
+			add(code)
+		}
+	}
+	for _, issue := range validation.Warnings {
+		for _, code := range graphIssueReasonCodes(issue) {
+			add(code)
+		}
+	}
+	if len(collector) == 0 {
+		return []string{}
+	}
+	codes := make([]string, 0, len(collector))
+	for code := range collector {
+		codes = append(codes, code)
+	}
+	sort.Strings(codes)
+	return codes
+}
+
+func mergeGraphReasonCodes(groups ...[]string) []string {
+	collector := map[string]bool{}
+	for _, group := range groups {
+		for _, code := range group {
+			if strings.TrimSpace(code) != "" {
+				collector[code] = true
+			}
+		}
+	}
+	if len(collector) == 0 {
+		return []string{}
+	}
+	codes := make([]string, 0, len(collector))
+	for code := range collector {
+		codes = append(codes, code)
+	}
+	sort.Strings(codes)
+	return codes
+}
+
+func graphIssueReasonCodes(issue GraphIssue) []string {
+	switch issue.Name {
+	case graphIssueGraphFile:
+		if issue.Actual == graphIssueActualMissing {
+			return []string{GraphReasonGraphMissing}
+		}
+		return []string{GraphReasonInvalidSchema}
+	case "graph_source":
+		return []string{GraphReasonSourceViolation, GraphReasonForbiddenFallback}
+	case "graph_yaml":
+		return []string{GraphReasonParseError}
+	case "feedback_intake_stale_bounds":
+		return []string{GraphReasonFeedbackStale}
+	case "feedback_intake_policy", "feedback_intake_schema_version", "feedback_intake_min_rounds", "feedback_intake_max_rounds", "feedback_intake_required_rounds", "feedback_intake_optional_rounds", "feedback_intake_round_bounds", "feedback_intake_rounds_conflict", "feedback_intake_round_range", "feedback_intake_duplicate_round":
+		if issue.Actual == graphIssueActualMissing {
+			return []string{GraphReasonFeedbackMissing}
+		}
+		return []string{GraphReasonFeedbackInvalid}
+	case "graph_base_checksum_mismatch":
+		return []string{GraphReasonChecksumMismatch}
+	case "graph_audit_missing":
+		return []string{GraphReasonAuditMissing}
+	case "graph_manual_edit_unverified":
+		return []string{GraphReasonManualUnverified}
+	case "graph_phase_plan_conflict":
+		return []string{GraphReasonPhaseConflict}
+	case "graph_apply_approval_required":
+		return []string{GraphReasonApplyApproval}
+	default:
+		return []string{GraphReasonInvalidSchema}
 	}
 }
 

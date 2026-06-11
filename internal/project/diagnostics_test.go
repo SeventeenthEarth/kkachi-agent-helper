@@ -59,11 +59,22 @@ func TestExportDiagnosticsProjectLevelWhenNoRunAndOutputOverwriteRefused(t *test
 	if bundle.GraphCompatibility.Validation.Status != GraphStatusFail || !graphValidationMissing(bundle.GraphCompatibility.Validation) {
 		t.Fatalf("graph validation = %#v, want missing graph validation evidence", bundle.GraphCompatibility.Validation)
 	}
+	if !graphStringSliceContains(bundle.GraphCompatibility.ReasonCodes, GraphReasonGraphMissing) || !graphStringSliceContains(bundle.GraphCompatibility.Validation.ReasonCodes, GraphReasonGraphMissing) {
+		t.Fatalf("graph compatibility reason codes = top:%#v validation:%#v, want graph_missing", bundle.GraphCompatibility.ReasonCodes, bundle.GraphCompatibility.Validation.ReasonCodes)
+	}
 	if bundle.GraphCompatibility.FeedbackIntake.Status != "missing" || len(bundle.GraphCompatibility.FeedbackIntake.Issues) == 0 {
 		t.Fatalf("feedback intake diagnostics = %#v, want missing graph evidence", bundle.GraphCompatibility.FeedbackIntake)
 	}
+	if !graphStringSliceContains(bundle.GraphCompatibility.FeedbackIntake.ReasonCodes, GraphReasonFeedbackMissing) {
+		t.Fatalf("feedback intake reason codes = %#v, want graph_feedback_intake_missing", bundle.GraphCompatibility.FeedbackIntake.ReasonCodes)
+	}
 	if len(bundle.GraphCompatibility.ForbiddenFallbackSources) != 5 {
 		t.Fatalf("forbidden fallback sources = %#v, want deterministic source list", bundle.GraphCompatibility.ForbiddenFallbackSources)
+	}
+	for _, source := range bundle.GraphCompatibility.ForbiddenFallbackSources {
+		if source.ReasonCode != GraphReasonForbiddenFallback {
+			t.Fatalf("forbidden fallback source = %#v, want forbidden fallback reason code", source)
+		}
 	}
 
 	outputPath := filepath.Join(repo, "diagnostics", "bundle.json")
@@ -152,6 +163,9 @@ func TestExportDiagnosticsReportsGraphCompatibilityState(t *testing.T) {
 	if graph.Validation.Status != GraphStatusPass || graph.Validation.File != WorkflowGraphDefaultPath || graph.Validation.Checksum == "" {
 		t.Fatalf("graph validation = %#v, want passing default graph evidence", graph.Validation)
 	}
+	if !graphStringSliceContains(graph.ReasonCodes, GraphReasonGraphValid) || !graphStringSliceContains(graph.ReasonCodes, GraphReasonFeedbackMissing) {
+		t.Fatalf("graph reason codes = %#v, want graph_valid and feedback missing support facts", graph.ReasonCodes)
+	}
 	if graph.FeedbackIntake.Status != "missing" || graph.FeedbackIntake.EffectiveBounds != nil || !strings.Contains(graph.FeedbackIntake.NextAction, "Fail closed") {
 		t.Fatalf("feedback intake = %#v, want missing activation evidence", graph.FeedbackIntake)
 	}
@@ -182,6 +196,9 @@ func TestExportDiagnosticsReportsFeedbackIntakeEvidence(t *testing.T) {
 	if feedback.Status != GraphStatusFail || !graphIssueNamed(feedback.Issues, "feedback_intake_stale_bounds") || !strings.Contains(feedback.NextAction, "proposal/apply") {
 		t.Fatalf("feedback intake = %#v, want stale bounds repair evidence", feedback)
 	}
+	if !graphStringSliceContains(feedback.ReasonCodes, GraphReasonFeedbackStale) || !graphStringSliceContains(feedback.ReasonCodes, GraphReasonRepairSupported) {
+		t.Fatalf("feedback reason codes = %#v, want stale bounds and supported repair candidate", feedback.ReasonCodes)
+	}
 }
 
 func TestExportDiagnosticsRedactsInvalidGraphCompatibilityEvidence(t *testing.T) {
@@ -196,6 +213,9 @@ func TestExportDiagnosticsRedactsInvalidGraphCompatibilityEvidence(t *testing.T)
 	graph := bundle.GraphCompatibility
 	if graph.StateStatus != GraphStatusFail || graph.Validation.Status != GraphStatusFail {
 		t.Fatalf("graph compatibility = %#v, want failing graph state", graph)
+	}
+	if !graphStringSliceContains(graph.ReasonCodes, GraphReasonParseError) {
+		t.Fatalf("graph reason codes = %#v, want parse error", graph.ReasonCodes)
 	}
 	payload, err := json.Marshal(graph)
 	if err != nil {

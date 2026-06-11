@@ -22,13 +22,46 @@ func TestValidateAndExplainWorkflowGraph(t *testing.T) {
 	if result.Status != GraphStatusPass || result.File != WorkflowGraphDefaultPath || result.Checksum == "" || result.EffectiveSource != "project_file" || len(result.Errors) != 0 {
 		t.Fatalf("validation = %#v, want passing default graph", result)
 	}
+	if !graphStringSliceContains(result.ReasonCodes, GraphReasonGraphValid) {
+		t.Fatalf("reason codes = %#v, want graph_valid", result.ReasonCodes)
+	}
 
 	explained := ExplainWorkflowGraph(root, GraphOptions{})
 	if explained.Status != GraphStatusPass || explained.GraphVersion != WorkflowGraphSchemaVersion || len(explained.Phases) != 2 || len(explained.Edges) != 1 || len(explained.Gates) != 1 || len(explained.ApprovalRequirements) != 1 {
 		t.Fatalf("explanation = %#v, want projected graph", explained)
 	}
+	if !graphStringSliceContains(explained.ReasonCodes, GraphReasonGraphValid) || !graphStringSliceContains(explained.ValidationSummary.ReasonCodes, GraphReasonGraphValid) {
+		t.Fatalf("explanation reason codes = top:%#v summary:%#v, want graph_valid", explained.ReasonCodes, explained.ValidationSummary.ReasonCodes)
+	}
 	if explained.Phases[0].ID != "plan" || explained.Edges[0].From != "plan" || explained.Gates[0].Requires[1] != "implement" || explained.ApprovalRequirements[0].RequiredRole != "responsible-approver" {
 		t.Fatalf("explanation details = %#v, want graph projection", explained)
+	}
+}
+
+func TestValidateWorkflowGraphReasonCodesCoverCompatibilityStates(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+
+	missing := ValidateWorkflowGraph(root, GraphOptions{})
+	if missing.Status != GraphStatusFail || !graphStringSliceContains(missing.ReasonCodes, GraphReasonGraphMissing) || !graphStringSliceContains(missing.ReasonCodes, GraphReasonRepairUnsupported) {
+		t.Fatalf("missing reason codes = %#v validation=%#v, want graph_missing and repair unsupported", missing.ReasonCodes, missing)
+	}
+
+	writeWorkflowGraph(t, repo, "api_token: nope\n")
+	parsed := ValidateWorkflowGraph(root, GraphOptions{})
+	if parsed.Status != GraphStatusFail || !graphStringSliceContains(parsed.ReasonCodes, GraphReasonParseError) {
+		t.Fatalf("parse reason codes = %#v validation=%#v, want graph_parse_error", parsed.ReasonCodes, parsed)
+	}
+
+	forbidden := ValidateWorkflowGraph(root, GraphOptions{File: ".kkachi/config.yaml"})
+	if forbidden.Status != GraphStatusFail || !graphStringSliceContains(forbidden.ReasonCodes, GraphReasonSourceViolation) || !graphStringSliceContains(forbidden.ReasonCodes, GraphReasonForbiddenFallback) {
+		t.Fatalf("forbidden reason codes = %#v validation=%#v, want source violation and forbidden fallback", forbidden.ReasonCodes, forbidden)
+	}
+
+	writeWorkflowGraph(t, repo, staleFeedbackIntakeWorkflowGraph())
+	stale := ValidateWorkflowGraph(root, GraphOptions{})
+	if stale.Status != GraphStatusFail || !graphStringSliceContains(stale.ReasonCodes, GraphReasonFeedbackStale) || !graphStringSliceContains(stale.ReasonCodes, GraphReasonRepairSupported) {
+		t.Fatalf("stale feedback reason codes = %#v validation=%#v, want stale feedback repair-supported", stale.ReasonCodes, stale)
 	}
 }
 
@@ -538,6 +571,9 @@ func TestValidateWorkflowGraphRejectsInvalidFeedbackIntake(t *testing.T) {
 			result := ValidateWorkflowGraph(root, GraphOptions{})
 			if result.Status != GraphStatusFail || !graphIssueNamed(result.Errors, tc.wantIssue) {
 				t.Fatalf("validation = %#v, want issue %s", result, tc.wantIssue)
+			}
+			if strings.HasPrefix(tc.wantIssue, "feedback_intake_") && !graphStringSliceContains(result.ReasonCodes, GraphReasonFeedbackInvalid) && !graphStringSliceContains(result.ReasonCodes, GraphReasonFeedbackStale) && !graphStringSliceContains(result.ReasonCodes, GraphReasonFeedbackMissing) {
+				t.Fatalf("reason codes = %#v, want feedback-intake classification for issue %s", result.ReasonCodes, tc.wantIssue)
 			}
 		})
 	}

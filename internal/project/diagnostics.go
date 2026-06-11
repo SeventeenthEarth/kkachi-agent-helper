@@ -71,6 +71,7 @@ type DiagnosticsGraphCompatibility struct {
 	SupportStatus            string                               `json:"support_status"`
 	StateStatus              string                               `json:"state_status"`
 	NoDirectYAMLFallback     bool                                 `json:"no_direct_yaml_fallback"`
+	ReasonCodes              []string                             `json:"reason_codes"`
 	Validation               GraphValidationResult                `json:"validation"`
 	FeedbackIntake           DiagnosticsGraphFeedbackIntake       `json:"feedback_intake"`
 	ForbiddenFallbackSources []DiagnosticsForbiddenFallbackSource `json:"forbidden_fallback_sources"`
@@ -80,14 +81,16 @@ type DiagnosticsGraphCompatibility struct {
 type DiagnosticsGraphFeedbackIntake struct {
 	Status          string                       `json:"status"`
 	EffectiveBounds *WorkflowGraphFeedbackIntake `json:"effective_bounds,omitempty"`
+	ReasonCodes     []string                     `json:"reason_codes"`
 	Issues          []GraphIssue                 `json:"issues,omitempty"`
 	NextAction      string                       `json:"next_action"`
 }
 
 type DiagnosticsForbiddenFallbackSource struct {
-	Source string `json:"source"`
-	Status string `json:"status"`
-	Reason string `json:"reason"`
+	Source     string `json:"source"`
+	Status     string `json:"status"`
+	Reason     string `json:"reason"`
+	ReasonCode string `json:"reason_code"`
 }
 
 type DiagnosticsFile struct {
@@ -170,21 +173,42 @@ func ExportDiagnostics(root Root, options DiagnosticsExportOptions) (Diagnostics
 func diagnosticGraphCompatibility(root Root) DiagnosticsGraphCompatibility {
 	validation := redactedGraphValidation(ValidateWorkflowGraph(root, GraphOptions{}))
 	stateStatus, nextAction := diagnosticGraphCompatibilityState(validation)
+	feedback := diagnosticGraphFeedbackIntake(validation)
 	return DiagnosticsGraphCompatibility{
 		SupportStatus:        "supported",
 		StateStatus:          stateStatus,
 		NoDirectYAMLFallback: true,
+		ReasonCodes:          diagnosticGraphCompatibilityReasonCodes(validation, feedback),
 		Validation:           validation,
-		FeedbackIntake:       diagnosticGraphFeedbackIntake(validation),
+		FeedbackIntake:       feedback,
 		ForbiddenFallbackSources: []DiagnosticsForbiddenFallbackSource{
-			{Source: ".kkachi/config.yaml", Status: "forbidden", Reason: "helper config is never workflow graph authority"},
-			{Source: ".kkachi/config/workflows/", Status: "forbidden", Reason: "Kkachi v2 workflow runtime config is outside KAH/KHS graph authority"},
-			{Source: "generated diagrams", Status: "forbidden", Reason: "Mermaid and PlantUML exports are non-authoritative visualization artifacts"},
-			{Source: "KHS defaults", Status: "forbidden", Reason: "defaults are explicit init/proposal inputs only, never silent graph authority"},
-			{Source: "stale .kkachi/ runtime state", Status: "forbidden", Reason: "runtime state is evidence/cache only and cannot replace .kkachi-workflow.yaml"},
+			{Source: ".kkachi/config.yaml", Status: "forbidden", Reason: "helper config is never workflow graph authority", ReasonCode: GraphReasonForbiddenFallback},
+			{Source: ".kkachi/config/workflows/", Status: "forbidden", Reason: "Kkachi v2 workflow runtime config is outside KAH/KHS graph authority", ReasonCode: GraphReasonForbiddenFallback},
+			{Source: "generated diagrams", Status: "forbidden", Reason: "Mermaid and PlantUML exports are non-authoritative visualization artifacts", ReasonCode: GraphReasonForbiddenFallback},
+			{Source: "KHS defaults", Status: "forbidden", Reason: "defaults are explicit init/proposal inputs only, never silent graph authority", ReasonCode: GraphReasonForbiddenFallback},
+			{Source: "stale .kkachi/ runtime state", Status: "forbidden", Reason: "runtime state is evidence/cache only and cannot replace .kkachi-workflow.yaml", ReasonCode: GraphReasonForbiddenFallback},
 		},
 		NextAction: nextAction,
 	}
+}
+
+func diagnosticGraphCompatibilityReasonCodes(validation GraphValidationResult, feedback DiagnosticsGraphFeedbackIntake) []string {
+	collector := map[string]bool{}
+	for _, code := range validation.ReasonCodes {
+		collector[code] = true
+	}
+	for _, code := range feedback.ReasonCodes {
+		collector[code] = true
+	}
+	if len(collector) == 0 {
+		return []string{}
+	}
+	codes := make([]string, 0, len(collector))
+	for code := range collector {
+		codes = append(codes, code)
+	}
+	sort.Strings(codes)
+	return codes
 }
 
 func diagnosticGraphFeedbackIntake(validation GraphValidationResult) DiagnosticsGraphFeedbackIntake {
@@ -192,6 +216,7 @@ func diagnosticGraphFeedbackIntake(validation GraphValidationResult) Diagnostics
 		return DiagnosticsGraphFeedbackIntake{
 			Status:          GraphStatusPass,
 			EffectiveBounds: cleanWorkflowGraphFeedbackIntakePtr(validation.FeedbackIntake),
+			ReasonCodes:     []string{},
 			Issues:          []GraphIssue{},
 			NextAction:      "Configurable EXTERNAL_FEEDBACK_INTAKE bounds are valid; KHS may activate only when capabilities also advertise workflow_graph_configurable_feedback_intake.",
 		}
@@ -200,9 +225,10 @@ func diagnosticGraphFeedbackIntake(validation GraphValidationResult) Diagnostics
 	issues = append(issues, validation.Conflicts...)
 	if validation.Status == GraphStatusPass {
 		return DiagnosticsGraphFeedbackIntake{
-			Status:     "missing",
-			Issues:     []GraphIssue{},
-			NextAction: "Fail closed for configurable feedback intake activation; add feedback_intake through graph proposal/apply evidence before use.",
+			Status:      "missing",
+			ReasonCodes: []string{GraphReasonFeedbackMissing, GraphReasonRepairSupported},
+			Issues:      []GraphIssue{},
+			NextAction:  "Fail closed for configurable feedback intake activation; add feedback_intake through graph proposal/apply evidence before use.",
 		}
 	}
 	status := GraphStatusFail
@@ -210,10 +236,40 @@ func diagnosticGraphFeedbackIntake(validation GraphValidationResult) Diagnostics
 		status = "missing"
 	}
 	return DiagnosticsGraphFeedbackIntake{
-		Status:     status,
-		Issues:     issues,
-		NextAction: "Fail closed for configurable feedback intake activation; repair stale, missing, or invalid bounds through graph proposal/apply evidence.",
+		Status:      status,
+		ReasonCodes: graphFeedbackIntakeReasonCodes(validation, issues),
+		Issues:      issues,
+		NextAction:  "Fail closed for configurable feedback intake activation; repair stale, missing, or invalid bounds through graph proposal/apply evidence.",
 	}
+}
+
+func graphFeedbackIntakeReasonCodes(validation GraphValidationResult, issues []GraphIssue) []string {
+	collector := map[string]bool{}
+	add := func(code string) { collector[code] = true }
+	if graphValidationMissing(validation) {
+		add(GraphReasonFeedbackMissing)
+	}
+	if graphValidationOnlyFeedbackStaleBounds(validation) {
+		add(GraphReasonRepairSupported)
+	} else if validation.Status != GraphStatusPass {
+		add(GraphReasonRepairUnsupported)
+	}
+	for _, issue := range issues {
+		for _, code := range graphIssueReasonCodes(issue) {
+			if code == GraphReasonFeedbackMissing || code == GraphReasonFeedbackStale || code == GraphReasonFeedbackInvalid {
+				add(code)
+			}
+		}
+	}
+	if len(collector) == 0 {
+		return []string{}
+	}
+	codes := make([]string, 0, len(collector))
+	for code := range collector {
+		codes = append(codes, code)
+	}
+	sort.Strings(codes)
+	return codes
 }
 
 func diagnosticGraphCompatibilityState(validation GraphValidationResult) (string, string) {
