@@ -26,7 +26,7 @@ const (
 
 	graphEffectiveSourceProject  = "project_file"
 	graphNextActionValid         = "Graph is valid; KHS may use this read-only evidence."
-	graphNextActionRepair        = "Repair .kkachi-workflow.yaml, then rerun graph validate."
+	graphNextActionRepair        = "Record graph propose/apply repair evidence with a valid complete candidate graph and explicit approval, then rerun graph validate."
 	graphNextActionDiffReady     = "Review the semantic diff; record a proposal before applying graph changes."
 	graphNextActionProposal      = "Record an approval or audit evidence reference, then run graph apply --approval <evidence-ref>; proposal storage does not apply graph changes."
 	graphNextActionInitialized   = "Graph is initialized; run graph validate or graph explain for read-only evidence."
@@ -139,9 +139,11 @@ type GraphExplanationResult struct {
 }
 
 type GraphDiffEndpoint struct {
-	File            string `json:"file"`
-	Checksum        string `json:"checksum"`
-	EffectiveSource string `json:"effective_source"`
+	File            string   `json:"file"`
+	Checksum        string   `json:"checksum"`
+	EffectiveSource string   `json:"effective_source"`
+	Status          string   `json:"status"`
+	ReasonCodes     []string `json:"reason_codes"`
 }
 
 type GraphDiffValidationSummary struct {
@@ -242,6 +244,8 @@ type GraphApplyResult struct {
 	ProposalID    string   `json:"proposal_id"`
 	ApprovalRef   string   `json:"approval_ref"`
 	GraphPath     string   `json:"graph_path"`
+	BackupPath    string   `json:"backup_path,omitempty"`
+	RecoveryRef   string   `json:"recovery_ref,omitempty"`
 	NewChecksum   string   `json:"new_checksum"`
 	EventIDs      []string `json:"event_ids"`
 	NextAction    string   `json:"next_action"`
@@ -574,12 +578,19 @@ func proposeWorkflowGraphUnlocked(root Root, options GraphProposeOptions) (Graph
 	candidate := loadWorkflowGraph(root, GraphOptions{File: patch})
 	diff := diffLoadedWorkflowGraphs(base, candidate)
 	if diff.Status != GraphStatusPass {
-		if !canRecordFeedbackIntakeMigrationProposal(base, candidate) {
-			return GraphProposalResult{}, graphValidationProblem("graph_proposal_invalid", "cannot record proposal for invalid workflow graph input", "Repair the base graph and candidate graph, then rerun graph propose.", diff.ValidationSummary)
+		if canRecordFeedbackIntakeMigrationProposal(base, candidate) {
+			migrationDiff := diffLoadedWorkflowGraphsAllowingStaleFeedbackIntakeBase(base, candidate)
+			if workflowGraphDiffOnlyFeedbackIntake(migrationDiff) {
+				diff = migrationDiff
+			}
 		}
-		diff = diffLoadedWorkflowGraphsAllowingStaleFeedbackIntakeBase(base, candidate)
-		if !workflowGraphDiffOnlyFeedbackIntake(diff) {
-			return GraphProposalResult{}, graphValidationProblem("graph_proposal_invalid", "cannot record stale feedback intake migration with unrelated graph changes", "Record feedback intake migration separately from other graph changes.", diff.ValidationSummary)
+		if diff.Status != GraphStatusPass {
+			switch {
+			case canRecordCompleteCandidateRepairProposal(base, candidate):
+				diff = graphRepairReplacementDiff(base, candidate)
+			default:
+				return GraphProposalResult{}, graphValidationProblem("graph_proposal_invalid", "cannot record proposal for invalid workflow graph input", "Repair the base graph and candidate graph, then rerun graph propose.", diff.ValidationSummary)
+			}
 		}
 	}
 
@@ -681,10 +692,11 @@ func applyWorkflowGraphUnlocked(root Root, options GraphApplyOptions) (GraphAppl
 
 	base := loadWorkflowGraph(root, GraphOptions{File: WorkflowGraphDefaultPath})
 	allowStaleFeedbackMigration := canApplyFeedbackIntakeMigrationProposal(record, base)
-	if base.validation.Status != GraphStatusPass && !allowStaleFeedbackMigration {
-		return GraphApplyResult{}, graphValidationProblem("graph_apply_invalid", "cannot apply proposal while current workflow graph is invalid", "Repair .kkachi-workflow.yaml, then rerun graph apply.", GraphDiffValidationSummary{From: base.validation, To: record.ValidationSummary.Candidate})
+	allowRepairReplacement := canApplyCompleteCandidateRepairProposal(record, base)
+	if base.validation.Status != GraphStatusPass && !allowStaleFeedbackMigration && !allowRepairReplacement {
+		return GraphApplyResult{}, graphValidationProblem("graph_apply_invalid", "cannot apply proposal while current workflow graph is invalid", "Record a complete-candidate repair proposal against the current .kkachi-workflow.yaml before applying.", GraphDiffValidationSummary{From: base.validation, To: record.ValidationSummary.Candidate})
 	}
-	if base.validation.Checksum != record.Base.Checksum {
+	if !graphProposalBaseMatchesCurrent(record.Base, base.validation) {
 		return GraphApplyResult{}, &Problem{Code: "graph_base_checksum_mismatch", Message: "current workflow graph no longer matches proposal base", Hint: "Record a new proposal against the current .kkachi-workflow.yaml before applying.", Path: WorkflowGraphDefaultPath, Field: "checksum", Expected: record.Base.Checksum, Actual: base.validation.Checksum}
 	}
 
@@ -705,6 +717,8 @@ func applyWorkflowGraphUnlocked(root Root, options GraphApplyOptions) (GraphAppl
 	}
 	var rendered []byte
 	var newChecksum string
+	var backupPath string
+	var recoveryRef string
 	appendResult, err := appendEventWithPreparedStatusMutation(root, AppendEventOptions{Type: graphApplyEventType, Now: options.Now}, func(_ map[string]any, nextID string, _ string) (preparedEventStatusMutation, error) {
 		applied := candidate.graph
 		applied.Metadata.LastAppliedEventID = nextID
@@ -714,6 +728,16 @@ func applyWorkflowGraphUnlocked(root Root, options GraphApplyOptions) (GraphAppl
 			return preparedEventStatusMutation{}, graphApplyRenderedValidationProblem(validation)
 		}
 		newChecksum = validation.Checksum
+		backupPath = ""
+		recoveryRef = ""
+		if graphFileExists(graphPath) {
+			backup, err := graphRepairBackupPath(root, record.ProposalID, nextID)
+			if err != nil {
+				return preparedEventStatusMutation{}, err
+			}
+			backupPath = backup.Relative
+			recoveryRef = backup.Relative + "#restore-original-graph"
+		}
 		payload := map[string]any{
 			"proposal_id":         record.ProposalID,
 			"proposal_path":       record.ProposalPath,
@@ -726,9 +750,18 @@ func applyWorkflowGraphUnlocked(root Root, options GraphApplyOptions) (GraphAppl
 			"proposal_created_at": record.CreatedAt,
 			"proposal_reason":     record.Reason,
 		}
+		if backupPath != "" {
+			payload["backup_path"] = backupPath
+			payload["recovery_ref"] = recoveryRef
+		}
 		return preparedEventStatusMutation{
 			Payload: payload,
 			BeforeAppend: func() error {
+				if backupPath != "" {
+					if err := writeGraphRepairBackup(graphPath, backupPath, root); err != nil {
+						return err
+					}
+				}
 				return writeExistingFileAtomically(graphPath, rendered)
 			},
 		}, nil
@@ -742,6 +775,8 @@ func applyWorkflowGraphUnlocked(root Root, options GraphApplyOptions) (GraphAppl
 		ProposalID:    record.ProposalID,
 		ApprovalRef:   approvalRef,
 		GraphPath:     graphPath.Relative,
+		BackupPath:    backupPath,
+		RecoveryRef:   recoveryRef,
 		NewChecksum:   newChecksum,
 		EventIDs:      []string{appendResult.EventID},
 		NextAction:    graphNextActionApplied,
@@ -784,13 +819,40 @@ func validateWorkflowGraphProposalRecord(record WorkflowGraphProposalRecord, pro
 	if record.ProposalPath != proposalPath {
 		return &Problem{Code: "graph_proposal_path_mismatch", Message: "graph proposal path does not match its stored record", Hint: "Record a fresh proposal with graph propose before applying.", Path: proposalPath, Field: "proposal_path", Expected: proposalPath, Actual: record.ProposalPath}
 	}
-	if strings.TrimSpace(record.Base.File) == "" || strings.TrimSpace(record.Base.Checksum) == "" || strings.TrimSpace(record.Candidate.File) == "" || strings.TrimSpace(record.Candidate.Checksum) == "" {
-		return &Problem{Code: "graph_proposal_record_invalid", Message: "graph proposal record is missing base or candidate evidence", Hint: "Record a fresh proposal with graph propose before applying.", Path: proposalPath, Field: "base_candidate", Expected: "base and candidate file/checksum evidence", Actual: "missing"}
+	if strings.TrimSpace(record.Base.File) == "" || strings.TrimSpace(record.Candidate.File) == "" || strings.TrimSpace(record.Candidate.Checksum) == "" {
+		return &Problem{Code: "graph_proposal_record_invalid", Message: "graph proposal record is missing base or candidate evidence", Hint: "Record a fresh proposal with graph propose before applying.", Path: proposalPath, Field: "base_candidate", Expected: "base file and candidate file/checksum evidence", Actual: "missing"}
+	}
+	if strings.TrimSpace(record.Base.Checksum) == "" && !graphEndpointRepresentsMissingBase(record.Base) {
+		return &Problem{Code: "graph_proposal_record_invalid", Message: "graph proposal record is missing base checksum evidence", Hint: "Record a fresh proposal with graph propose before applying.", Path: proposalPath, Field: "base.checksum", Expected: "checksum or explicit missing-graph base evidence", Actual: "missing"}
 	}
 	if record.Base.File != WorkflowGraphDefaultPath {
 		return &Problem{Code: "graph_proposal_base_invalid", Message: "graph proposal base is not the project workflow graph", Hint: "Record a fresh proposal against .kkachi-workflow.yaml before applying.", Path: proposalPath, Field: "base.file", Expected: WorkflowGraphDefaultPath, Actual: record.Base.File}
 	}
 	return nil
+}
+
+func graphFileExists(path SafePath) bool {
+	info, err := os.Stat(path.Absolute)
+	return err == nil && !info.IsDir()
+}
+
+func graphRepairBackupPath(root Root, proposalID string, eventID string) (SafePath, error) {
+	return ResolveRelativePath(root, fmt.Sprintf(".kkachi/backups/graph-repairs/%s/%s-%s", proposalID, eventID, filepath.Base(WorkflowGraphDefaultPath)))
+}
+
+func writeGraphRepairBackup(graphPath SafePath, backupRelative string, root Root) error {
+	data, err := os.ReadFile(graphPath.Absolute)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return &Problem{Code: "graph_backup_read_failed", Message: "cannot read current workflow graph for repair backup", Hint: "Check repository permissions before applying the graph proposal.", Path: graphPath.Relative, Field: "path", Expected: "readable existing workflow graph", Actual: err.Error()}
+	}
+	backupPath, err := ResolveRelativePath(root, backupRelative)
+	if err != nil {
+		return err
+	}
+	return writeNewFileAtomically(backupPath, data)
 }
 
 func graphApplyRenderedValidationProblem(validation GraphValidationResult) error {
@@ -1121,7 +1183,7 @@ func diffLoadedWorkflowGraphs(from loadedWorkflowGraph, to loadedWorkflowGraph) 
 }
 
 func graphDiffEndpoint(validation GraphValidationResult) GraphDiffEndpoint {
-	return GraphDiffEndpoint{File: validation.File, Checksum: validation.Checksum, EffectiveSource: validation.EffectiveSource}
+	return GraphDiffEndpoint{File: validation.File, Checksum: validation.Checksum, EffectiveSource: validation.EffectiveSource, Status: validation.Status, ReasonCodes: append([]string{}, validation.ReasonCodes...)}
 }
 
 func diffLoadedWorkflowGraphsAllowingStaleFeedbackIntakeBase(from loadedWorkflowGraph, to loadedWorkflowGraph) GraphDiffResult {
@@ -1169,6 +1231,58 @@ func canApplyFeedbackIntakeMigrationProposal(record WorkflowGraphProposalRecord,
 		record.ValidationSummary.Candidate.Status == GraphStatusPass &&
 		record.ValidationSummary.Candidate.FeedbackIntake != nil &&
 		workflowGraphDiffOnlyFeedbackIntake(record.SemanticDiff)
+}
+
+func canRecordCompleteCandidateRepairProposal(base loadedWorkflowGraph, candidate loadedWorkflowGraph) bool {
+	return graphValidationRepairCandidateSupported(base.validation) && candidate.validation.Status == GraphStatusPass
+}
+
+func canApplyCompleteCandidateRepairProposal(record WorkflowGraphProposalRecord, base loadedWorkflowGraph) bool {
+	return graphValidationRepairCandidateSupported(base.validation) &&
+		graphValidationRepairCandidateSupported(record.ValidationSummary.Base) &&
+		record.ValidationSummary.Candidate.Status == GraphStatusPass &&
+		slices.Contains(record.SemanticDiff.RiskFlags, "graph_replacement")
+}
+
+func graphRepairReplacementDiff(from loadedWorkflowGraph, to loadedWorkflowGraph) GraphDiffResult {
+	result := newGraphDiffResult(from, to)
+	result.Status = GraphStatusPass
+	result.RiskFlags = []string{"graph_replacement"}
+	result.RequiresApproval = true
+	result.NextAction = graphNextActionProposal
+	return result
+}
+
+func graphProposalBaseMatchesCurrent(endpoint GraphDiffEndpoint, validation GraphValidationResult) bool {
+	if endpoint.File != validation.File || endpoint.Status != validation.Status {
+		return false
+	}
+	if endpoint.Checksum != validation.Checksum {
+		return false
+	}
+	if !slices.Equal(endpoint.ReasonCodes, validation.ReasonCodes) {
+		return false
+	}
+	return true
+}
+
+func graphEndpointRepresentsMissingBase(endpoint GraphDiffEndpoint) bool {
+	return endpoint.File == WorkflowGraphDefaultPath && endpoint.Status == GraphStatusFail && endpoint.Checksum == "" && slices.Contains(endpoint.ReasonCodes, GraphReasonGraphMissing)
+}
+
+func graphValidationRepairCandidateSupported(validation GraphValidationResult) bool {
+	if validation.Status != GraphStatusFail || validation.File != WorkflowGraphDefaultPath || len(validation.Conflicts) != 0 {
+		return false
+	}
+	if len(validation.Errors) == 0 {
+		return false
+	}
+	for _, issue := range validation.Errors {
+		if issue.Name == "graph_source" {
+			return false
+		}
+	}
+	return true
 }
 
 func graphValidationOnlyFeedbackStaleBounds(validation GraphValidationResult) bool {
@@ -1747,7 +1861,7 @@ func graphValidationReasonCodes(validation GraphValidationResult) []string {
 	}
 	if validation.Status == GraphStatusPass {
 		add(GraphReasonGraphValid)
-	} else if graphValidationOnlyFeedbackStaleBounds(validation) {
+	} else if graphValidationRepairCandidateSupported(validation) {
 		add(GraphReasonRepairSupported)
 	} else {
 		add(GraphReasonRepairUnsupported)
@@ -2413,7 +2527,7 @@ func splitInlineList(inner string) []string {
 func validateWorkflowGraph(graph WorkflowGraph, path string) []GraphIssue {
 	errors := []GraphIssue{}
 	add := func(name string, field string, message string, expected string, actual string) {
-		errors = append(errors, GraphIssue{Name: name, Path: path, Message: message, Hint: "Repair .kkachi-workflow.yaml so KAH can validate it deterministically.", Field: field, Expected: expected, Actual: actual})
+		errors = append(errors, GraphIssue{Name: name, Path: path, Message: message, Hint: "Use graph propose/apply with a valid complete candidate graph and explicit approval evidence, or provide valid graph content before rerunning validation.", Field: field, Expected: expected, Actual: actual})
 	}
 	if graph.Version != WorkflowGraphSchemaVersion {
 		actual := graph.Version

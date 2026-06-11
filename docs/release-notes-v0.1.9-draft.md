@@ -35,7 +35,11 @@ go run . diagnostics export --json
 
 Maintainer evidence for the draft was captured with `HOME=/Users/draccoon` because local KAH/KAS tooling in this workspace expects the real user home.
 
-## Known gaps / non-goals
+## GRSYNC-002 repair substrate
 
-- `grsync-002` approval-gated stale/broken complete-candidate graph repair substrate is not implemented by this slice.
+- `grsync-002` implements the approval-gated complete-candidate repair substrate for missing, stale, broken, or otherwise invalid project `.kkachi-workflow.yaml` states.
+- `graph propose` now records base validation status/reason-code evidence even when the base graph is missing or invalid, validates a complete candidate graph, and marks repair replacements with `graph_replacement` plus `approval_required=true`.
+- `graph apply` now accepts matching repair proposals only with explicit `--approval <evidence-ref>`, rechecks current base evidence for drift, writes `.kkachi-workflow.yaml` atomically, records `graph.applied`, and preserves `backup_path`/`recovery_ref` when replacing an existing stale/broken graph.
+
+## Known gaps / non-goals
 - No automatic KAH update, automatic graph apply, KAS compatibility registry, KAS doctor/repair CLI behavior, KAB graph authority, `kah graph` alias behavior, direct `.kkachi-workflow.yaml` edit fallback, or Hermes profile/provider/gateway/auth/token/model mutation is introduced.

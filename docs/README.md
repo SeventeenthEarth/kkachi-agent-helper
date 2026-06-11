@@ -3,7 +3,7 @@
 Date: 2026-05-22
 Owner: KAH documentation archive
 Confirming role: Responsible approver / governance evidence record
-Status: docs index; workflow graph init/validation/explanation/diff/proposal/apply/export, graph compatibility reason-code diagnostics, and phase-plan feedback-bound validation evidence present
+Status: docs index; workflow graph init/validation/explanation/diff/proposal/apply/export, graph compatibility reason-code diagnostics, approval-gated complete-candidate repair substrate, and phase-plan feedback-bound validation evidence present
 Authority level: reading guide for KAH docs; graph export records are implemented evidence and generated-artifact boundaries
 Scope: `kkachi-agent-helper/docs` only
 Related docs: `docs/specs.md`, `docs/roadmap.md`, `docs/compatibility.md`, `docs/sot/graph-workflow-sync-diagnostics-and-repair.md`, `docs/sot/token-economy-evidence-gates.md`
@@ -40,14 +40,14 @@ This directory is the project archive for `kkachi-agent-helper` docs. It separat
 
 ## Decision summary
 
-- `.kkachi-workflow.yaml` is documented as project-level workflow graph state with implemented init, validation/explanation, semantic diff, proposal records, approval-gated apply, compatibility diagnostics, `EXTERNAL_FEEDBACK_INTAKE` bounds projection/migration/activation evidence, and phase-plan feedback-bound validation.
+- `.kkachi-workflow.yaml` is documented as project-level workflow graph state with implemented init, validation/explanation, semantic diff, proposal records, approval-gated apply, complete-candidate repair for missing/stale/broken invalid graph states, compatibility diagnostics, `EXTERNAL_FEEDBACK_INTAKE` bounds projection/migration/activation evidence, and phase-plan feedback-bound validation.
 - `.kkachi/config.yaml` remains helper runtime/configuration only.
 - `.kkachi/runs/<run_id>/phase-plan.yaml` remains run-local execution state/evidence and is not deprecated.
 - Kkachi v2 `.kkachi/config/workflows/` is outside KAH/KHS graph scope and must not be used as fallback graph authority.
 - `kkachi-agent-helper graph init`, `graph validate`, `graph explain`, `graph diff`, `graph propose`, `graph apply`, and `graph export` are implemented; `kah graph` remains planned/candidate shorthand unless alias evidence exists.
 - Graph behavior authority now lives in `docs/specs.md`; KHS/KAH graph activation and fallback guidance lives in `docs/compatibility.md`.
 - Configurable `EXTERNAL_FEEDBACK_INTAKE` behavior lives in `docs/specs.md`; activation and fallback guidance lives in `docs/compatibility.md`; graph-009 through graph-011 implementation history lives in `docs/roadmap.md`.
-- Graph workflow sync KAH planning lives in `docs/sot/graph-workflow-sync-diagnostics-and-repair.md`; `grsync-001` implements diagnostics/reason-code hardening for KAS v0.1.2 consumption, while approval-gated stale/broken graph repair substrate remains scoped to `grsync-002` until that roadmap task lands.
+- Graph workflow sync KAH planning lives in `docs/sot/graph-workflow-sync-diagnostics-and-repair.md`; `grsync-001` implements diagnostics/reason-code hardening for KAS v0.1.2 consumption, and `grsync-002` implements approval-gated complete-candidate graph repair substrate while preserving the no-direct-YAML-fallback boundary.
 - Token-economy / English-output KAH evidence-gate planning lives in `docs/sot/token-economy-evidence-gates.md`; `token-001` and `token-002` deterministic evidence validation are implemented, reviewed, and accepted for commit-readiness pending separate 주군 commit/install approval.
 
 ## Stale/conflict markers
@@ -64,4 +64,4 @@ This directory is the project archive for `kkachi-agent-helper` docs. It separat
 
 ## Next record action
 
-Use future `docs/roadmap.md` graph slices for separately scoped release or KHS consumption work. After `grsync-001`, the next graph workflow sync slice is `grsync-002`, scoped by `docs/sot/graph-workflow-sync-diagnostics-and-repair.md`; do not widen graph export into generated-artifact authority or alias behavior.
+Use future `docs/roadmap.md` graph slices for separately scoped release or KHS consumption work. After `grsync-002`, remaining graph workflow sync expansions stay bounded by `docs/sot/graph-workflow-sync-diagnostics-and-repair.md`; do not widen graph export into generated-artifact authority, KAS compatibility registry behavior, automatic apply/update behavior, or alias behavior.

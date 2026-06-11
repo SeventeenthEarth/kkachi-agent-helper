@@ -43,11 +43,11 @@ func TestValidateWorkflowGraphReasonCodesCoverCompatibilityStates(t *testing.T) 
 	root, _ := DiscoverRoot(repo)
 
 	missing := ValidateWorkflowGraph(root, GraphOptions{})
-	if missing.Status != GraphStatusFail || !graphStringSliceContains(missing.ReasonCodes, GraphReasonGraphMissing) || !graphStringSliceContains(missing.ReasonCodes, GraphReasonRepairUnsupported) {
-		t.Fatalf("missing reason codes = %#v validation=%#v, want graph_missing and repair unsupported", missing.ReasonCodes, missing)
+	if missing.Status != GraphStatusFail || !graphStringSliceContains(missing.ReasonCodes, GraphReasonGraphMissing) || !graphStringSliceContains(missing.ReasonCodes, GraphReasonRepairSupported) {
+		t.Fatalf("missing reason codes = %#v validation=%#v, want graph_missing and repair supported", missing.ReasonCodes, missing)
 	}
 
-	writeWorkflowGraph(t, repo, "api_token: nope\n")
+	writeWorkflowGraph(t, repo, "unexpected_scalar: nope\n")
 	parsed := ValidateWorkflowGraph(root, GraphOptions{})
 	if parsed.Status != GraphStatusFail || !graphStringSliceContains(parsed.ReasonCodes, GraphReasonParseError) {
 		t.Fatalf("parse reason codes = %#v validation=%#v, want graph_parse_error", parsed.ReasonCodes, parsed)
@@ -771,7 +771,7 @@ func TestProposeWorkflowGraphRejectsInvalidPatchWithoutWriting(t *testing.T) {
 	}
 }
 
-func TestProposeWorkflowGraphRequiresInitializedAndValidBaseState(t *testing.T) {
+func TestProposeWorkflowGraphRequiresInitializedBaseState(t *testing.T) {
 	t.Run("uninitialized helper state", func(t *testing.T) {
 		repo := t.TempDir()
 		if err := os.Mkdir(filepath.Join(repo, ".git"), 0o755); err != nil {
@@ -788,20 +788,101 @@ func TestProposeWorkflowGraphRequiresInitializedAndValidBaseState(t *testing.T) 
 			t.Fatalf("proposal directory stat err = %v, want missing directory", statErr)
 		}
 	})
+}
 
-	t.Run("invalid base graph", func(t *testing.T) {
-		repo := initializedRepo(t)
-		root, _ := DiscoverRoot(repo)
-		writeWorkflowGraph(t, repo, strings.Replace(validWorkflowGraph(), `to: "implement"`, `to: "missing"`, 1))
-		writeGraphFile(t, repo, "graphs/candidate.yaml", candidateWorkflowGraph())
+func TestProposeWorkflowGraphRecordsMissingBaseRepairProposal(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	candidate := "graphs/candidate.yaml"
+	writeGraphFile(t, repo, candidate, candidateWorkflowGraph())
 
-		if _, err := ProposeWorkflowGraph(root, GraphProposeOptions{Patch: "graphs/candidate.yaml", Reason: "add ask phase"}); err == nil {
-			t.Fatalf("ProposeWorkflowGraph() succeeded, want invalid base graph failure")
-		}
-		if _, statErr := os.Stat(filepath.Join(repo, ".kkachi", "graph", "proposals")); !os.IsNotExist(statErr) {
-			t.Fatalf("proposal directory stat err = %v, want missing directory", statErr)
-		}
+	result, err := ProposeWorkflowGraph(root, GraphProposeOptions{
+		Patch:  candidate,
+		Reason: "repair missing project workflow graph",
+		Now:    func() time.Time { return time.Date(2026, 6, 11, 7, 1, 2, 0, time.UTC) },
 	})
+	if err != nil {
+		t.Fatalf("ProposeWorkflowGraph() error = %v", err)
+	}
+	var record WorkflowGraphProposalRecord
+	readGraphTestJSON(t, filepath.Join(repo, filepath.FromSlash(result.ProposalPath)), &record)
+	if record.Base.File != WorkflowGraphDefaultPath || record.Base.Status != GraphStatusFail || record.Base.Checksum != "" {
+		t.Fatalf("record base = %#v, want missing base evidence without checksum", record.Base)
+	}
+	for _, want := range []string{GraphReasonGraphMissing, GraphReasonRepairSupported} {
+		if !graphStringSliceContains(record.Base.ReasonCodes, want) || !graphStringSliceContains(record.ValidationSummary.Base.ReasonCodes, want) {
+			t.Fatalf("base reason codes = endpoint:%#v summary:%#v, want %s", record.Base.ReasonCodes, record.ValidationSummary.Base.ReasonCodes, want)
+		}
+	}
+	if record.Candidate.File != candidate || record.Candidate.Checksum == "" || record.Candidate.Status != GraphStatusPass || !record.ApprovalRequired {
+		t.Fatalf("record candidate = %#v approval=%v, want complete candidate approval-gated proposal", record.Candidate, record.ApprovalRequired)
+	}
+	if record.SemanticDiff.Status != GraphStatusPass || !graphStringSliceContains(record.SemanticDiff.RiskFlags, "graph_replacement") {
+		t.Fatalf("semantic diff = %#v, want repair replacement comparison", record.SemanticDiff)
+	}
+}
+
+func TestGraphRepairProposalAppliesBrokenBaseWithBackupEvidence(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	broken := "version: [\n"
+	writeWorkflowGraph(t, repo, broken)
+	candidate := "graphs/candidate.yaml"
+	writeGraphFile(t, repo, candidate, candidateWorkflowGraph())
+	proposal, err := ProposeWorkflowGraph(root, GraphProposeOptions{Patch: candidate, Reason: "repair broken graph"})
+	if err != nil {
+		t.Fatalf("ProposeWorkflowGraph() error = %v", err)
+	}
+
+	applied, err := ApplyWorkflowGraph(root, GraphApplyOptions{
+		Proposal: proposal.ProposalID,
+		Approval: "approval:repair-broken-graph",
+		Now:      func() time.Time { return time.Date(2026, 6, 11, 7, 2, 3, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatalf("ApplyWorkflowGraph() error = %v", err)
+	}
+	if applied.Status != GraphStatusPass || applied.BackupPath == "" || applied.RecoveryRef == "" || len(applied.EventIDs) != 1 {
+		t.Fatalf("applied = %#v, want backup/recovery evidence", applied)
+	}
+	if got := readGraphTestText(t, filepath.Join(repo, filepath.FromSlash(applied.BackupPath))); got != broken {
+		t.Fatalf("backup content = %q, want original broken graph", got)
+	}
+	appliedGraph := readGraphTestText(t, filepath.Join(repo, WorkflowGraphDefaultPath))
+	for _, want := range []string{`id: "ask"`, `last_applied_event_id: "evt-000003"`} {
+		if !strings.Contains(appliedGraph, want) {
+			t.Fatalf("applied graph = %s, want %s", appliedGraph, want)
+		}
+	}
+	lines := runEventLines(t, repo)
+	lastEvent := lines[len(lines)-1]
+	for _, want := range []string{graphApplyEventType, applied.BackupPath, applied.RecoveryRef, "approval:repair-broken-graph"} {
+		if !strings.Contains(lastEvent, want) {
+			t.Fatalf("last event = %s, want %s", lastEvent, want)
+		}
+	}
+}
+
+func TestApplyWorkflowGraphFailsClosedWhenMissingBaseStateDrifts(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	writeGraphFile(t, repo, "graphs/candidate.yaml", candidateWorkflowGraph())
+	proposal, err := ProposeWorkflowGraph(root, GraphProposeOptions{Patch: "graphs/candidate.yaml", Reason: "repair missing graph"})
+	if err != nil {
+		t.Fatalf("ProposeWorkflowGraph() error = %v", err)
+	}
+	writeWorkflowGraph(t, repo, validWorkflowGraph())
+	before := readGraphTestText(t, filepath.Join(repo, WorkflowGraphDefaultPath))
+	beforeEvents := runEventLines(t, repo)
+
+	_, err = ApplyWorkflowGraph(root, defaultGraphApplyOptions(proposal))
+	assertProblemCode(t, err, "graph_base_checksum_mismatch")
+	if got := readGraphTestText(t, filepath.Join(repo, WorkflowGraphDefaultPath)); got != before {
+		t.Fatalf("graph mutated after drift rejection\nbefore=%s\nafter=%s", before, got)
+	}
+	if afterEvents := runEventLines(t, repo); len(afterEvents) != len(beforeEvents) {
+		t.Fatalf("events changed after rejected repair apply: before=%d after=%d", len(beforeEvents), len(afterEvents))
+	}
 }
 
 func TestApplyWorkflowGraphAppliesApprovedProposal(t *testing.T) {
@@ -896,7 +977,7 @@ func TestGraphProposalAndApplyAllowStaleFeedbackIntakeMigration(t *testing.T) {
 	}
 }
 
-func TestGraphProposalRejectsNonMigrationInvalidBase(t *testing.T) {
+func TestGraphProposalRecordsCompleteCandidateRepairForInvalidBase(t *testing.T) {
 	cases := []struct {
 		name      string
 		base      string
@@ -925,8 +1006,18 @@ func TestGraphProposalRejectsNonMigrationInvalidBase(t *testing.T) {
 			writeWorkflowGraph(t, repo, tt.base)
 			writeGraphFile(t, repo, "graphs/candidate.yaml", tt.candidate)
 
-			_, err := ProposeWorkflowGraph(root, GraphProposeOptions{Patch: "graphs/candidate.yaml", Reason: "invalid migration"})
-			assertProblemCode(t, err, "graph_proposal_invalid")
+			proposal, err := ProposeWorkflowGraph(root, GraphProposeOptions{Patch: "graphs/candidate.yaml", Reason: "complete candidate repair"})
+			if err != nil {
+				t.Fatalf("ProposeWorkflowGraph() error = %v", err)
+			}
+			var record WorkflowGraphProposalRecord
+			readGraphTestJSON(t, filepath.Join(repo, filepath.FromSlash(proposal.ProposalPath)), &record)
+			if !graphStringSliceContains(record.SemanticDiff.RiskFlags, "graph_replacement") || !record.ApprovalRequired {
+				t.Fatalf("record semantic diff = %#v approval=%v, want approval-gated graph replacement", record.SemanticDiff, record.ApprovalRequired)
+			}
+			if !graphStringSliceContains(record.ValidationSummary.Base.ReasonCodes, GraphReasonRepairSupported) {
+				t.Fatalf("base reason codes = %#v, want repair supported", record.ValidationSummary.Base.ReasonCodes)
+			}
 		})
 	}
 }
