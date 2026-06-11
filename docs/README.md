@@ -6,7 +6,7 @@ Confirming role: Responsible approver / governance evidence record
 Status: docs index; workflow graph init/validation/explanation/diff/proposal/apply/export and phase-plan feedback-bound validation evidence present
 Authority level: reading guide for KAH docs; graph export records are implemented evidence and generated-artifact boundaries
 Scope: `kkachi-agent-helper/docs` only
-Related docs: `docs/specs.md`, `docs/roadmap.md`, `docs/compatibility.md`, `docs/sot/token-economy-evidence-gates.md`
+Related docs: `docs/specs.md`, `docs/roadmap.md`, `docs/compatibility.md`, `docs/sot/graph-workflow-sync-diagnostics-and-repair.md`, `docs/sot/token-economy-evidence-gates.md`
 Evidence/source paths:
 - Governance evidence record in kanban task `t_2fb00394`
 
@@ -21,6 +21,7 @@ This directory is the project archive for `kkachi-agent-helper` docs. It separat
 | `docs/specs.md` | Current KAH helper behavior SOT, including `.kkachi-workflow.yaml` command/schema behavior | KAH owner; governance approval evidence recorded for Kkachi command use | Authoritative for implemented/helper behavior and workflow graph behavior |
 | `docs/roadmap.md` | Active KAH delivery roadmap | KAH owner / responsible approver direction | Planning authority; not implementation authorization by itself |
 | `docs/compatibility.md` | Release-facing KHS/KAH compatibility contract | KAH/KHS integration owners | Compatibility matrix, activation guidance, and graph fallback rules |
+| `docs/sot/graph-workflow-sync-diagnostics-and-repair.md` | KAH-side planning SOT for graph workflow sync diagnostics and approval-gated repair substrate | KAH deterministic helper layer with KAS v0.1.2 dependency | Planning authority for KAH v0.1.9 graph diagnostics/repair work; not implemented behavior by itself |
 | `docs/sot/token-economy-evidence-gates.md` | KAH-side planning SOT for future token-economy / English-output evidence gates | KAH deterministic helper layer with KAS workstream dependency | Planning authority for future KAH gate work; not implemented behavior by itself |
 | `docs/release-notes-template.md` | Release note template | KAH release owner | Template only |
 | `docs/.omx/` if present | Tool/runtime/agent state | Tooling | Non-authoritative; never a KAH docs SOT |
@@ -46,6 +47,7 @@ This directory is the project archive for `kkachi-agent-helper` docs. It separat
 - `kkachi-agent-helper graph init`, `graph validate`, `graph explain`, `graph diff`, `graph propose`, `graph apply`, and `graph export` are implemented; `kah graph` remains planned/candidate shorthand unless alias evidence exists.
 - Graph behavior authority now lives in `docs/specs.md`; KHS/KAH graph activation and fallback guidance lives in `docs/compatibility.md`.
 - Configurable `EXTERNAL_FEEDBACK_INTAKE` behavior lives in `docs/specs.md`; activation and fallback guidance lives in `docs/compatibility.md`; graph-009 through graph-011 implementation history lives in `docs/roadmap.md`.
+- Graph workflow sync KAH planning lives in `docs/sot/graph-workflow-sync-diagnostics-and-repair.md`; it targets KAH v0.1.9 diagnostics/reason-code hardening plus approval-gated stale/broken graph repair substrate for KAS v0.1.2 consumption, but remains planning authority until roadmap tasks land.
 - Token-economy / English-output KAH evidence-gate planning lives in `docs/sot/token-economy-evidence-gates.md`; `token-001` and `token-002` deterministic evidence validation are implemented, reviewed, and accepted for commit-readiness pending separate 주군 commit/install approval.
 
 ## Stale/conflict markers
@@ -62,4 +64,4 @@ This directory is the project archive for `kkachi-agent-helper` docs. It separat
 
 ## Next record action
 
-Use future `docs/roadmap.md` graph slices for separately scoped release or KHS consumption work. Do not widen graph export into generated-artifact authority or alias behavior.
+Use future `docs/roadmap.md` graph slices for separately scoped release or KHS consumption work. The next graph workflow sync slices are `grsync-001` and `grsync-002`, scoped by `docs/sot/graph-workflow-sync-diagnostics-and-repair.md`; do not widen graph export into generated-artifact authority or alias behavior.

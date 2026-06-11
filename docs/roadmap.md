@@ -24,6 +24,7 @@ Status values: `Planned`, `In Progress`, `Blocked`, `Completed`, `Deferred`.
 | 6 | `align` | KHS can consume KAH `@latest` through stable capability checks, declared backend evidence, phase-plan validation, and compatibility diagnostics. |
 | 7 | `feedb` | Feedback-driven KAH hardening is preserved in planning history after KHS and PM consumer feedback exposes deterministic-helper risk. |
 | 8 | `token` | KAH supplies deterministic evidence gates for KAS token-economy, English-output, agent-instruction, and project KAS lifecycle work without becoming policy or prose-judgment authority. |
+| 9 | `grsync` | KAH hardens workflow graph diagnostics and approval-gated repair substrate so KAS can safely manage graph workflow sync compatibility for KAH v0.1.9 / KAS v0.1.2. |
 
 ## Active roadmap
 
@@ -130,6 +131,20 @@ Status values: `Planned`, `In Progress`, `Blocked`, `Completed`, `Deferred`.
 | graph-010 | External feedback intake phase-plan validation | Completed | Replace fixed `1..3` phase-plan validation with policy-driven feedback bounds while preserving request/handle pairing, round 1 requirement, optional 2..5 continuation, final evidence checks, and fail-closed graph-vs-run conflict reporting. | Implemented graph-policy-driven `phase-plan validate`: valid `feedback_intake` is required for feedback rows, round 4/5 pairs are allowed when declared, round 6+ and missing policy fail closed, optional rounds are not mandatory, and final checks cover declared feedback rows. This slice did not advertise diagnostics/capability activation; graph-011 completed that final activation evidence. |
 | graph-011 | External feedback intake migration, diagnostics, capabilities, and final docs | Completed | Add stale `1..3/max3` migration/proposal support, diagnostics evidence, final capability/compatibility advertisement, docs parity, and E2E coverage so KHS can consume configurable feedback intake support fail-closed. | Implemented stale-only feedback-bound migration through proposal/apply evidence with explicit approval/audit reference, nested diagnostics `graph_compatibility.feedback_intake` evidence, `workflow_graph_configurable_feedback_intake` capability advertisement, docs parity, and focused unit/CLI/integration/E2E coverage. |
 | graph-012 | Declarative workflow gate checks and final-required graph gates | Completed | Let `.kkachi-workflow.yaml` declare project-specific deterministic gate checks without KAH core changes for every new gate. Preserve built-in gate priority, additive schema compatibility, final gate freshness, and fixed check types only. | Implemented workflow gate fallback for `gate check`, graph `checks` parsing/projection/validation, `final_required` final-gate inclusion, optional report name/message/hint shaping, Red consultation conditions, KAN plugin precommit-template migration evidence, and focused unit/CLI/e2e coverage. |
+
+
+### EPIC: grsync — Workflow graph sync diagnostics and repair safety
+
+> Goal: let KAS v0.1.2 safely determine whether a project `.kkachi-workflow.yaml` is supported by the effective KAS/KAH pair, while KAH remains the deterministic validator/proposal/apply/audit owner and does not become workflow-policy authority.
+>
+> Source of truth: `docs/sot/graph-workflow-sync-diagnostics-and-repair.md`. Target release: KAH `v0.1.9`, consumed by KAS `v0.1.2`.
+
+| Task ID | Title | Status | Work guide | Notes |
+|---|---|---|---|---|
+| grsync-001 | Graph compatibility diagnostics and reason-code hardening | Planned | Harden `graph validate/explain/diagnostics` JSON so KAS can distinguish old KAH, missing/stale/broken/manual-edit/checksum-mismatch graph state, feedback-intake drift, forbidden fallback sources, and repairability without KAH choosing workflow policy. | Must update specs, compatibility, docs index, fixtures/tests, and release notes. KAH may report deterministic support facts only; KAS decides support envelope and update guidance. |
+| grsync-002 | Approval-gated stale/broken graph repair substrate | Planned | Support proposal/apply repair for missing, stale, or broken `.kkachi-workflow.yaml` through complete candidate graphs, base-state evidence, drift checks, explicit approval refs, atomic writes, backup/recovery evidence, checksums, and audit events. | No direct YAML edit fallback, no partial patch DSL, no automatic apply from periodic checks, no KAS policy decision in KAH. |
+
+GRSYNC deferrals unless separately approved: KAS compatibility registry, KAS doctor/repair CLI behavior, automatic KAH binary update, KAB graph authority, `kah graph` alias behavior, and merge/fallback with Kkachi v2 `.kkachi/config/workflows/`.
 
 ### EPIC: token — KAS token-economy evidence gates
 
