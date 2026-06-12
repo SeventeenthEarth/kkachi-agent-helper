@@ -6,7 +6,7 @@ Confirming role: Responsible approver / governance evidence record
 Status: docs index; workflow graph init/validation/explanation/diff/proposal/apply/export, graph compatibility reason-code diagnostics, approval-gated complete-candidate repair substrate, and phase-plan feedback-bound validation evidence present
 Authority level: reading guide for KAH docs; graph export records are implemented evidence and generated-artifact boundaries
 Scope: `kkachi-agent-helper/docs` only
-Related docs: `docs/specs.md`, `docs/roadmap.md`, `docs/compatibility.md`, `docs/sot/graph-workflow-sync-diagnostics-and-repair.md`, `docs/sot/token-economy-evidence-gates.md`
+Related docs: `docs/specs.md`, `docs/roadmap.md`, `docs/compatibility.md`, `docs/sot/graph-workflow-sync-diagnostics-and-repair.md`, `docs/sot/task-dag-state-machine.md`, `docs/sot/token-economy-evidence-gates.md`
 Evidence/source paths:
 - Governance evidence record in kanban task `t_2fb00394`
 
@@ -22,6 +22,7 @@ This directory is the project archive for `kkachi-agent-helper` docs. It separat
 | `docs/roadmap.md` | Active KAH delivery roadmap | KAH owner / responsible approver direction | Planning authority; not implementation authorization by itself |
 | `docs/compatibility.md` | Release-facing KHS/KAH compatibility contract | KAH/KHS integration owners | Compatibility matrix, activation guidance, and graph fallback rules |
 | `docs/sot/graph-workflow-sync-diagnostics-and-repair.md` | KAH-side planning SOT for graph workflow sync diagnostics and approval-gated repair substrate | KAH deterministic helper layer with KAS v0.1.2 dependency | Planning authority for KAH v0.1.9 graph diagnostics/repair work; not implemented behavior by itself |
+| `docs/sot/task-dag-state-machine.md` | KAH-side planning SOT for task-DAG workflow state machine support | KAH deterministic helper layer with KAS WFLOW dependency | Planning authority for KAH DAGSM schema validation, workflow instance state, node FSM/order enforcement, ready-node calculation, diagnostics, and final gates; not implemented behavior by itself |
 | `docs/sot/token-economy-evidence-gates.md` | KAH-side planning SOT for future token-economy / English-output evidence gates | KAH deterministic helper layer with KAS workstream dependency | Planning authority for future KAH gate work; not implemented behavior by itself |
 | `docs/release-notes-template.md` | Release note template | KAH release owner | Template only |
 | `docs/.omx/` if present | Tool/runtime/agent state | Tooling | Non-authoritative; never a KAH docs SOT |
@@ -48,6 +49,7 @@ This directory is the project archive for `kkachi-agent-helper` docs. It separat
 - Graph behavior authority now lives in `docs/specs.md`; KHS/KAH graph activation and fallback guidance lives in `docs/compatibility.md`.
 - Configurable `EXTERNAL_FEEDBACK_INTAKE` behavior lives in `docs/specs.md`; activation and fallback guidance lives in `docs/compatibility.md`; graph-009 through graph-011 implementation history lives in `docs/roadmap.md`.
 - Graph workflow sync KAH planning lives in `docs/sot/graph-workflow-sync-diagnostics-and-repair.md`; `grsync-001` implements diagnostics/reason-code hardening for KAS v0.1.2 consumption, and `grsync-002` implements approval-gated complete-candidate graph repair substrate while preserving the no-direct-YAML-fallback boundary.
+- Task-DAG workflow state-machine planning lives in `docs/sot/task-dag-state-machine.md`; DAGSM tasks will add deterministic task-DAG validation, run-local workflow instance state, node FSM/order enforcement, ready-node calculation, multi-DAG catalog diagnostics, and final gate integration without KAH choosing agents, prompts, or workflow policy.
 - Token-economy / English-output KAH evidence-gate planning lives in `docs/sot/token-economy-evidence-gates.md`; `token-001` and `token-002` deterministic evidence validation are implemented, reviewed, and accepted for commit-readiness pending separate 주군 commit/install approval.
 
 ## Stale/conflict markers

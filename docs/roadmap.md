@@ -25,8 +25,12 @@ Status values: `Planned`, `In Progress`, `Blocked`, `Completed`, `Deferred`.
 | 7 | `feedb` | Feedback-driven KAH hardening is preserved in planning history after KHS and PM consumer feedback exposes deterministic-helper risk. |
 | 8 | `token` | KAH supplies deterministic evidence gates for KAS token-economy, English-output, agent-instruction, and project KAS lifecycle work without becoming policy or prose-judgment authority. |
 | 9 | `grsync` | KAH hardens workflow graph diagnostics and approval-gated repair substrate so KAS can safely manage graph workflow sync compatibility for KAH v0.1.9 / KAS v0.1.2. |
+| 10 | `DAGSM` | KAH supplies deterministic task-DAG validation, workflow instance state, node FSM/order enforcement, ready-node calculation, multi-DAG catalog diagnostics, and final gates for KAS WFLOW-triggered workflows. |
 
 ## Active roadmap
+
+Section order below is historical/topic grouping and may differ from the delivery sequence. Use `Delivery order` and each epic's explicit dependency notes as the authoritative implementation order.
+
 
 ### EPIC: corex — Core CLI and project state foundation
 
@@ -145,6 +149,22 @@ Status values: `Planned`, `In Progress`, `Blocked`, `Completed`, `Deferred`.
 | grsync-002 | Approval-gated stale/broken graph repair substrate | Implemented pending review | Support proposal/apply repair for missing, stale, or broken `.kkachi-workflow.yaml` through complete candidate graphs, base-state evidence, drift checks, explicit approval refs, atomic writes, backup/recovery evidence, checksums, and audit events. | Implemented complete-candidate repair proposals for missing/stale/broken/invalid base graphs, base reason-code endpoint evidence, `graph_replacement` approval-gated apply, drift-safe base evidence rechecks, atomic writes, backup/recovery refs for existing graph replacement, and regression tests. No direct YAML edit fallback, no partial patch DSL, no automatic apply from periodic checks, no KAS policy decision in KAH. |
 
 GRSYNC deferrals unless separately approved: KAS compatibility registry, KAS doctor/repair CLI behavior, automatic KAH binary update, KAB graph authority, `kah graph` alias behavior, and merge/fallback with Kkachi v2 `.kkachi/config/workflows/`.
+
+### EPIC: DAGSM — Task DAG state machine substrate
+
+> Goal: provide the deterministic KAH substrate for KAS WFLOW task-DAG workflows: schema validation, workflow instance state, node FSM/order enforcement, ready-node calculation, required evidence checks, multi-DAG catalog diagnostics, and final gate integration without KAH choosing agents or workflow policy.
+>
+> Source of truth: `docs/sot/task-dag-state-machine.md`. Paired KAS policy epic: `WFLOW` in `kkachi-agent-skills/docs/roadmap.md` and KAS SOT `docs/sot/task-dag-workflow-contract.md`. This KAH SOT/docs registration is committed as a `WFLOW-001` companion planning artifact; `DAGSM-001` remains the first KAH implementation PR.
+>
+> Cross-repo linear order: `WFLOW-001 -> DAGSM-001 -> DAGSM-002 -> WFLOW-002 -> WFLOW-003 -> DAGSM-003 -> WFLOW-004`.
+
+| Task ID | Title | Status | Work guide | Notes |
+|---|---|---|---|---|
+| DAGSM-001 | Task DAG schema validation and explain diagnostics | Planned | After KAS `WFLOW-001` is accepted, implement deterministic task-DAG schema validation/explain behavior for nodes, dependencies, `all_of` fan-in, required outputs, invalid schema, duplicate nodes, unknown dependencies, cycles, path escapes, and unsupported joins. Pin final workflow command names before any support claim or downstream KAS dependency. Advertise capability evidence only when implemented. | Depends on KAS `WFLOW-001` policy acceptance. The current KAH SOT/docs registration is only the `[WFLOW-001]` companion planning artifact; `DAGSM-001` implementation is not in review yet and still requires tests/specs/compatibility/release-note updates before support claims. |
+| DAGSM-002 | Workflow instance state, node FSM, and ready-node calculation | Planned | Implement run-local workflow instance state, node transition commands, ready-node calculation, required-output/evidence completion checks, node blockers, and event/audit recording. Preserve KAS ownership of agent/role policy and KAB/Kanban execution. All state mutations must use KAH safe-path checks, active-run/project-write locking, atomic writes, status/event coherence, and stale/concurrent transition refusal. | Depends on `DAGSM-001`. Enables KAS `WFLOW-002` generic trigger. Evidence must cover sequence, fan-out, `all_of` fan-in, blocked/not-ready transitions, lock/coherence failures, path escapes, and final incomplete evidence failures. |
+| DAGSM-003 | Multi-DAG catalog diagnostics and final gate integration | Planned | Validate project multi-DAG catalog references, expose deterministic diagnostics/reason codes, integrate workflow completeness into final gates/diagnostics, and support KAS selector/node-contract metadata without KAH selecting workflows or agents. | Depends on `DAGSM-002` and KAS `WFLOW-003` metadata shape. Enables KAS `WFLOW-004` custom workflow creator. No automatic apply, KAS policy choice, or KAB graph authority. |
+
+DAGSM deferrals unless separately approved: KAS selector implementation, KAS custom trigger generation, KAB backend execution, Kanban assignment, automatic KAH/KAS update, automatic graph/catalog apply, dynamic node creation, retry/rollback automation, fallback agent selection, webhook daemons, and Hermes profile/provider/gateway/auth/token/model mutation.
 
 ### EPIC: token — KAS token-economy evidence gates
 
