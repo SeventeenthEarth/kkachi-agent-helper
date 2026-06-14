@@ -35,6 +35,7 @@ var commandGroups = map[string]struct{}{
 	"phase-plan":  {},
 	"approval":    {},
 	"graph":       {},
+	"workflow":    {},
 }
 
 const (
@@ -91,6 +92,7 @@ type compatibilityFlagsOutput struct {
 	WorkflowGraphDiagnostics                bool `json:"workflow_graph_diagnostics"`
 	WorkflowGraphNoDirectYAMLFallback       bool `json:"workflow_graph_no_direct_yaml_fallback"`
 	WorkflowGraphConfigurableFeedbackIntake bool `json:"workflow_graph_configurable_feedback_intake"`
+	TaskDAGSchemaValidation                 bool `json:"task_dag_schema_validation"`
 	TokenEconomyEvidenceGate                bool `json:"token_economy_evidence_gate"`
 	TokenEconomyToken002EvidenceGate        bool `json:"token_economy_token002_evidence_gate"`
 	InstallCommand                          bool `json:"install_command"`
@@ -424,6 +426,9 @@ func runWithOptions(args []string, stdout io.Writer, stderr io.Writer, info Buil
 			if command == "graph" {
 				return runGraphCommand(opts.args[1:], root, stdout, stderr, opts.json)
 			}
+			if command == "workflow" {
+				return runWorkflowCommand(opts.args[1:], root, stdout, stderr, opts.json)
+			}
 			writeError(stderr, opts.json, cliError{
 				Code:     "not_implemented",
 				Message:  fmt.Sprintf("command group %q is not implemented yet", command),
@@ -458,6 +463,61 @@ func runCapabilitiesCommand(args []string, stdout io.Writer, stderr io.Writer, i
 	}
 	writeCapabilities(stdout, info, jsonMode)
 	return ExitOK
+}
+
+func runWorkflowCommand(args []string, root project.Root, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
+	if len(args) == 0 {
+		writeError(stderr, jsonMode, cliError{Code: "workflow_subcommand_required", Message: "workflow subcommand is required", Hint: workflowUsageHint(), ExitCode: ExitUsage})
+		return ExitUsage
+	}
+	subcommand := args[0]
+	if subcommand != "validate" && subcommand != "explain" {
+		writeError(stderr, jsonMode, cliError{Code: "workflow_subcommand_unknown", Message: "workflow subcommand is not supported", Hint: workflowUsageHint(), ExitCode: ExitUsage, Field: "subcommand", Expected: "validate or explain", Actual: subcommand})
+		return ExitUsage
+	}
+	file, cliErr := parseWorkflowFileArg(args[1:])
+	if cliErr != nil {
+		writeError(stderr, jsonMode, *cliErr)
+		return cliErr.ExitCode
+	}
+	result, err := project.ValidateTaskDAG(root, file)
+	if err != nil {
+		cliErr := errorFromProjectProblem(err)
+		writeError(stderr, jsonMode, cliErr)
+		return cliErr.ExitCode
+	}
+	writeTaskDAGResult(stdout, result, jsonMode)
+	if result.OK {
+		return ExitOK
+	}
+	return ExitSafety
+}
+
+func parseWorkflowFileArg(args []string) (string, *cliError) {
+	file := ""
+	seenFile := false
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--file":
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "--") {
+				return "", &cliError{Code: "missing_option_value", Message: "--file requires a value", Hint: workflowUsageHint(), ExitCode: ExitUsage, Field: "--file", Expected: "workflow file path", Actual: "missing"}
+			}
+			if seenFile {
+				return "", &cliError{Code: "duplicate_option", Message: "duplicate workflow option \"--file\"", Hint: workflowUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: "--file"}
+			}
+			seenFile = true
+			file = args[i+1]
+			i++
+		case "--json":
+			// accepted for command-local compatibility; global --json is preferred.
+		default:
+			return "", &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown workflow option %q", args[i]), Hint: workflowUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "--file <path> and optional --json", Actual: args[i]}
+		}
+	}
+	if strings.TrimSpace(file) == "" {
+		return "", &cliError{Code: "missing_required_option", Message: "workflow command requires --file", Hint: workflowUsageHint(), ExitCode: ExitUsage, Field: "--file", Expected: "workflow file path", Actual: "missing"}
+	}
+	return file, nil
 }
 
 func isHelpRequest(args []string) bool {
@@ -2103,6 +2163,10 @@ func graphUsageHint() string {
 	return "Use graph init --from-template <template-id-or-path> [--output .kkachi-workflow.yaml], graph validate [--file .kkachi-workflow.yaml], graph explain [--file .kkachi-workflow.yaml], graph diff --from <graph> --to <graph> [--semantic], graph propose --candidate-file <candidate-graph> --reason <text> (legacy --patch accepted), graph apply --proposal <proposal-id> --approval <evidence-ref>, or graph export --format mermaid|plantuml [--output <path>] with optional global --json."
 }
 
+func workflowUsageHint() string {
+	return "Use workflow validate --file <workflow.yaml> --json or workflow explain --file <workflow.yaml> --json for DAGSM-001 task-DAG schema diagnostics."
+}
+
 func approvalUsageHint() string {
 	return "Use approval request <run_id> --phase <phase-id> --reason <reason> [--evidence <ref>], approval record <run_id> --phase <phase-id> --decision <approved|rejected> --by <approver> --evidence <ref> [--reason <reason>], or approval show <run_id> [--phase <phase-id>] with optional global --json."
 }
@@ -2254,6 +2318,7 @@ func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
 			{Name: "phase-plan", Status: capabilityStatusSupported, Subcommands: []string{"init", "show", "set", "validate"}},
 			{Name: "approval", Status: capabilityStatusSupported, Subcommands: []string{"request", "record", "show"}},
 			{Name: "graph", Status: capabilityStatusSupported, Subcommands: []string{"init", "validate", "explain", "diff", "propose", "apply", "export"}},
+			{Name: "workflow", Status: capabilityStatusSupported, Subcommands: []string{"validate", "explain"}},
 		},
 		CompatibilityFlags: compatibilityFlagsOutput{
 			ProjectInit:                             true,
@@ -2276,6 +2341,7 @@ func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
 			WorkflowGraphDiagnostics:                true,
 			WorkflowGraphNoDirectYAMLFallback:       true,
 			WorkflowGraphConfigurableFeedbackIntake: true,
+			TaskDAGSchemaValidation:                 true,
 			TokenEconomyEvidenceGate:                true,
 			TokenEconomyToken002EvidenceGate:        true,
 			InstallCommand:                          false,
@@ -2292,8 +2358,8 @@ var helpPages = map[string]helpOutput{
 		Command:      "kkachi-agent-helper",
 		Status:       capabilityStatusSupported,
 		Usage:        "kkachi-agent-helper [--json] <command> [subcommand] [options]",
-		Summary:      "Deterministic local helper for Kkachi project state, run artifacts, gates, events, schemas, locks, diagnostics, and compatibility discovery.",
-		Subcommands:  []helpItem{{Name: "version", Description: "Print helper build version."}, {Name: "capabilities", Description: "Print the command-surface compatibility report."}, {Name: "project", Description: "Initialize and inspect helper project state."}, {Name: "run", Description: "Create, list, show, activate, close, or abort helper runs."}, {Name: "artifact", Description: "Initialize, list, and validate canonical run artifacts."}, {Name: "gate", Description: "Run deterministic gate checks."}, {Name: "event", Description: "Append attributed helper events."}, {Name: "schema", Description: "Validate, export, or migrate helper schemas/state."}, {Name: "lock", Description: "Recover stale helper write locks explicitly."}, {Name: "diagnostics", Description: "Export redacted diagnostics bundles."}, {Name: "phase-plan", Description: "Manage KHS-declared phase-plan state."}, {Name: "approval", Description: "Record and show KHS-declared approval requests/decisions."}, {Name: "graph", Description: "Initialize and inspect project workflow graph state."}, {Name: "help", Description: "Show help for the top level or a command topic."}},
+		Summary:      "Deterministic local helper for Kkachi project state, run artifacts, gates, events, schemas, locks, diagnostics, workflow validation, and compatibility discovery.",
+		Subcommands:  []helpItem{{Name: "version", Description: "Print helper build version."}, {Name: "capabilities", Description: "Print the command-surface compatibility report."}, {Name: "project", Description: "Initialize and inspect helper project state."}, {Name: "run", Description: "Create, list, show, activate, close, or abort helper runs."}, {Name: "artifact", Description: "Initialize, list, and validate canonical run artifacts."}, {Name: "gate", Description: "Run deterministic gate checks."}, {Name: "event", Description: "Append attributed helper events."}, {Name: "schema", Description: "Validate, export, or migrate helper schemas/state."}, {Name: "lock", Description: "Recover stale helper write locks explicitly."}, {Name: "diagnostics", Description: "Export redacted diagnostics bundles."}, {Name: "phase-plan", Description: "Manage KHS-declared phase-plan state."}, {Name: "approval", Description: "Record and show KHS-declared approval requests/decisions."}, {Name: "graph", Description: "Initialize and inspect project workflow graph state."}, {Name: "workflow", Description: "Validate and explain task-DAG workflow YAML."}, {Name: "help", Description: "Show help for the top level or a command topic."}},
 		Options:      []helpItem{{Name: "--json", Description: "Emit machine-readable JSON for commands that support JSON output."}, {Name: "--help", Description: "Show help and exit 0 without requiring helper project state."}, {Name: "--version", Description: "Print helper build version."}},
 		JSONBehavior: "Use --json with help for structured help. Use capabilities --json for stable machine compatibility checks; command help is supplemental documentation.",
 	},
@@ -2302,7 +2368,7 @@ var helpPages = map[string]helpOutput{
 		Status:       capabilityStatusSupported,
 		Usage:        "kkachi-agent-helper help [command] [subcommand]",
 		Summary:      "Show help for the top level or a command topic without requiring helper project state.",
-		Arguments:    []helpItem{{Name: "[command] [subcommand]", Description: "Optional help topic such as run create, project init, schema, event, lock, or phase-plan."}},
+		Arguments:    []helpItem{{Name: "[command] [subcommand]", Description: "Optional help topic such as run create, project init, schema, event, lock, phase-plan, graph, or workflow."}},
 		JSONBehavior: "Use --json with help for structured help. Use capabilities --json for stable machine compatibility checks; command help is supplemental documentation.",
 	},
 	"project": {
@@ -2428,6 +2494,16 @@ var helpPages = map[string]helpOutput{
 		Options:      []helpItem{{Name: "--from-template <template-id-or-path>", Description: "Template id khs-default or repository-relative workflow graph YAML template for graph init."}, {Name: "--output .kkachi-workflow.yaml", Description: "Optional graph init output; graph init only supports .kkachi-workflow.yaml."}, {Name: "--file <repo-relative-path>", Description: "Workflow graph file to inspect; defaults to .kkachi-workflow.yaml for validate/explain."}, {Name: "--from <repo-relative-graph>", Description: "Base graph file for graph diff."}, {Name: "--to <repo-relative-graph>", Description: "Candidate graph file for graph diff."}, {Name: "--semantic", Description: "Accepted for graph diff; semantic comparison is always used."}, {Name: "--candidate-file <repo-relative-candidate-graph>", Description: "Complete candidate workflow graph file for graph propose."}, {Name: "--patch <repo-relative-candidate-graph>", Description: "Legacy graph propose alias for --candidate-file; not a partial patch DSL."}, {Name: "--reason <text>", Description: "Required reason recorded in the graph proposal."}, {Name: "--proposal <proposal-id>", Description: "Proposal id returned by graph propose for graph apply."}, {Name: "--approval <evidence-ref>", Description: "Required approval or audit evidence reference recorded by graph apply."}, {Name: "--format mermaid|plantuml", Description: "Required graph export diagram format."}, {Name: "--output <repo-relative-path>", Description: "Optional generated diagram output path for graph export."}, {Name: "--json", Description: "Emit structured graph output."}, {Name: "--help", Description: "Show graph help and exit 0."}},
 		JSONBehavior: "Graph init/validate/explain/diff/propose/apply/export support global --json for structured output. Failing graph validation, diff, or export exits 3 while emitting graph result data on stdout.",
 		Notes:        []string{"graph init creates only the initial .kkachi-workflow.yaml and fails if one already exists.", "graph propose records .kkachi/graph/proposals evidence for a complete candidate graph; it does not edit .kkachi-workflow.yaml.", "graph propose may record approval-gated repair evidence when the project .kkachi-workflow.yaml is missing, stale, broken, or otherwise invalid and the candidate validates.", "approval_required=false means the semantic diff did not trigger graph approval policy; graph apply still records --approval as an explicit approval or audit evidence reference.", "graph apply records the supplied approval/audit evidence reference but does not decide approval policy; repair apply rechecks base evidence and preserves backup/recovery refs when replacing an existing graph.", "graph export writes or prints generated diagrams with authoritative=false; exports are never workflow graph source of truth.", "replacement init and kah alias behavior remain unimplemented.", "KAH validates declared graph state only; KHS remains responsible for workflow policy and templates."},
+	},
+	"workflow": {
+		Command:      "kkachi-agent-helper workflow",
+		Status:       capabilityStatusSupported,
+		Usage:        "kkachi-agent-helper workflow validate --file <workflow.yaml> [--json]\n  kkachi-agent-helper workflow explain --file <workflow.yaml> [--json]",
+		Summary:      "Validate and explain DAGSM-001 task-DAG YAML structure without creating workflow instance state.",
+		Subcommands:  []helpItem{{Name: "validate", Description: "Validate task-DAG schema, node ids, dependencies, all_of joins, cycles, and required output path declarations."}, {Name: "explain", Description: "Emit the same stable task-DAG diagnostics plus node and edge projection for planning/integration evidence."}},
+		Options:      []helpItem{{Name: "--file <repo-relative-path>", Required: true, Description: "Task-DAG YAML file to inspect."}, {Name: "--json", Description: "Emit structured task-DAG diagnostics."}, {Name: "--help", Description: "Show workflow help and exit 0."}},
+		JSONBehavior: "workflow validate/explain emit task-DAG result data on stdout. Invalid DAGs exit 3 with status=invalid; unsafe path or unreadable input errors are structured on stderr.",
+		Notes:        []string{"DAGSM-001 supports schema_version task-dag/v1, workflow_id, nodes, id, depends_on, join=all_of, and required_outputs only.", "Workflow instance creation, node FSM state, ready-node calculation, catalog diagnostics, and final gate integration remain deferred to later DAGSM roadmap tasks."},
 	},
 }
 
@@ -2965,6 +3041,14 @@ func writeGraphIssues(w io.Writer, issues []project.GraphIssue) {
 	}
 }
 
+func writeTaskDAGResult(w io.Writer, result project.TaskDAGResult, jsonMode bool) {
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(result)
+		return
+	}
+	_, _ = fmt.Fprint(w, project.TaskDAGHumanSummary(result))
+}
+
 func writeLockRecoverResult(w io.Writer, result project.LockRecoveryResult, jsonMode bool) {
 	payload := lockRecoverOutput{Recovered: result.Recovered}
 	if jsonMode {
@@ -3300,7 +3384,7 @@ func exitCodeForProblem(code string) int {
 		return ExitNotFound
 	case "artifact_baseline_encode_failed", "artifact_json_encode_failed", "schema_encode_failed", "graph_proposal_encode_failed":
 		return ExitInternal
-	case "absolute_path", "empty_path", "path_escape", "repo_root_path", "symlink_escape", "symlink_resolution_failed", "path_inspection_failed", "repo_root_required", "helper_state_exists", "last_event_id_mismatch", "status_invalid_json", "status_last_event_id_invalid", "status_active_run_invalid", "status_project_id_invalid", "project_config_read_failed", "project_config_invalid", "event_log_invalid", "event_log_empty", "event_id_invalid", "event_id_exhausted", "run_metadata_invalid", "run_metadata_invalid_json", "active_run_conflict", "run_transition_invalid", "run_not_found", "run_id_ambiguous", "run_root_read_failed", "run_metadata_read_failed", "run_id_collision", "run_artifact_init_invalid_state", "run_artifact_mutation_invalid_state", "artifact_inspection_failed", "artifact_path_invalid", "artifact_source_missing", "artifact_source_inspection_failed", "artifact_source_invalid", "artifact_source_read_failed", "artifact_read_failed", "artifact_status_invalid", "artifact_reason_required", "artifact_status_unsupported", "artifact_status_not_applicable", "artifact_json_invalid", "status_gate_summary_invalid", "lock_conflict", "lock_stale_recovery_required", "lock_metadata_invalid", "lock_not_found", "lock_identity_mismatch", "lock_release_failed", "schema_validation_read_failed", "schema_reference_invalid", "schema_read_failed", "schema_export_inspection_failed", "schema_export_conflict", "schema_export_read_failed", "schema_migration_path_inspection_failed", "schema_migration_source_version_mismatch", "schema_migration_read_failed", "schema_migration_invalid_json", "schema_migration_invalid_event_log", "schema_migration_version_missing", "schema_migration_backup_failed", "install_manifest_read_failed", "install_manifest_invalid_json", "install_manifest_invalid", "install_manifest_kind_mismatch", "install_source_invalid", "install_source_item_invalid", "install_source_read_failed", "install_checksum_mismatch", "install_duplicate_target", "install_target_inspection_failed", "install_target_read_failed", "install_owner_marker_missing", "install_compatibility_failed", "install_preflight_blocked", "install_apply_failed", "diagnostics_encode_failed", "diagnostics_output_exists", "graph_already_exists", "graph_template_required", "graph_template_unknown", "graph_template_invalid", "graph_output_invalid", "graph_init_invalid", "graph_proposal_invalid", "graph_proposal_inspection_failed", "graph_proposal_id_exhausted", "graph_export_output_invalid", "graph_export_output_inspection_failed", "graph_export_output_exists":
+	case "absolute_path", "empty_path", "path_escape", "repo_root_path", "symlink_escape", "symlink_resolution_failed", "path_inspection_failed", "repo_root_required", "helper_state_exists", "last_event_id_mismatch", "status_invalid_json", "status_last_event_id_invalid", "status_active_run_invalid", "status_project_id_invalid", "project_config_read_failed", "project_config_invalid", "event_log_invalid", "event_log_empty", "event_id_invalid", "event_id_exhausted", "run_metadata_invalid", "run_metadata_invalid_json", "active_run_conflict", "run_transition_invalid", "run_not_found", "run_id_ambiguous", "run_root_read_failed", "run_metadata_read_failed", "run_id_collision", "run_artifact_init_invalid_state", "run_artifact_mutation_invalid_state", "artifact_inspection_failed", "artifact_path_invalid", "artifact_source_missing", "artifact_source_inspection_failed", "artifact_source_invalid", "artifact_source_read_failed", "artifact_read_failed", "artifact_status_invalid", "artifact_reason_required", "artifact_status_unsupported", "artifact_status_not_applicable", "artifact_json_invalid", "status_gate_summary_invalid", "lock_conflict", "lock_stale_recovery_required", "lock_metadata_invalid", "lock_not_found", "lock_identity_mismatch", "lock_release_failed", "schema_validation_read_failed", "schema_reference_invalid", "schema_read_failed", "schema_export_inspection_failed", "schema_export_conflict", "schema_export_read_failed", "schema_migration_path_inspection_failed", "schema_migration_source_version_mismatch", "schema_migration_read_failed", "schema_migration_invalid_json", "schema_migration_invalid_event_log", "schema_migration_version_missing", "schema_migration_backup_failed", "install_manifest_read_failed", "install_manifest_invalid_json", "install_manifest_invalid", "install_manifest_kind_mismatch", "install_source_invalid", "install_source_item_invalid", "install_source_read_failed", "install_checksum_mismatch", "install_duplicate_target", "install_target_inspection_failed", "install_target_read_failed", "install_owner_marker_missing", "install_compatibility_failed", "install_preflight_blocked", "install_apply_failed", "diagnostics_encode_failed", "diagnostics_output_exists", "graph_already_exists", "graph_template_required", "graph_template_unknown", "graph_template_invalid", "graph_output_invalid", "graph_init_invalid", "graph_proposal_invalid", "graph_proposal_inspection_failed", "graph_proposal_id_exhausted", "graph_export_output_invalid", "graph_export_output_inspection_failed", "graph_export_output_exists", "task_dag_read_failed":
 		return ExitSafety
 	default:
 		return ExitUsage

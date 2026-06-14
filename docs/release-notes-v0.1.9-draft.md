@@ -6,6 +6,7 @@ Commit: pending
 ## Summary
 
 - Adds KAH graph workflow sync diagnostics and stable reason-code hardening for KAS v0.1.2 consumption.
+- Adds DAGSM-001 task-DAG schema validation/explain diagnostics for local workflow YAML inspection.
 
 ## Compatibility
 
@@ -22,6 +23,8 @@ Commit: pending
 - `graph explain --json` now emits top-level `reason_codes` and preserves validation reason codes in `validation_summary.reason_codes`.
 - `diagnostics export` `graph_compatibility` now emits top-level reason codes, nested validation reason codes, nested feedback-intake reason codes, and forbidden fallback source `reason_code` fields.
 - Initial reason-code vocabulary reserves graph missing/valid/invalid-schema/parse-error/source-precedence/checksum-audit/feedback-intake/manual-edit/phase-conflict/approval-required/repairability/forbidden-fallback facts; this slice emits producer-backed codes for the implemented validation and diagnostics states.
+- `workflow validate --file <workflow.yaml> --json` and `workflow explain --file <workflow.yaml> --json` now expose DAGSM-001 task-DAG schema validation/projection for `task-dag/v1` local YAML files.
+- Task-DAG validation covers `workflow_id`, `schema_version`, node ids, dependencies, duplicate ids, cycles, `join: all_of`, per-node `required_outputs`, repository-confined output paths, stable public reason codes, JSON safety results, and the `task_dag_schema_validation=true` capability flag.
 - KAH still reports deterministic support facts only; KAS remains the policy owner for supported envelope and update guidance.
 
 ## Verification
@@ -31,6 +34,8 @@ go test -count=1 ./...
 go run . graph validate --file .kkachi-workflow.yaml --json
 go run . graph explain --file .kkachi-workflow.yaml --json
 go run . diagnostics export --json
+go run . workflow validate --file .kkachi/runs/<run_id>/artifacts/implementation/task-dag-valid.yaml --json
+go run . workflow explain --file .kkachi/runs/<run_id>/artifacts/implementation/task-dag-valid.yaml --json
 ```
 
 Maintainer evidence for the draft was captured with `HOME=/Users/draccoon` because local KAH/KAS tooling in this workspace expects the real user home.

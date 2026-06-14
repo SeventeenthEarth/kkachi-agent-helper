@@ -109,7 +109,7 @@ func TestCapabilitiesJSONOutputIsProjectIndependent(t *testing.T) {
 		t.Fatalf("project schema version = %q, want %q", payload.ProjectSchemaVersion, project.SchemaVersion)
 	}
 	flags := payload.CompatibilityFlags
-	if !flags.ProjectInit || !flags.RunLifecycle || !flags.ArtifactInit || !flags.ArtifactList || !flags.ArtifactValidate || !flags.ArtifactMutation || !flags.Gates || !flags.BackendEvidenceRequirements || !flags.DiagnosticsExport || !flags.PhasePlan || !flags.ApprovalRecords || !flags.WorkflowGraphReadonly || !flags.WorkflowGraphInit || !flags.WorkflowGraphApply || !flags.WorkflowGraphExport || !flags.WorkflowGraphDiagnostics || !flags.WorkflowGraphNoDirectYAMLFallback || !flags.WorkflowGraphConfigurableFeedbackIntake || !flags.TokenEconomyEvidenceGate {
+	if !flags.ProjectInit || !flags.RunLifecycle || !flags.ArtifactInit || !flags.ArtifactList || !flags.ArtifactValidate || !flags.ArtifactMutation || !flags.Gates || !flags.BackendEvidenceRequirements || !flags.DiagnosticsExport || !flags.PhasePlan || !flags.ApprovalRecords || !flags.WorkflowGraphReadonly || !flags.WorkflowGraphInit || !flags.WorkflowGraphApply || !flags.WorkflowGraphExport || !flags.WorkflowGraphDiagnostics || !flags.WorkflowGraphNoDirectYAMLFallback || !flags.WorkflowGraphConfigurableFeedbackIntake || !flags.TaskDAGSchemaValidation || !flags.TokenEconomyEvidenceGate {
 		t.Fatalf("compatibility flags = %#v, want implemented surfaces enabled", flags)
 	}
 	if flags.InstallCommand {
@@ -1425,6 +1425,7 @@ func assertCapabilityCommandGroups(t *testing.T, groups []capabilityCommandGroup
 		{Name: "phase-plan", Status: capabilityStatusSupported, Subcommands: []string{"init", "show", "set", "validate"}},
 		{Name: "approval", Status: capabilityStatusSupported, Subcommands: []string{"request", "record", "show"}},
 		{Name: "graph", Status: capabilityStatusSupported, Subcommands: []string{"init", "validate", "explain", "diff", "propose", "apply", "export"}},
+		{Name: "workflow", Status: capabilityStatusSupported, Subcommands: []string{"validate", "explain"}},
 	}
 	if !slices.EqualFunc(groups, want, func(got capabilityCommandGroup, want capabilityCommandGroup) bool {
 		return got.Name == want.Name && got.Status == want.Status && slices.Equal(got.Subcommands, want.Subcommands)
@@ -2640,4 +2641,110 @@ func TestPhasePlanCLIInitSetValidateAndDiagnostics(t *testing.T) {
 	if len(bundle.ApprovalRecords) != 2 {
 		t.Fatalf("diagnostics approval records = %#v, want request and decision", bundle.ApprovalRecords)
 	}
+}
+
+func TestWorkflowValidateAndExplainCLIJSON(t *testing.T) {
+	repo := tempGitRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "workflow.yaml"), []byte(`schema_version: task-dag/v1
+workflow_id: demo
+nodes:
+  - id: setup
+    depends_on: []
+    join: all_of
+    required_outputs: ["out/setup.txt"]
+  - id: build
+    depends_on: [setup]
+    join: all_of
+    required_outputs: ["out/build.txt"]
+`), 0o600); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"workflow", "validate", "--file", "workflow.yaml", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("workflow validate exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	var validate map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &validate); err != nil {
+		t.Fatalf("validate stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if validate["status"] != "valid" || validate["ok"] != true || validate["reason"] != "task_dag_valid" {
+		t.Fatalf("validate = %#v, want valid task_dag_valid", validate)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"workflow", "explain", "--file", "workflow.yaml", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("workflow explain exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	var explain map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &explain); err != nil {
+		t.Fatalf("explain stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if explain["status"] != "valid" || explain["workflow_id"] != "demo" {
+		t.Fatalf("explain = %#v, want valid demo", explain)
+	}
+	if len(explain["edges"].([]any)) != 1 || len(explain["nodes"].([]any)) != 2 {
+		t.Fatalf("explain = %#v, want nodes and edges", explain)
+	}
+}
+
+func TestWorkflowValidateCLIJSONValidationFailure(t *testing.T) {
+	repo := tempGitRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "workflow.yaml"), []byte(`schema_version: task-dag/v1
+workflow_id: demo
+nodes:
+  - id: build
+    depends_on: [missing]
+    join: all_of
+`), 0o600); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"workflow", "validate", "--file", "workflow.yaml", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code == ExitOK {
+		t.Fatalf("workflow validate exit = %d, want non-zero", code)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want validation JSON on stdout only", stderr.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if payload["status"] != "invalid" || payload["reason"] != "task_dag_unknown_dependency" {
+		t.Fatalf("payload = %#v, want invalid unknown dependency", payload)
+	}
+}
+
+func TestWorkflowValidateCLIJSONMissingFileReturnsSafetyResult(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := runWithOptions([]string{"workflow", "validate", "--file", "missing.yaml", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	if code != ExitSafety {
+		t.Fatalf("workflow validate exit = %d, want %d stderr=%s stdout=%s", code, ExitSafety, stderr.String(), stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want safety result JSON on stdout only", stderr.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if payload["status"] != "invalid" || payload["reason"] != "task_dag_missing" || payload["path"] != "missing.yaml" {
+		t.Fatalf("payload = %#v, want invalid missing file result", payload)
+	}
+}
+
+func TestWorkflowValidateCLIJSONUnreadableFileReturnsSafetyError(t *testing.T) {
+	repo := tempGitRepo(t)
+	if err := os.Mkdir(filepath.Join(repo, "workflow-dir.yaml"), 0o700); err != nil {
+		t.Fatalf("mkdir workflow dir: %v", err)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := runWithOptions([]string{"workflow", "validate", "--file", "workflow-dir.yaml", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	assertCLIErrorCode(t, code, stdout, stderr, ExitSafety, "task_dag_read_failed")
 }
