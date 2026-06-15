@@ -41,12 +41,14 @@ This matrix records the local-only compatibility contract for `kkachi-agent-help
 
 ## Task-DAG validation compatibility marker
 
-Status: DAGSM-001 task-DAG schema validation/explain implemented for local workflow YAML inspection only. Workflow instance creation, node FSM transitions, ready-node calculation, catalog diagnostics, and final gate integration remain later roadmap tasks.
+Status: DAGSM-001 task-DAG schema validation/explain and DAGSM-002 run-local workflow instance state are implemented. Catalog diagnostics and final gate integration remain later roadmap tasks.
 
 | Surface | Compatibility state | Required KHS behavior | Required KAH behavior |
 |---|---|---|---|
 | `kkachi-agent-helper workflow validate --file <workflow.yaml> --json` | Implemented task-DAG schema diagnostic surface | Capability-check `workflow` command group plus `task_dag_schema_validation=true` before relying on it; treat `status=invalid` and exit 3 as a deterministic validation failure | Validate `task-dag/v1`, workflow id, node ids, dependencies, cycle absence, `join=all_of`, and repository-confined `required_outputs`; emit stable JSON diagnostics/reason codes |
 | `kkachi-agent-helper workflow explain --file <workflow.yaml> --json` | Implemented read-only task-DAG projection surface | Use for planning/evidence projection only; do not treat it as workflow instance state | Emit validation status plus node and edge projection without mutating `.kkachi/` state |
+| `kkachi-agent-helper workflow create/show/ready --run <run_id> --json` | Implemented run-local workflow instance surface | Capability-check `workflow_instance_state=true`; use KAH output as state/evidence only, not policy authority | Store `.kkachi/runs/<run_id>/workflow-instance.json`, expose revisioned state, and calculate ready pending nodes deterministically |
+| `kkachi-agent-helper workflow node <start|complete|block> --run <run_id> --node <node_id> --json` | Implemented node FSM transition surface | Pass `--expect-revision` for stale/concurrent refusal where concurrency matters; provide required output evidence before completion | Enforce pending/running/succeeded/blocked transitions, fail closed on stale revisions, unsafe paths, missing required outputs, and append workflow audit events |
 
 ## Graph roadmap compatibility marker
 

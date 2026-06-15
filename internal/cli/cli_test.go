@@ -109,7 +109,7 @@ func TestCapabilitiesJSONOutputIsProjectIndependent(t *testing.T) {
 		t.Fatalf("project schema version = %q, want %q", payload.ProjectSchemaVersion, project.SchemaVersion)
 	}
 	flags := payload.CompatibilityFlags
-	if !flags.ProjectInit || !flags.RunLifecycle || !flags.ArtifactInit || !flags.ArtifactList || !flags.ArtifactValidate || !flags.ArtifactMutation || !flags.Gates || !flags.BackendEvidenceRequirements || !flags.DiagnosticsExport || !flags.PhasePlan || !flags.ApprovalRecords || !flags.WorkflowGraphReadonly || !flags.WorkflowGraphInit || !flags.WorkflowGraphApply || !flags.WorkflowGraphExport || !flags.WorkflowGraphDiagnostics || !flags.WorkflowGraphNoDirectYAMLFallback || !flags.WorkflowGraphConfigurableFeedbackIntake || !flags.TaskDAGSchemaValidation || !flags.TokenEconomyEvidenceGate {
+	if !flags.ProjectInit || !flags.RunLifecycle || !flags.ArtifactInit || !flags.ArtifactList || !flags.ArtifactValidate || !flags.ArtifactMutation || !flags.Gates || !flags.BackendEvidenceRequirements || !flags.DiagnosticsExport || !flags.PhasePlan || !flags.ApprovalRecords || !flags.WorkflowGraphReadonly || !flags.WorkflowGraphInit || !flags.WorkflowGraphApply || !flags.WorkflowGraphExport || !flags.WorkflowGraphDiagnostics || !flags.WorkflowGraphNoDirectYAMLFallback || !flags.WorkflowGraphConfigurableFeedbackIntake || !flags.TaskDAGSchemaValidation || !flags.WorkflowInstanceState || !flags.TokenEconomyEvidenceGate {
 		t.Fatalf("compatibility flags = %#v, want implemented surfaces enabled", flags)
 	}
 	if flags.InstallCommand {
@@ -1425,7 +1425,7 @@ func assertCapabilityCommandGroups(t *testing.T, groups []capabilityCommandGroup
 		{Name: "phase-plan", Status: capabilityStatusSupported, Subcommands: []string{"init", "show", "set", "validate"}},
 		{Name: "approval", Status: capabilityStatusSupported, Subcommands: []string{"request", "record", "show"}},
 		{Name: "graph", Status: capabilityStatusSupported, Subcommands: []string{"init", "validate", "explain", "diff", "propose", "apply", "export"}},
-		{Name: "workflow", Status: capabilityStatusSupported, Subcommands: []string{"validate", "explain"}},
+		{Name: "workflow", Status: capabilityStatusSupported, Subcommands: []string{"validate", "explain", "create", "show", "ready", "node"}},
 	}
 	if !slices.EqualFunc(groups, want, func(got capabilityCommandGroup, want capabilityCommandGroup) bool {
 		return got.Name == want.Name && got.Status == want.Status && slices.Equal(got.Subcommands, want.Subcommands)
@@ -2747,4 +2747,148 @@ func TestWorkflowValidateCLIJSONUnreadableFileReturnsSafetyError(t *testing.T) {
 
 	code := runWithOptions([]string{"workflow", "validate", "--file", "workflow-dir.yaml", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
 	assertCLIErrorCode(t, code, stdout, stderr, ExitSafety, "task_dag_read_failed")
+}
+
+func TestWorkflowInstanceCLIJSONCreateReadyAndNodeTransitions(t *testing.T) {
+	repo, runID := workflowCLITestRun(t)
+	writeCLIWorkflowFixture(t, repo, `schema_version: task-dag/v1
+workflow_id: cli-demo
+nodes:
+  - id: setup
+    depends_on: []
+    join: all_of
+    required_outputs: ["out/setup.txt"]
+  - id: build
+    depends_on: [setup]
+    join: all_of
+    required_outputs: ["out/build.txt"]
+`)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"workflow", "create", "--run", runID, "--file", "workflow.yaml", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("workflow create exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	var created map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
+		t.Fatalf("create stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if created["reason"] != "workflow_instance_created" || created["ok"] != true {
+		t.Fatalf("created = %#v, want workflow_instance_created", created)
+	}
+	if ready := created["ready"].([]any); len(ready) != 1 || ready[0].(map[string]any)["id"] != "setup" {
+		t.Fatalf("created ready = %#v, want setup", created["ready"])
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"workflow", "node", "start", "--run", runID, "--node", "setup", "--expect-revision", "1", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("workflow node start exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	var started map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &started); err != nil {
+		t.Fatalf("start stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if started["reason"] != "workflow_node_started" {
+		t.Fatalf("started = %#v, want workflow_node_started", started)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"workflow", "node", "complete", "--run", runID, "--node", "setup", "--evidence", "out/setup.txt", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitSafety {
+		t.Fatalf("workflow node complete missing output exit = %d, want safety", code)
+	}
+	var missing map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &missing); err != nil {
+		t.Fatalf("missing stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if missing["reason"] != "node_required_output_missing" || missing["ok"] != false {
+		t.Fatalf("missing = %#v, want node_required_output_missing", missing)
+	}
+
+	if err := os.MkdirAll(filepath.Join(repo, "out"), 0o755); err != nil {
+		t.Fatalf("mkdir out: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "out", "setup.txt"), []byte("done\n"), 0o600); err != nil {
+		t.Fatalf("write setup output: %v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"workflow", "node", "complete", "--run", runID, "--node", "setup", "--evidence", "../outside.txt", "--expect-revision", "2", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitSafety {
+		t.Fatalf("workflow node complete unsafe evidence exit = %d, want safety", code)
+	}
+	var unsafe map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &unsafe); err != nil {
+		t.Fatalf("unsafe stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if unsafe["reason"] != "node_evidence_unsafe" || unsafe["ok"] != false {
+		t.Fatalf("unsafe = %#v, want node_evidence_unsafe", unsafe)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"workflow", "node", "complete", "--run", runID, "--node", "setup", "--evidence", "out/setup.txt", "--expect-revision", "2", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("workflow node complete exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	var completed map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &completed); err != nil {
+		t.Fatalf("complete stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if ready := completed["ready"].([]any); len(ready) != 1 || ready[0].(map[string]any)["id"] != "build" {
+		t.Fatalf("completed ready = %#v, want build", completed["ready"])
+	}
+}
+
+func TestWorkflowInstanceCLIJSONStaleRevisionReturnsSafety(t *testing.T) {
+	repo, runID := workflowCLITestRun(t)
+	writeCLIWorkflowFixture(t, repo, `schema_version: task-dag/v1
+workflow_id: stale
+nodes:
+  - id: setup
+    depends_on: []
+    join: all_of
+    required_outputs: ["out/setup.txt"]
+`)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"workflow", "create", "--run", runID, "--file", "workflow.yaml", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("workflow create exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"workflow", "node", "start", "--run", runID, "--node", "setup", "--expect-revision", "999", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitSafety {
+		t.Fatalf("workflow node stale exit = %d, want safety", code)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("stale stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if payload["reason"] != "workflow_instance_stale" {
+		t.Fatalf("payload = %#v, want workflow_instance_stale", payload)
+	}
+}
+
+func workflowCLITestRun(t *testing.T) (string, string) {
+	t.Helper()
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions(projectInitArgs("--json"), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions(runCreateArgs("Workflow CLI", "--json"), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("run create exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	var created runCreateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
+		t.Fatalf("create stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	return repo, created.RunID
+}
+
+func writeCLIWorkflowFixture(t *testing.T, repo string, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(repo, "workflow.yaml"), []byte(content), 0o600); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
 }

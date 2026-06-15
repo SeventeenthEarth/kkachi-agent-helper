@@ -93,6 +93,7 @@ type compatibilityFlagsOutput struct {
 	WorkflowGraphNoDirectYAMLFallback       bool `json:"workflow_graph_no_direct_yaml_fallback"`
 	WorkflowGraphConfigurableFeedbackIntake bool `json:"workflow_graph_configurable_feedback_intake"`
 	TaskDAGSchemaValidation                 bool `json:"task_dag_schema_validation"`
+	WorkflowInstanceState                   bool `json:"workflow_instance_state"`
 	TokenEconomyEvidenceGate                bool `json:"token_economy_evidence_gate"`
 	TokenEconomyToken002EvidenceGate        bool `json:"token_economy_token002_evidence_gate"`
 	InstallCommand                          bool `json:"install_command"`
@@ -471,26 +472,72 @@ func runWorkflowCommand(args []string, root project.Root, stdout io.Writer, stde
 		return ExitUsage
 	}
 	subcommand := args[0]
-	if subcommand != "validate" && subcommand != "explain" {
-		writeError(stderr, jsonMode, cliError{Code: "workflow_subcommand_unknown", Message: "workflow subcommand is not supported", Hint: workflowUsageHint(), ExitCode: ExitUsage, Field: "subcommand", Expected: "validate or explain", Actual: subcommand})
+	switch subcommand {
+	case "validate", "explain":
+		file, cliErr := parseWorkflowFileArg(args[1:])
+		if cliErr != nil {
+			writeError(stderr, jsonMode, *cliErr)
+			return cliErr.ExitCode
+		}
+		result, err := project.ValidateTaskDAG(root, file)
+		if err != nil {
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writeTaskDAGResult(stdout, result, jsonMode)
+		if result.OK {
+			return ExitOK
+		}
+		return ExitSafety
+	case "create":
+		options, cliErr := parseWorkflowCreateArgs(args[1:])
+		if cliErr != nil {
+			writeError(stderr, jsonMode, *cliErr)
+			return cliErr.ExitCode
+		}
+		result, err := project.CreateWorkflowInstance(root, options)
+		return writeWorkflowInstanceCommandResult(stdout, stderr, result, err, jsonMode)
+	case "show":
+		options, cliErr := parseWorkflowRunArgs(args[1:])
+		if cliErr != nil {
+			writeError(stderr, jsonMode, *cliErr)
+			return cliErr.ExitCode
+		}
+		result, err := project.ShowWorkflowInstance(root, options)
+		return writeWorkflowInstanceCommandResult(stdout, stderr, result, err, jsonMode)
+	case "ready":
+		options, cliErr := parseWorkflowRunArgs(args[1:])
+		if cliErr != nil {
+			writeError(stderr, jsonMode, *cliErr)
+			return cliErr.ExitCode
+		}
+		result, err := project.ReadyWorkflowNodes(root, options)
+		return writeWorkflowInstanceCommandResult(stdout, stderr, result, err, jsonMode)
+	case "node":
+		action, options, cliErr := parseWorkflowNodeArgs(args[1:])
+		if cliErr != nil {
+			writeError(stderr, jsonMode, *cliErr)
+			return cliErr.ExitCode
+		}
+		var result project.WorkflowInstanceResult
+		var err error
+		switch action {
+		case "start":
+			result, err = project.StartWorkflowNode(root, options)
+		case "complete":
+			result, err = project.CompleteWorkflowNode(root, options)
+		case "block":
+			result, err = project.BlockWorkflowNode(root, options)
+		default:
+			writeError(stderr, jsonMode, cliError{Code: "workflow_node_action_unknown", Message: "workflow node action is not supported", Hint: workflowUsageHint(), ExitCode: ExitUsage, Field: "action", Expected: "start, complete, or block", Actual: action})
+			return ExitUsage
+		}
+		return writeWorkflowInstanceCommandResult(stdout, stderr, result, err, jsonMode)
+	default:
+		writeError(stderr, jsonMode, cliError{Code: "workflow_subcommand_unknown", Message: "workflow subcommand is not supported", Hint: workflowUsageHint(), ExitCode: ExitUsage, Field: "subcommand", Expected: "validate, explain, create, show, ready, or node", Actual: subcommand})
 		return ExitUsage
 	}
-	file, cliErr := parseWorkflowFileArg(args[1:])
-	if cliErr != nil {
-		writeError(stderr, jsonMode, *cliErr)
-		return cliErr.ExitCode
-	}
-	result, err := project.ValidateTaskDAG(root, file)
-	if err != nil {
-		cliErr := errorFromProjectProblem(err)
-		writeError(stderr, jsonMode, cliErr)
-		return cliErr.ExitCode
-	}
-	writeTaskDAGResult(stdout, result, jsonMode)
-	if result.OK {
-		return ExitOK
-	}
-	return ExitSafety
 }
 
 func parseWorkflowFileArg(args []string) (string, *cliError) {
@@ -499,25 +546,187 @@ func parseWorkflowFileArg(args []string) (string, *cliError) {
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--file":
-			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "--") {
-				return "", &cliError{Code: "missing_option_value", Message: "--file requires a value", Hint: workflowUsageHint(), ExitCode: ExitUsage, Field: "--file", Expected: "workflow file path", Actual: "missing"}
+			value, err := requireWorkflowOptionValue(args, &i, "--file")
+			if err != nil {
+				return "", err
 			}
 			if seenFile {
-				return "", &cliError{Code: "duplicate_option", Message: "duplicate workflow option \"--file\"", Hint: workflowUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: "--file"}
+				return "", duplicateWorkflowOption("--file")
 			}
 			seenFile = true
-			file = args[i+1]
-			i++
+			file = value
 		case "--json":
 			// accepted for command-local compatibility; global --json is preferred.
 		default:
-			return "", &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown workflow option %q", args[i]), Hint: workflowUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "--file <path> and optional --json", Actual: args[i]}
+			return "", unknownWorkflowOption(args[i], "--file <path> and optional --json")
 		}
 	}
 	if strings.TrimSpace(file) == "" {
 		return "", &cliError{Code: "missing_required_option", Message: "workflow command requires --file", Hint: workflowUsageHint(), ExitCode: ExitUsage, Field: "--file", Expected: "workflow file path", Actual: "missing"}
 	}
 	return file, nil
+}
+
+func parseWorkflowCreateArgs(args []string) (project.WorkflowCreateOptions, *cliError) {
+	var options project.WorkflowCreateOptions
+	seen := map[string]bool{}
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--run":
+			value, err := requireWorkflowOptionValue(args, &i, "--run")
+			if err != nil {
+				return options, err
+			}
+			if seen["--run"] {
+				return options, duplicateWorkflowOption("--run")
+			}
+			seen["--run"] = true
+			options.RunID = value
+		case "--file":
+			value, err := requireWorkflowOptionValue(args, &i, "--file")
+			if err != nil {
+				return options, err
+			}
+			if seen["--file"] {
+				return options, duplicateWorkflowOption("--file")
+			}
+			seen["--file"] = true
+			options.File = value
+		case "--json":
+		default:
+			return options, unknownWorkflowOption(args[i], "--run <run_id> --file <path> and optional --json")
+		}
+	}
+	if strings.TrimSpace(options.RunID) == "" {
+		return options, missingWorkflowOption("--run", "run id")
+	}
+	if strings.TrimSpace(options.File) == "" {
+		return options, missingWorkflowOption("--file", "workflow file path")
+	}
+	return options, nil
+}
+
+func parseWorkflowRunArgs(args []string) (project.WorkflowRunOptions, *cliError) {
+	var options project.WorkflowRunOptions
+	seenRun := false
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--run":
+			value, err := requireWorkflowOptionValue(args, &i, "--run")
+			if err != nil {
+				return options, err
+			}
+			if seenRun {
+				return options, duplicateWorkflowOption("--run")
+			}
+			seenRun = true
+			options.RunID = value
+		case "--json":
+		default:
+			return options, unknownWorkflowOption(args[i], "--run <run_id> and optional --json")
+		}
+	}
+	if strings.TrimSpace(options.RunID) == "" {
+		return options, missingWorkflowOption("--run", "run id")
+	}
+	return options, nil
+}
+
+func parseWorkflowNodeArgs(args []string) (string, project.WorkflowNodeOptions, *cliError) {
+	var options project.WorkflowNodeOptions
+	if len(args) == 0 {
+		return "", options, &cliError{Code: "workflow_node_action_required", Message: "workflow node action is required", Hint: workflowUsageHint(), ExitCode: ExitUsage, Field: "action", Expected: "start, complete, or block", Actual: "missing"}
+	}
+	action := args[0]
+	seen := map[string]bool{}
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--run":
+			value, err := requireWorkflowOptionValue(args, &i, "--run")
+			if err != nil {
+				return action, options, err
+			}
+			if seen["--run"] {
+				return action, options, duplicateWorkflowOption("--run")
+			}
+			seen["--run"] = true
+			options.RunID = value
+		case "--node":
+			value, err := requireWorkflowOptionValue(args, &i, "--node")
+			if err != nil {
+				return action, options, err
+			}
+			if seen["--node"] {
+				return action, options, duplicateWorkflowOption("--node")
+			}
+			seen["--node"] = true
+			options.NodeID = value
+		case "--evidence":
+			value, err := requireWorkflowOptionValue(args, &i, "--evidence")
+			if err != nil {
+				return action, options, err
+			}
+			if seen["--evidence"] {
+				return action, options, duplicateWorkflowOption("--evidence")
+			}
+			seen["--evidence"] = true
+			options.Evidence = value
+		case "--reason":
+			value, err := requireWorkflowOptionValue(args, &i, "--reason")
+			if err != nil {
+				return action, options, err
+			}
+			if seen["--reason"] {
+				return action, options, duplicateWorkflowOption("--reason")
+			}
+			seen["--reason"] = true
+			options.Reason = value
+		case "--expect-revision":
+			value, err := requireWorkflowOptionValue(args, &i, "--expect-revision")
+			if err != nil {
+				return action, options, err
+			}
+			if seen["--expect-revision"] {
+				return action, options, duplicateWorkflowOption("--expect-revision")
+			}
+			parsed, parseErr := strconv.Atoi(value)
+			if parseErr != nil || parsed < 1 {
+				return action, options, &cliError{Code: "invalid_option_value", Message: "--expect-revision requires a positive integer", Hint: workflowUsageHint(), ExitCode: ExitUsage, Field: "--expect-revision", Expected: "positive integer", Actual: value}
+			}
+			seen["--expect-revision"] = true
+			options.ExpectedRevision = &parsed
+		case "--json":
+		default:
+			return action, options, unknownWorkflowOption(args[i], "node action with --run <run_id> --node <node_id>")
+		}
+	}
+	if strings.TrimSpace(options.RunID) == "" {
+		return action, options, missingWorkflowOption("--run", "run id")
+	}
+	if strings.TrimSpace(options.NodeID) == "" {
+		return action, options, missingWorkflowOption("--node", "node id")
+	}
+	return action, options, nil
+}
+
+func requireWorkflowOptionValue(args []string, index *int, option string) (string, *cliError) {
+	if *index+1 >= len(args) || strings.HasPrefix(args[*index+1], "--") {
+		return "", &cliError{Code: "missing_option_value", Message: option + " requires a value", Hint: workflowUsageHint(), ExitCode: ExitUsage, Field: option, Expected: "option value", Actual: "missing"}
+	}
+	*index = *index + 1
+	return args[*index], nil
+}
+
+func missingWorkflowOption(option string, expected string) *cliError {
+	return &cliError{Code: "missing_required_option", Message: "workflow command requires " + option, Hint: workflowUsageHint(), ExitCode: ExitUsage, Field: option, Expected: expected, Actual: "missing"}
+}
+
+func duplicateWorkflowOption(option string) *cliError {
+	return &cliError{Code: "duplicate_option", Message: "duplicate workflow option \"" + option + "\"", Hint: workflowUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: option}
+}
+
+func unknownWorkflowOption(option string, expected string) *cliError {
+	return &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown workflow option %q", option), Hint: workflowUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: expected, Actual: option}
 }
 
 func isHelpRequest(args []string) bool {
@@ -2164,7 +2373,7 @@ func graphUsageHint() string {
 }
 
 func workflowUsageHint() string {
-	return "Use workflow validate --file <workflow.yaml> --json or workflow explain --file <workflow.yaml> --json for DAGSM-001 task-DAG schema diagnostics."
+	return "Use workflow validate/explain --file <workflow.yaml> --json, workflow create/show/ready --run <run_id>, or workflow node <start|complete|block> --run <run_id> --node <node_id>."
 }
 
 func approvalUsageHint() string {
@@ -2318,7 +2527,7 @@ func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
 			{Name: "phase-plan", Status: capabilityStatusSupported, Subcommands: []string{"init", "show", "set", "validate"}},
 			{Name: "approval", Status: capabilityStatusSupported, Subcommands: []string{"request", "record", "show"}},
 			{Name: "graph", Status: capabilityStatusSupported, Subcommands: []string{"init", "validate", "explain", "diff", "propose", "apply", "export"}},
-			{Name: "workflow", Status: capabilityStatusSupported, Subcommands: []string{"validate", "explain"}},
+			{Name: "workflow", Status: capabilityStatusSupported, Subcommands: []string{"validate", "explain", "create", "show", "ready", "node"}},
 		},
 		CompatibilityFlags: compatibilityFlagsOutput{
 			ProjectInit:                             true,
@@ -2342,6 +2551,7 @@ func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
 			WorkflowGraphNoDirectYAMLFallback:       true,
 			WorkflowGraphConfigurableFeedbackIntake: true,
 			TaskDAGSchemaValidation:                 true,
+			WorkflowInstanceState:                   true,
 			TokenEconomyEvidenceGate:                true,
 			TokenEconomyToken002EvidenceGate:        true,
 			InstallCommand:                          false,
@@ -2496,14 +2706,19 @@ var helpPages = map[string]helpOutput{
 		Notes:        []string{"graph init creates only the initial .kkachi-workflow.yaml and fails if one already exists.", "graph propose records .kkachi/graph/proposals evidence for a complete candidate graph; it does not edit .kkachi-workflow.yaml.", "graph propose may record approval-gated repair evidence when the project .kkachi-workflow.yaml is missing, stale, broken, or otherwise invalid and the candidate validates.", "approval_required=false means the semantic diff did not trigger graph approval policy; graph apply still records --approval as an explicit approval or audit evidence reference.", "graph apply records the supplied approval/audit evidence reference but does not decide approval policy; repair apply rechecks base evidence and preserves backup/recovery refs when replacing an existing graph.", "graph export writes or prints generated diagrams with authoritative=false; exports are never workflow graph source of truth.", "replacement init and kah alias behavior remain unimplemented.", "KAH validates declared graph state only; KHS remains responsible for workflow policy and templates."},
 	},
 	"workflow": {
-		Command:      "kkachi-agent-helper workflow",
-		Status:       capabilityStatusSupported,
-		Usage:        "kkachi-agent-helper workflow validate --file <workflow.yaml> [--json]\n  kkachi-agent-helper workflow explain --file <workflow.yaml> [--json]",
-		Summary:      "Validate and explain DAGSM-001 task-DAG YAML structure without creating workflow instance state.",
-		Subcommands:  []helpItem{{Name: "validate", Description: "Validate task-DAG schema, node ids, dependencies, all_of joins, cycles, and required output path declarations."}, {Name: "explain", Description: "Emit the same stable task-DAG diagnostics plus node and edge projection for planning/integration evidence."}},
-		Options:      []helpItem{{Name: "--file <repo-relative-path>", Required: true, Description: "Task-DAG YAML file to inspect."}, {Name: "--json", Description: "Emit structured task-DAG diagnostics."}, {Name: "--help", Description: "Show workflow help and exit 0."}},
-		JSONBehavior: "workflow validate/explain emit task-DAG result data on stdout. Invalid DAGs exit 3 with status=invalid; unsafe path or unreadable input errors are structured on stderr.",
-		Notes:        []string{"DAGSM-001 supports schema_version task-dag/v1, workflow_id, nodes, id, depends_on, join=all_of, and required_outputs only.", "Workflow instance creation, node FSM state, ready-node calculation, catalog diagnostics, and final gate integration remain deferred to later DAGSM roadmap tasks."},
+		Command: "kkachi-agent-helper workflow",
+		Status:  capabilityStatusSupported,
+		Usage: "kkachi-agent-helper workflow validate --file <workflow.yaml> [--json]\n" +
+			"  kkachi-agent-helper workflow explain --file <workflow.yaml> [--json]\n" +
+			"  kkachi-agent-helper workflow create --run <run_id> --file <workflow.yaml> [--json]\n" +
+			"  kkachi-agent-helper workflow show --run <run_id> [--json]\n" +
+			"  kkachi-agent-helper workflow ready --run <run_id> [--json]\n" +
+			"  kkachi-agent-helper workflow node <start|complete|block> --run <run_id> --node <node_id> [--evidence <path>] [--reason <text>] [--expect-revision <n>] [--json]",
+		Summary:      "Validate/explain task-DAG YAML and manage run-local DAGSM workflow instance state.",
+		Subcommands:  []helpItem{{Name: "validate", Description: "Validate task-DAG schema, node ids, dependencies, all_of joins, cycles, and required output path declarations."}, {Name: "explain", Description: "Emit stable task-DAG diagnostics plus node and edge projection for planning/integration evidence."}, {Name: "create", Description: "Create run-local workflow-instance.json from a valid task-DAG YAML file."}, {Name: "show", Description: "Show persisted workflow instance state."}, {Name: "ready", Description: "Show currently ready pending nodes."}, {Name: "node start", Description: "Move a ready pending node to running."}, {Name: "node complete", Description: "Complete a running node after required output/evidence checks pass."}, {Name: "node block", Description: "Mark a pending or running node blocked with a reason."}},
+		Options:      []helpItem{{Name: "--file <repo-relative-path>", Description: "Task-DAG YAML file for validate/explain/create."}, {Name: "--run <run_id>", Description: "Run id for workflow instance commands."}, {Name: "--node <node_id>", Description: "Workflow node id for node transitions."}, {Name: "--evidence <repo-relative-path>", Description: "Optional transition evidence path; complete checks it with declared required_outputs."}, {Name: "--reason <text>", Description: "Reason for block transitions."}, {Name: "--expect-revision <n>", Description: "Optional optimistic-concurrency guard; stale revisions fail closed."}, {Name: "--json", Description: "Emit structured workflow diagnostics/state."}, {Name: "--help", Description: "Show workflow help and exit 0."}},
+		JSONBehavior: "workflow validate/explain emit task-DAG result data. workflow create/show/ready/node emit workflow instance state/result data. Invalid DAGs, missing required outputs, unsafe paths, and stale revisions fail closed with structured JSON and non-zero exits.",
+		Notes:        []string{"DAGSM-001 supports schema_version task-dag/v1, workflow_id, nodes, id, depends_on, join=all_of, and required_outputs only.", "DAGSM-002 stores run-local .kkachi/runs/<run_id>/workflow-instance.json, enforces pending/running/succeeded/blocked node states, calculates ready nodes deterministically, checks declared required outputs on completion, and appends workflow audit events.", "Catalog diagnostics, final gate integration, dynamic node creation, retry/rollback automation, KAS policy selection, backend execution, and agent fallback remain deferred/non-goals."},
 	},
 }
 
@@ -3047,6 +3262,23 @@ func writeTaskDAGResult(w io.Writer, result project.TaskDAGResult, jsonMode bool
 		return
 	}
 	_, _ = fmt.Fprint(w, project.TaskDAGHumanSummary(result))
+}
+
+func writeWorkflowInstanceCommandResult(stdout io.Writer, stderr io.Writer, result project.WorkflowInstanceResult, err error, jsonMode bool) int {
+	if err != nil {
+		cliErr := errorFromProjectProblem(err)
+		writeError(stderr, jsonMode, cliErr)
+		return cliErr.ExitCode
+	}
+	if jsonMode {
+		_ = json.NewEncoder(stdout).Encode(result)
+	} else {
+		_, _ = fmt.Fprint(stdout, project.WorkflowInstanceHumanSummary(result))
+	}
+	if result.OK {
+		return ExitOK
+	}
+	return ExitSafety
 }
 
 func writeLockRecoverResult(w io.Writer, result project.LockRecoveryResult, jsonMode bool) {
