@@ -1151,6 +1151,74 @@ Done.
 	}
 }
 
+func TestFinalGateChecksWorkflowInstanceWhenPresent(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)}); err != nil {
+		t.Fatalf("InitArtifacts() error = %v", err)
+	}
+	passAllPriorGates(t, root, repo, created.Metadata.RunID)
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "final-report.md", "Status: complete\nVerdict: pass\n")
+	writeWorkflowFixture(t, repo, `schema_version: task-dag/v1
+workflow_id: demo
+nodes:
+  - id: setup
+    depends_on: []
+    join: all_of
+    required_outputs: ["out/setup.txt"]
+  - id: build
+    depends_on: [setup]
+    join: all_of
+    required_outputs: ["out/build.txt"]
+`)
+	if _, err := CreateWorkflowInstance(root, WorkflowCreateOptions{RunID: created.Metadata.RunID, File: "workflow.yaml", Now: testRunNow(20)}); err != nil {
+		t.Fatalf("CreateWorkflowInstance() error = %v", err)
+	}
+	incomplete, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateFinal, Now: testRunNow(21)})
+	if err != nil {
+		t.Fatalf("CheckGate(final incomplete workflow) error = %v", err)
+	}
+	if incomplete.Status != GateStatusFail || !gateCheckActual(incomplete.Checks, "workflow_instance", "workflow_node_incomplete") {
+		t.Fatalf("incomplete = %#v, want workflow_instance fail for incomplete node", incomplete)
+	}
+
+	if _, err := StartWorkflowNode(root, WorkflowNodeOptions{RunID: created.Metadata.RunID, NodeID: "setup", Now: testRunNow(22)}); err != nil {
+		t.Fatalf("start setup: %v", err)
+	}
+	mustWriteText(t, filepath.Join(repo, "out", "setup.txt"), "done\n")
+	if _, err := CompleteWorkflowNode(root, WorkflowNodeOptions{RunID: created.Metadata.RunID, NodeID: "setup", Evidence: "out/setup.txt", Now: testRunNow(23)}); err != nil {
+		t.Fatalf("complete setup: %v", err)
+	}
+	if _, err := StartWorkflowNode(root, WorkflowNodeOptions{RunID: created.Metadata.RunID, NodeID: "build", Now: testRunNow(24)}); err != nil {
+		t.Fatalf("start build: %v", err)
+	}
+	mustWriteText(t, filepath.Join(repo, "out", "build.txt"), "done\n")
+	if _, err := CompleteWorkflowNode(root, WorkflowNodeOptions{RunID: created.Metadata.RunID, NodeID: "build", Evidence: "out/build.txt", Now: testRunNow(25)}); err != nil {
+		t.Fatalf("complete build: %v", err)
+	}
+	complete, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateFinal, Now: testRunNow(26)})
+	if err != nil {
+		t.Fatalf("CheckGate(final complete workflow) error = %v", err)
+	}
+	if complete.Status != GateStatusPass || !gateCheckStatus(complete.Checks, "workflow_instance", GateStatusPass) {
+		t.Fatalf("complete = %#v, want workflow_instance pass", complete)
+	}
+	if err := os.Remove(filepath.Join(repo, "out", "build.txt")); err != nil {
+		t.Fatalf("remove build output: %v", err)
+	}
+	missingOutput, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateFinal, Now: testRunNow(27)})
+	if err != nil {
+		t.Fatalf("CheckGate(final missing output) error = %v", err)
+	}
+	if missingOutput.Status != GateStatusFail || !gateCheckActual(missingOutput.Checks, "workflow_instance", "workflow_required_output_missing") {
+		t.Fatalf("missingOutput = %#v, want workflow_required_output_missing", missingOutput)
+	}
+}
+
 func TestPrecommitTemplateDoesNotRequireGLMWhenWorkflowOmitsToken(t *testing.T) {
 	repo := initializedRepo(t)
 	root, _ := DiscoverRoot(repo)

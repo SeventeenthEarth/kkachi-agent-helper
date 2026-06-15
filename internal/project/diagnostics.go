@@ -16,6 +16,7 @@ const DiagnosticsVersion = "0.1"
 var diagnosticArtifactPaths = []string{
 	"run-metadata.json",
 	"phase-plan.yaml",
+	WorkflowInstanceFile,
 	"intake-classification.md",
 	"selected-cli.json",
 	"capability-check.md",
@@ -34,18 +35,20 @@ type DiagnosticsExportOptions struct {
 }
 
 type DiagnosticsBundle struct {
-	Version            string                        `json:"version"`
-	GeneratedAt        string                        `json:"generated_at"`
-	RootPath           string                        `json:"root_path"`
-	Redaction          DiagnosticsRedaction          `json:"redaction"`
-	Project            DiagnosticsProject            `json:"project"`
-	SchemaVersions     []DiagnosticsSchema           `json:"schema_versions"`
-	GraphCompatibility DiagnosticsGraphCompatibility `json:"graph_compatibility"`
-	RunID              string                        `json:"run_id,omitempty"`
-	GateReports        []DiagnosticsFile             `json:"gate_reports"`
-	SelectedArtifacts  []DiagnosticsFile             `json:"selected_artifacts"`
-	ApprovalRecords    []ApprovalRecord              `json:"approval_records,omitempty"`
-	OutputPath         string                        `json:"output_path,omitempty"`
+	Version            string                              `json:"version"`
+	GeneratedAt        string                              `json:"generated_at"`
+	RootPath           string                              `json:"root_path"`
+	Redaction          DiagnosticsRedaction                `json:"redaction"`
+	Project            DiagnosticsProject                  `json:"project"`
+	SchemaVersions     []DiagnosticsSchema                 `json:"schema_versions"`
+	GraphCompatibility DiagnosticsGraphCompatibility       `json:"graph_compatibility"`
+	WorkflowCatalog    WorkflowCatalogResult               `json:"workflow_catalog"`
+	RunID              string                              `json:"run_id,omitempty"`
+	WorkflowInstance   *WorkflowInstanceCompletenessResult `json:"workflow_instance,omitempty"`
+	GateReports        []DiagnosticsFile                   `json:"gate_reports"`
+	SelectedArtifacts  []DiagnosticsFile                   `json:"selected_artifacts"`
+	ApprovalRecords    []ApprovalRecord                    `json:"approval_records,omitempty"`
+	OutputPath         string                              `json:"output_path,omitempty"`
 }
 
 type DiagnosticsRedaction struct {
@@ -134,7 +137,13 @@ func ExportDiagnostics(root Root, options DiagnosticsExportOptions) (Diagnostics
 	}
 	bundle.SchemaVersions = diagnosticSchemaVersions(root)
 	bundle.GraphCompatibility = diagnosticGraphCompatibility(root)
+	bundle.WorkflowCatalog = diagnosticWorkflowCatalog(root)
 	if runID != "" {
+		workflowInstance, err := CheckWorkflowInstanceCompleteness(root, runID)
+		if err != nil {
+			return DiagnosticsBundle{}, err
+		}
+		bundle.WorkflowInstance = &workflowInstance
 		bundle.GateReports = diagnosticGateReports(root, runID)
 		bundle.SelectedArtifacts = diagnosticSelectedArtifacts(root, runID)
 		records, err := ApprovalRecords(root, runID)
@@ -168,6 +177,30 @@ func ExportDiagnostics(root Root, options DiagnosticsExportOptions) (Diagnostics
 		bundle.OutputPath = path.Relative
 	}
 	return bundle, nil
+}
+
+func diagnosticWorkflowCatalog(root Root) WorkflowCatalogResult {
+	result, err := ValidateWorkflowCatalog(root, WorkflowCatalogOptions{File: WorkflowCatalogDefaultPath})
+	if err != nil {
+		return WorkflowCatalogResult{
+			SchemaVersion: WorkflowCatalogSchemaVersion,
+			Status:        WorkflowCatalogStatusFail,
+			OK:            false,
+			Reason:        "workflow_catalog_invalid_schema",
+			ReasonCodes:   []string{"workflow_catalog_invalid_schema"},
+			Path:          workflowCatalogPathForDiagnostics(root),
+			Diagnostics: []WorkflowCatalogDiagnostic{{
+				Code:     "workflow_catalog_invalid_schema",
+				Message:  "workflow catalog diagnostics failed",
+				Path:     workflowCatalogPathForDiagnostics(root),
+				Field:    "workflow_catalog",
+				Expected: "diagnostic workflow catalog validation",
+				Actual:   err.Error(),
+			}},
+			NextAction: "Fail closed for task-DAG catalog use until diagnostics can validate the catalog.",
+		}
+	}
+	return result
 }
 
 func diagnosticGraphCompatibility(root Root) DiagnosticsGraphCompatibility {

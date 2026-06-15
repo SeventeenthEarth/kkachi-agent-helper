@@ -94,6 +94,9 @@ type compatibilityFlagsOutput struct {
 	WorkflowGraphConfigurableFeedbackIntake bool `json:"workflow_graph_configurable_feedback_intake"`
 	TaskDAGSchemaValidation                 bool `json:"task_dag_schema_validation"`
 	WorkflowInstanceState                   bool `json:"workflow_instance_state"`
+	WorkflowCatalogDiagnostics              bool `json:"workflow_catalog_diagnostics"`
+	WorkflowFinalGateIntegration            bool `json:"workflow_final_gate_integration"`
+	WorkflowNodeContractRegistryEvidence    bool `json:"workflow_node_contract_registry_evidence"`
 	TokenEconomyEvidenceGate                bool `json:"token_economy_evidence_gate"`
 	TokenEconomyToken002EvidenceGate        bool `json:"token_economy_token002_evidence_gate"`
 	InstallCommand                          bool `json:"install_command"`
@@ -498,6 +501,29 @@ func runWorkflowCommand(args []string, root project.Root, stdout io.Writer, stde
 		}
 		result, err := project.CreateWorkflowInstance(root, options)
 		return writeWorkflowInstanceCommandResult(stdout, stderr, result, err, jsonMode)
+	case "catalog":
+		action, options, cliErr := parseWorkflowCatalogArgs(args[1:])
+		if cliErr != nil {
+			writeError(stderr, jsonMode, *cliErr)
+			return cliErr.ExitCode
+		}
+		switch action {
+		case "validate", "explain":
+			result, err := project.ValidateWorkflowCatalog(root, options)
+			if err != nil {
+				cliErr := errorFromProjectProblem(err)
+				writeError(stderr, jsonMode, cliErr)
+				return cliErr.ExitCode
+			}
+			writeWorkflowCatalogResult(stdout, result, jsonMode)
+			if result.OK {
+				return ExitOK
+			}
+			return ExitSafety
+		default:
+			writeError(stderr, jsonMode, cliError{Code: "workflow_catalog_action_unknown", Message: "workflow catalog action is not supported", Hint: workflowUsageHint(), ExitCode: ExitUsage, Field: "action", Expected: "validate or explain", Actual: action})
+			return ExitUsage
+		}
 	case "show":
 		options, cliErr := parseWorkflowRunArgs(args[1:])
 		if cliErr != nil {
@@ -535,7 +561,7 @@ func runWorkflowCommand(args []string, root project.Root, stdout io.Writer, stde
 		}
 		return writeWorkflowInstanceCommandResult(stdout, stderr, result, err, jsonMode)
 	default:
-		writeError(stderr, jsonMode, cliError{Code: "workflow_subcommand_unknown", Message: "workflow subcommand is not supported", Hint: workflowUsageHint(), ExitCode: ExitUsage, Field: "subcommand", Expected: "validate, explain, create, show, ready, or node", Actual: subcommand})
+		writeError(stderr, jsonMode, cliError{Code: "workflow_subcommand_unknown", Message: "workflow subcommand is not supported", Hint: workflowUsageHint(), ExitCode: ExitUsage, Field: "subcommand", Expected: "validate, explain, catalog, create, show, ready, or node", Actual: subcommand})
 		return ExitUsage
 	}
 }
@@ -592,18 +618,112 @@ func parseWorkflowCreateArgs(args []string) (project.WorkflowCreateOptions, *cli
 			}
 			seen["--file"] = true
 			options.File = value
+		case "--catalog":
+			value, err := requireWorkflowOptionValue(args, &i, "--catalog")
+			if err != nil {
+				return options, err
+			}
+			if seen["--catalog"] {
+				return options, duplicateWorkflowOption("--catalog")
+			}
+			seen["--catalog"] = true
+			options.Catalog = value
+		case "--workflow-id":
+			value, err := requireWorkflowOptionValue(args, &i, "--workflow-id")
+			if err != nil {
+				return options, err
+			}
+			if seen["--workflow-id"] {
+				return options, duplicateWorkflowOption("--workflow-id")
+			}
+			seen["--workflow-id"] = true
+			options.WorkflowID = value
+		case "--node-contract-registry":
+			value, err := requireWorkflowOptionValue(args, &i, "--node-contract-registry")
+			if err != nil {
+				return options, err
+			}
+			if seen["--node-contract-registry"] {
+				return options, duplicateWorkflowOption("--node-contract-registry")
+			}
+			seen["--node-contract-registry"] = true
+			options.NodeContractRegistry = value
 		case "--json":
 		default:
-			return options, unknownWorkflowOption(args[i], "--run <run_id> --file <path> and optional --json")
+			return options, unknownWorkflowOption(args[i], "--run <run_id> with --file <path> or --catalog <path> --workflow-id <id>")
 		}
 	}
 	if strings.TrimSpace(options.RunID) == "" {
 		return options, missingWorkflowOption("--run", "run id")
 	}
-	if strings.TrimSpace(options.File) == "" {
-		return options, missingWorkflowOption("--file", "workflow file path")
+	fileMode := strings.TrimSpace(options.File) != ""
+	catalogMode := strings.TrimSpace(options.Catalog) != "" || strings.TrimSpace(options.WorkflowID) != "" || strings.TrimSpace(options.NodeContractRegistry) != ""
+	if fileMode && catalogMode {
+		return options, &cliError{Code: "workflow_catalog_explicit_mode_conflict", Message: "workflow create cannot mix --file with catalog options", Hint: workflowUsageHint(), ExitCode: ExitUsage, Field: "workflow_create_mode", Expected: "--file alone or --catalog with --workflow-id", Actual: "mixed"}
+	}
+	if fileMode {
+		return options, nil
+	}
+	if strings.TrimSpace(options.Catalog) == "" {
+		return options, missingWorkflowOption("--catalog", "workflow catalog path")
+	}
+	if strings.TrimSpace(options.WorkflowID) == "" {
+		return options, missingWorkflowOption("--workflow-id", "explicit workflow id")
 	}
 	return options, nil
+}
+
+func parseWorkflowCatalogArgs(args []string) (string, project.WorkflowCatalogOptions, *cliError) {
+	var options project.WorkflowCatalogOptions
+	if len(args) == 0 {
+		return "", options, &cliError{Code: "workflow_catalog_action_required", Message: "workflow catalog action is required", Hint: workflowUsageHint(), ExitCode: ExitUsage, Field: "action", Expected: "validate or explain", Actual: "missing"}
+	}
+	action := args[0]
+	seen := map[string]bool{}
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--file":
+			value, err := requireWorkflowOptionValue(args, &i, "--file")
+			if err != nil {
+				return action, options, err
+			}
+			if seen["--file"] {
+				return action, options, duplicateWorkflowOption("--file")
+			}
+			seen["--file"] = true
+			options.File = value
+		case "--workflow-id":
+			value, err := requireWorkflowOptionValue(args, &i, "--workflow-id")
+			if err != nil {
+				return action, options, err
+			}
+			if seen["--workflow-id"] {
+				return action, options, duplicateWorkflowOption("--workflow-id")
+			}
+			seen["--workflow-id"] = true
+			options.WorkflowID = value
+		case "--node-contract-registry":
+			value, err := requireWorkflowOptionValue(args, &i, "--node-contract-registry")
+			if err != nil {
+				return action, options, err
+			}
+			if seen["--node-contract-registry"] {
+				return action, options, duplicateWorkflowOption("--node-contract-registry")
+			}
+			seen["--node-contract-registry"] = true
+			options.NodeContractRegistry = value
+		case "--json":
+		default:
+			return action, options, unknownWorkflowOption(args[i], "--file <catalog.yaml>, optional --workflow-id, optional --node-contract-registry, and optional --json")
+		}
+	}
+	if action != "validate" && action != "explain" {
+		return action, options, nil
+	}
+	if strings.TrimSpace(options.File) == "" {
+		return action, options, missingWorkflowOption("--file", "workflow catalog path")
+	}
+	return action, options, nil
 }
 
 func parseWorkflowRunArgs(args []string) (project.WorkflowRunOptions, *cliError) {
@@ -2373,7 +2493,7 @@ func graphUsageHint() string {
 }
 
 func workflowUsageHint() string {
-	return "Use workflow validate/explain --file <workflow.yaml> --json, workflow create/show/ready --run <run_id>, or workflow node <start|complete|block> --run <run_id> --node <node_id>."
+	return "Use workflow validate/explain --file <workflow.yaml> --json, workflow catalog validate/explain --file <catalog.yaml>, workflow create/show/ready --run <run_id>, or workflow node <start|complete|block> --run <run_id> --node <node_id>."
 }
 
 func approvalUsageHint() string {
@@ -2527,7 +2647,7 @@ func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
 			{Name: "phase-plan", Status: capabilityStatusSupported, Subcommands: []string{"init", "show", "set", "validate"}},
 			{Name: "approval", Status: capabilityStatusSupported, Subcommands: []string{"request", "record", "show"}},
 			{Name: "graph", Status: capabilityStatusSupported, Subcommands: []string{"init", "validate", "explain", "diff", "propose", "apply", "export"}},
-			{Name: "workflow", Status: capabilityStatusSupported, Subcommands: []string{"validate", "explain", "create", "show", "ready", "node"}},
+			{Name: "workflow", Status: capabilityStatusSupported, Subcommands: []string{"validate", "explain", "catalog", "create", "show", "ready", "node"}},
 		},
 		CompatibilityFlags: compatibilityFlagsOutput{
 			ProjectInit:                             true,
@@ -2552,6 +2672,9 @@ func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
 			WorkflowGraphConfigurableFeedbackIntake: true,
 			TaskDAGSchemaValidation:                 true,
 			WorkflowInstanceState:                   true,
+			WorkflowCatalogDiagnostics:              true,
+			WorkflowFinalGateIntegration:            true,
+			WorkflowNodeContractRegistryEvidence:    true,
 			TokenEconomyEvidenceGate:                true,
 			TokenEconomyToken002EvidenceGate:        true,
 			InstallCommand:                          false,
@@ -2710,15 +2833,18 @@ var helpPages = map[string]helpOutput{
 		Status:  capabilityStatusSupported,
 		Usage: "kkachi-agent-helper workflow validate --file <workflow.yaml> [--json]\n" +
 			"  kkachi-agent-helper workflow explain --file <workflow.yaml> [--json]\n" +
+			"  kkachi-agent-helper workflow catalog validate --file <catalog.yaml> [--node-contract-registry <registry.yaml>] [--json]\n" +
+			"  kkachi-agent-helper workflow catalog explain --file <catalog.yaml> [--workflow-id <id>] [--node-contract-registry <registry.yaml>] [--json]\n" +
 			"  kkachi-agent-helper workflow create --run <run_id> --file <workflow.yaml> [--json]\n" +
+			"  kkachi-agent-helper workflow create --run <run_id> --catalog <catalog.yaml> --workflow-id <id> [--node-contract-registry <registry.yaml>] [--json]\n" +
 			"  kkachi-agent-helper workflow show --run <run_id> [--json]\n" +
 			"  kkachi-agent-helper workflow ready --run <run_id> [--json]\n" +
 			"  kkachi-agent-helper workflow node <start|complete|block> --run <run_id> --node <node_id> [--evidence <path>] [--reason <text>] [--expect-revision <n>] [--json]",
 		Summary:      "Validate/explain task-DAG YAML and manage run-local DAGSM workflow instance state.",
-		Subcommands:  []helpItem{{Name: "validate", Description: "Validate task-DAG schema, node ids, dependencies, all_of joins, cycles, and required output path declarations."}, {Name: "explain", Description: "Emit stable task-DAG diagnostics plus node and edge projection for planning/integration evidence."}, {Name: "create", Description: "Create run-local workflow-instance.json from a valid task-DAG YAML file."}, {Name: "show", Description: "Show persisted workflow instance state."}, {Name: "ready", Description: "Show currently ready pending nodes."}, {Name: "node start", Description: "Move a ready pending node to running."}, {Name: "node complete", Description: "Complete a running node after required output/evidence checks pass."}, {Name: "node block", Description: "Mark a pending or running node blocked with a reason."}},
-		Options:      []helpItem{{Name: "--file <repo-relative-path>", Description: "Task-DAG YAML file for validate/explain/create."}, {Name: "--run <run_id>", Description: "Run id for workflow instance commands."}, {Name: "--node <node_id>", Description: "Workflow node id for node transitions."}, {Name: "--evidence <repo-relative-path>", Description: "Optional transition evidence path; complete checks it with declared required_outputs."}, {Name: "--reason <text>", Description: "Reason for block transitions."}, {Name: "--expect-revision <n>", Description: "Optional optimistic-concurrency guard; stale revisions fail closed."}, {Name: "--json", Description: "Emit structured workflow diagnostics/state."}, {Name: "--help", Description: "Show workflow help and exit 0."}},
-		JSONBehavior: "workflow validate/explain emit task-DAG result data. workflow create/show/ready/node emit workflow instance state/result data. Invalid DAGs, missing required outputs, unsafe paths, and stale revisions fail closed with structured JSON and non-zero exits.",
-		Notes:        []string{"DAGSM-001 supports schema_version task-dag/v1, workflow_id, nodes, id, depends_on, join=all_of, and required_outputs only.", "DAGSM-002 stores run-local .kkachi/runs/<run_id>/workflow-instance.json, enforces pending/running/succeeded/blocked node states, calculates ready nodes deterministically, checks declared required outputs on completion, and appends workflow audit events.", "Catalog diagnostics, final gate integration, dynamic node creation, retry/rollback automation, KAS policy selection, backend execution, and agent fallback remain deferred/non-goals."},
+		Subcommands:  []helpItem{{Name: "validate", Description: "Validate task-DAG schema, node ids, dependencies, all_of joins, cycles, and required output path declarations."}, {Name: "explain", Description: "Emit stable task-DAG diagnostics plus node and edge projection for planning/integration evidence."}, {Name: "catalog validate", Description: "Validate a project task-DAG catalog and optional KAS node-contract registry coverage."}, {Name: "catalog explain", Description: "Emit catalog diagnostics, workflow references, task-DAG validation summaries, and optional node-contract evidence."}, {Name: "create", Description: "Create run-local workflow-instance.json from either a valid task-DAG file or explicit catalog workflow id."}, {Name: "show", Description: "Show persisted workflow instance state."}, {Name: "ready", Description: "Show currently ready pending nodes."}, {Name: "node start", Description: "Move a ready pending node to running."}, {Name: "node complete", Description: "Complete a running node after required output/evidence checks pass."}, {Name: "node block", Description: "Mark a pending or running node blocked with a reason."}},
+		Options:      []helpItem{{Name: "--file <repo-relative-path>", Description: "Task-DAG YAML file for validate/explain/create, or catalog YAML for workflow catalog commands."}, {Name: "--catalog <repo-relative-path>", Description: "Task-DAG workflow catalog for explicit workflow create mode."}, {Name: "--workflow-id <id>", Description: "Explicit workflow id for catalog explain/create; KAH does not select workflows."}, {Name: "--node-contract-registry <repo-relative-path>", Description: "Optional KAS WFLOW-003 registry evidence for structural node-contract coverage only."}, {Name: "--run <run_id>", Description: "Run id for workflow instance commands."}, {Name: "--node <node_id>", Description: "Workflow node id for node transitions."}, {Name: "--evidence <repo-relative-path>", Description: "Optional transition evidence path; complete checks it with declared required_outputs."}, {Name: "--reason <text>", Description: "Reason for block transitions."}, {Name: "--expect-revision <n>", Description: "Optional optimistic-concurrency guard; stale revisions fail closed."}, {Name: "--json", Description: "Emit structured workflow diagnostics/state."}, {Name: "--help", Description: "Show workflow help and exit 0."}},
+		JSONBehavior: "workflow validate/explain emit task-DAG result data. workflow catalog validate/explain emit catalog diagnostics/result data. workflow create/show/ready/node emit workflow instance state/result data. Invalid DAGs/catalogs, missing required outputs, unsafe paths, ambiguous catalog references, mixed file/catalog create mode, and stale revisions fail closed with structured JSON and non-zero exits.",
+		Notes:        []string{"DAGSM-001 supports schema_version task-dag/v1, workflow_id, nodes, id, depends_on, join=all_of, and required_outputs only.", "DAGSM-002 stores run-local .kkachi/runs/<run_id>/workflow-instance.json, enforces pending/running/succeeded/blocked node states, calculates ready nodes deterministically, checks declared required outputs on completion, and appends workflow audit events.", "DAGSM-003 validates .kkachi/workflow-catalog.yaml style task-DAG catalogs and optional KAS WFLOW-003 node-contract registry structure as evidence only.", "KAH does not implement selector matching, ranking, fallback choice, dynamic node creation, retry/rollback automation, KAS policy selection, backend execution, or agent assignment."},
 	},
 }
 
@@ -3262,6 +3388,18 @@ func writeTaskDAGResult(w io.Writer, result project.TaskDAGResult, jsonMode bool
 		return
 	}
 	_, _ = fmt.Fprint(w, project.TaskDAGHumanSummary(result))
+}
+
+func writeWorkflowCatalogResult(w io.Writer, result project.WorkflowCatalogResult, jsonMode bool) {
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(result)
+		return
+	}
+	fmt.Fprintf(w, "workflow catalog %s: %s (%s)\n", result.Path, result.Status, result.Reason)
+	fmt.Fprintf(w, "workflows: %d\n", len(result.Workflows))
+	for _, workflow := range result.Workflows {
+		fmt.Fprintf(w, "- %s path=%s schema_version=%s\n", workflow.WorkflowID, workflow.Path, workflow.SchemaVersion)
+	}
 }
 
 func writeWorkflowInstanceCommandResult(stdout io.Writer, stderr io.Writer, result project.WorkflowInstanceResult, err error, jsonMode bool) int {

@@ -109,7 +109,7 @@ func TestCapabilitiesJSONOutputIsProjectIndependent(t *testing.T) {
 		t.Fatalf("project schema version = %q, want %q", payload.ProjectSchemaVersion, project.SchemaVersion)
 	}
 	flags := payload.CompatibilityFlags
-	if !flags.ProjectInit || !flags.RunLifecycle || !flags.ArtifactInit || !flags.ArtifactList || !flags.ArtifactValidate || !flags.ArtifactMutation || !flags.Gates || !flags.BackendEvidenceRequirements || !flags.DiagnosticsExport || !flags.PhasePlan || !flags.ApprovalRecords || !flags.WorkflowGraphReadonly || !flags.WorkflowGraphInit || !flags.WorkflowGraphApply || !flags.WorkflowGraphExport || !flags.WorkflowGraphDiagnostics || !flags.WorkflowGraphNoDirectYAMLFallback || !flags.WorkflowGraphConfigurableFeedbackIntake || !flags.TaskDAGSchemaValidation || !flags.WorkflowInstanceState || !flags.TokenEconomyEvidenceGate {
+	if !flags.ProjectInit || !flags.RunLifecycle || !flags.ArtifactInit || !flags.ArtifactList || !flags.ArtifactValidate || !flags.ArtifactMutation || !flags.Gates || !flags.BackendEvidenceRequirements || !flags.DiagnosticsExport || !flags.PhasePlan || !flags.ApprovalRecords || !flags.WorkflowGraphReadonly || !flags.WorkflowGraphInit || !flags.WorkflowGraphApply || !flags.WorkflowGraphExport || !flags.WorkflowGraphDiagnostics || !flags.WorkflowGraphNoDirectYAMLFallback || !flags.WorkflowGraphConfigurableFeedbackIntake || !flags.TaskDAGSchemaValidation || !flags.WorkflowInstanceState || !flags.WorkflowCatalogDiagnostics || !flags.WorkflowFinalGateIntegration || !flags.WorkflowNodeContractRegistryEvidence || !flags.TokenEconomyEvidenceGate {
 		t.Fatalf("compatibility flags = %#v, want implemented surfaces enabled", flags)
 	}
 	if flags.InstallCommand {
@@ -183,6 +183,7 @@ func TestHelpCommandsExitZeroWithoutProjectState(t *testing.T) {
 		{name: "phase plan", args: []string{"phase-plan", "--help"}, want: []string{"kkachi-agent-helper phase-plan", "supported", "validate <run_id>"}},
 		{name: "approval group", args: []string{"approval", "--help"}, want: []string{"kkachi-agent-helper approval", "request <run_id>", "--decision <approved|rejected>"}},
 		{name: "graph group", args: []string{"graph", "--help"}, want: []string{"kkachi-agent-helper graph", "diff", "propose", "apply", "export", "--candidate-file <repo-relative-candidate-graph>", "--patch <repo-relative-candidate-graph>", "--approval <evidence-ref>", "audit evidence reference", "--format mermaid|plantuml"}},
+		{name: "workflow group", args: []string{"workflow", "--help"}, want: []string{"workflow catalog validate", "--catalog <repo-relative-path>", "--node-contract-registry <repo-relative-path>", "KAH does not select workflows"}},
 		{name: "help alias", args: []string{"help", "run", "create"}, want: []string{"kkachi-agent-helper run create", "--execution-mode"}},
 		{name: "help help", args: []string{"help", "help"}, want: []string{"kkachi-agent-helper help", "[command] [subcommand]", "JSON behavior:"}},
 	}
@@ -1425,7 +1426,7 @@ func assertCapabilityCommandGroups(t *testing.T, groups []capabilityCommandGroup
 		{Name: "phase-plan", Status: capabilityStatusSupported, Subcommands: []string{"init", "show", "set", "validate"}},
 		{Name: "approval", Status: capabilityStatusSupported, Subcommands: []string{"request", "record", "show"}},
 		{Name: "graph", Status: capabilityStatusSupported, Subcommands: []string{"init", "validate", "explain", "diff", "propose", "apply", "export"}},
-		{Name: "workflow", Status: capabilityStatusSupported, Subcommands: []string{"validate", "explain", "create", "show", "ready", "node"}},
+		{Name: "workflow", Status: capabilityStatusSupported, Subcommands: []string{"validate", "explain", "catalog", "create", "show", "ready", "node"}},
 	}
 	if !slices.EqualFunc(groups, want, func(got capabilityCommandGroup, want capabilityCommandGroup) bool {
 		return got.Name == want.Name && got.Status == want.Status && slices.Equal(got.Subcommands, want.Subcommands)
@@ -2688,6 +2689,62 @@ nodes:
 	}
 }
 
+func TestWorkflowCatalogCLIJSONAndCreateMode(t *testing.T) {
+	repo, runID := workflowCLITestRun(t)
+	writeCLICatalogWorkflow(t, repo, "alpha")
+	if err := os.WriteFile(filepath.Join(repo, ".kkachi", "workflow-catalog.yaml"), []byte(`schema_version: workflow-catalog/v1
+catalog_id: cli-catalog
+workflows:
+  - workflow_id: alpha
+    path: .kkachi/workflows/alpha.yaml
+    schema_version: task-dag/v1
+`), 0o600); err != nil {
+		t.Fatalf("write catalog: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"workflow", "catalog", "validate", "--file", ".kkachi/workflow-catalog.yaml", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("workflow catalog validate exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	var catalog map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &catalog); err != nil {
+		t.Fatalf("catalog stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if catalog["status"] != "pass" || catalog["reason"] != "workflow_catalog_valid" {
+		t.Fatalf("catalog = %#v, want pass workflow_catalog_valid", catalog)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"workflow", "create", "--run", runID, "--catalog", ".kkachi/workflow-catalog.yaml", "--workflow-id", "alpha", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("workflow create catalog exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	var created map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
+		t.Fatalf("create stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if created["reason"] != "workflow_instance_created" || created["catalog"] == nil {
+		t.Fatalf("created = %#v, want catalog-backed workflow instance", created)
+	}
+}
+
+func TestWorkflowCreateRejectsMixedFileAndCatalogMode(t *testing.T) {
+	repo, runID := workflowCLITestRun(t)
+	writeCLIWorkflowFixture(t, repo, `schema_version: task-dag/v1
+workflow_id: demo
+nodes:
+  - id: setup
+    depends_on: []
+    join: all_of
+    required_outputs: ["out/setup.txt"]
+`)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := runWithOptions([]string{"workflow", "create", "--run", runID, "--file", "workflow.yaml", "--catalog", ".kkachi/workflow-catalog.yaml", "--workflow-id", "demo", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	assertCLIErrorCode(t, code, stdout, stderr, ExitUsage, "workflow_catalog_explicit_mode_conflict")
+}
+
 func TestWorkflowValidateCLIJSONValidationFailure(t *testing.T) {
 	repo := tempGitRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "workflow.yaml"), []byte(`schema_version: task-dag/v1
@@ -2890,5 +2947,24 @@ func writeCLIWorkflowFixture(t *testing.T, repo string, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(repo, "workflow.yaml"), []byte(content), 0o600); err != nil {
 		t.Fatalf("write workflow: %v", err)
+	}
+}
+
+func writeCLICatalogWorkflow(t *testing.T, repo string, workflowID string) {
+	t.Helper()
+	path := filepath.Join(repo, ".kkachi", "workflows", workflowID+".yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir workflow dir: %v", err)
+	}
+	content := `schema_version: task-dag/v1
+workflow_id: ` + workflowID + `
+nodes:
+  - id: setup
+    depends_on: []
+    join: all_of
+    required_outputs: ["out/setup.txt"]
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write catalog workflow: %v", err)
 	}
 }

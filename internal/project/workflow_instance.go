@@ -24,9 +24,12 @@ const (
 )
 
 type WorkflowCreateOptions struct {
-	RunID string
-	File  string
-	Now   func() time.Time
+	RunID                string
+	File                 string
+	Catalog              string
+	WorkflowID           string
+	NodeContractRegistry string
+	Now                  func() time.Time
 }
 
 type WorkflowRunOptions struct {
@@ -43,16 +46,17 @@ type WorkflowNodeOptions struct {
 }
 
 type WorkflowInstanceResult struct {
-	Status      string               `json:"status"`
-	OK          bool                 `json:"ok"`
-	Reason      string               `json:"reason"`
-	ReasonCodes []string             `json:"reason_codes"`
-	RunID       string               `json:"run_id"`
-	EventID     string               `json:"event_id,omitempty"`
-	Instance    *WorkflowInstance    `json:"instance,omitempty"`
-	Ready       []WorkflowReadyNode  `json:"ready,omitempty"`
-	Diagnostics []WorkflowDiagnostic `json:"diagnostics,omitempty"`
-	TaskDAG     *TaskDAGResult       `json:"task_dag,omitempty"`
+	Status      string                 `json:"status"`
+	OK          bool                   `json:"ok"`
+	Reason      string                 `json:"reason"`
+	ReasonCodes []string               `json:"reason_codes"`
+	RunID       string                 `json:"run_id"`
+	EventID     string                 `json:"event_id,omitempty"`
+	Instance    *WorkflowInstance      `json:"instance,omitempty"`
+	Ready       []WorkflowReadyNode    `json:"ready,omitempty"`
+	Diagnostics []WorkflowDiagnostic   `json:"diagnostics,omitempty"`
+	TaskDAG     *TaskDAGResult         `json:"task_dag,omitempty"`
+	Catalog     *WorkflowCatalogResult `json:"catalog,omitempty"`
 }
 
 type WorkflowDiagnostic struct {
@@ -106,13 +110,19 @@ func CreateWorkflowInstance(root Root, options WorkflowCreateOptions) (WorkflowI
 		if _, _, err := ReadRunMetadata(root, runID); err != nil {
 			return err
 		}
-		taskDAG, err := ValidateTaskDAG(root, options.File)
+		taskDAG, catalog, err := workflowCreateTaskDAG(root, options)
 		if err != nil {
 			return err
 		}
 		if !taskDAG.OK {
 			result = workflowInvalidFromTaskDAG(runID, taskDAG.Reason, taskDAG.ReasonCodes, taskDAG.Diagnostics)
 			result.TaskDAG = &taskDAG
+			result.Catalog = catalog
+			return nil
+		}
+		if catalog != nil && !catalog.OK {
+			result = workflowInvalidFromCatalog(runID, catalog.Reason, catalog.ReasonCodes, catalog.Diagnostics)
+			result.Catalog = catalog
 			return nil
 		}
 		path, err := workflowInstancePath(root, runID)
@@ -143,10 +153,32 @@ func CreateWorkflowInstance(root Root, options WorkflowCreateOptions) (WorkflowI
 		result = workflowPass(runID, "workflow_instance_created", []string{"workflow_instance_created"}, &instance)
 		result.EventID = appendResult.EventID
 		result.TaskDAG = &taskDAG
+		result.Catalog = catalog
 		result.Ready = readyWorkflowNodes(instance)
 		return nil
 	})
 	return result, err
+}
+
+func workflowCreateTaskDAG(root Root, options WorkflowCreateOptions) (TaskDAGResult, *WorkflowCatalogResult, error) {
+	if strings.TrimSpace(options.Catalog) == "" {
+		taskDAG, err := ValidateTaskDAG(root, options.File)
+		return taskDAG, nil, err
+	}
+	catalog, err := ValidateWorkflowCatalog(root, WorkflowCatalogOptions{File: options.Catalog, WorkflowID: options.WorkflowID, NodeContractRegistry: options.NodeContractRegistry})
+	if err != nil {
+		return TaskDAGResult{}, nil, err
+	}
+	if !catalog.OK {
+		return TaskDAGResult{Status: TaskDAGStatusInvalid, OK: false, Reason: catalog.Reason, ReasonCodes: append([]string{}, catalog.ReasonCodes...)}, &catalog, nil
+	}
+	taskDAG := workflowCatalogSelectedTaskDAG(catalog)
+	if taskDAG == nil {
+		catalog.addDiagnostic("workflow_catalog_ambiguous_reference", "workflow id did not resolve to a valid task-DAG", options.WorkflowID, catalog.Path, "workflow_id", "exactly one valid workflow", options.WorkflowID, "")
+		catalog.finalize()
+		return TaskDAGResult{Status: TaskDAGStatusInvalid, OK: false, Reason: catalog.Reason, ReasonCodes: append([]string{}, catalog.ReasonCodes...)}, &catalog, nil
+	}
+	return *taskDAG, &catalog, nil
 }
 
 func ShowWorkflowInstance(root Root, options WorkflowRunOptions) (WorkflowInstanceResult, error) {
@@ -389,6 +421,14 @@ func workflowInvalidFromTaskDAG(runID string, reason string, codes []string, dia
 	result := workflowInvalid(runID, reason, codes, nil)
 	for _, diagnostic := range diagnostics {
 		result.Diagnostics = append(result.Diagnostics, WorkflowDiagnostic{Code: diagnostic.Code, Message: diagnostic.Message, NodeID: diagnostic.NodeID, Field: diagnostic.Field, Actual: diagnostic.Value, Path: diagnostic.Path})
+	}
+	return result
+}
+
+func workflowInvalidFromCatalog(runID string, reason string, codes []string, diagnostics []WorkflowCatalogDiagnostic) WorkflowInstanceResult {
+	result := workflowInvalid(runID, reason, codes, nil)
+	for _, diagnostic := range diagnostics {
+		result.Diagnostics = append(result.Diagnostics, WorkflowDiagnostic{Code: diagnostic.Code, Message: diagnostic.Message, NodeID: diagnostic.NodeID, Field: diagnostic.Field, Expected: diagnostic.Expected, Actual: diagnostic.Actual, Path: diagnostic.Path})
 	}
 	return result
 }

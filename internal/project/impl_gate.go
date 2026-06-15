@@ -99,7 +99,7 @@ func checkDocsUpdateArtifact(root Root, runID string) GateCheck {
 }
 
 func checkFinalGate(root Root, metadata RunMetadata, _ string) (GateCheckResult, error) {
-	checks := []GateCheck{checkFinalReportArtifact(root, metadata.RunID)}
+	checks := []GateCheck{checkFinalReportArtifact(root, metadata.RunID), checkWorkflowInstanceCompletenessGate(root, metadata.RunID)}
 
 	requiredGates := []string{GateIntake, GateSOT, GateRoadmap, GatePlan, GateImplementation, GateReview, GateVerification, GateDocs}
 	if backendGateRequired(metadata) {
@@ -121,6 +121,25 @@ func checkFinalGate(root Root, metadata RunMetadata, _ string) (GateCheckResult,
 	}
 
 	return gateResultFromChecks(metadata.RunID, GateFinal, checks), nil
+}
+
+func checkWorkflowInstanceCompletenessGate(root Root, runID string) GateCheck {
+	result, err := CheckWorkflowInstanceCompleteness(root, runID)
+	if err != nil {
+		return GateCheck{Name: "workflow_instance", Status: GateStatusFail, Message: "workflow instance completeness could not be checked", Hint: "Repair run metadata or workflow instance state before running gate final.", Field: "workflow_instance", Expected: "checkable workflow instance state", Actual: err.Error()}
+	}
+	switch result.Status {
+	case WorkflowCatalogStatusMissing:
+		return GateCheck{Name: "workflow_instance", Status: GateStatusNotApplicable, Path: result.Path, Message: "no workflow instance is present for this run", Field: "workflow_instance", Expected: "optional workflow-instance.json", Actual: "missing"}
+	case WorkflowCatalogStatusPass:
+		return GateCheck{Name: "workflow_instance", Status: GateStatusPass, Path: result.Path, Message: "workflow instance is complete", Field: "reason", Expected: "workflow_instance_complete", Actual: result.Reason}
+	default:
+		actual := result.Reason
+		if len(result.Diagnostics) > 0 {
+			actual = result.Diagnostics[0].Code
+		}
+		return GateCheck{Name: "workflow_instance", Status: GateStatusFail, Path: result.Path, Message: "workflow instance is incomplete", Hint: "Complete all workflow nodes and preserve required outputs/evidence before final gate.", Field: "reason", Expected: "workflow_instance_complete", Actual: actual}
+	}
 }
 
 func checkFinalReportArtifact(root Root, runID string) GateCheck {

@@ -76,6 +76,9 @@ func TestExportDiagnosticsProjectLevelWhenNoRunAndOutputOverwriteRefused(t *test
 			t.Fatalf("forbidden fallback source = %#v, want forbidden fallback reason code", source)
 		}
 	}
+	if bundle.WorkflowCatalog.Status != WorkflowCatalogStatusMissing || bundle.WorkflowCatalog.Reason != "workflow_catalog_missing" {
+		t.Fatalf("workflow catalog diagnostics = %#v, want missing default catalog evidence", bundle.WorkflowCatalog)
+	}
 
 	outputPath := filepath.Join(repo, "diagnostics", "bundle.json")
 	mustMkdir(t, filepath.Dir(outputPath))
@@ -86,6 +89,46 @@ func TestExportDiagnosticsProjectLevelWhenNoRunAndOutputOverwriteRefused(t *test
 	assertProblemCode(t, err, "diagnostics_output_exists")
 	if got := readText(t, outputPath); got != "existing\n" {
 		t.Fatalf("existing output = %q, want unchanged", got)
+	}
+}
+
+func TestExportDiagnosticsReportsWorkflowCatalogAndInstance(t *testing.T) {
+	repo, root := newInitializedDiagnosticsRoot(t)
+	created := createDiagnosticsRun(t, root, "Workflow diagnostics", "333333333333")
+	writeCatalogWorkflow(t, repo, "alpha")
+	writeWorkflowCatalog(t, repo, `schema_version: workflow-catalog/v1
+catalog_id: kah-test
+workflows:
+  - workflow_id: alpha
+    path: .kkachi/workflows/alpha.yaml
+    schema_version: task-dag/v1
+`)
+	if _, err := CreateWorkflowInstance(root, WorkflowCreateOptions{RunID: created.Metadata.RunID, Catalog: WorkflowCatalogDefaultPath, WorkflowID: "alpha", Now: fixedDiagnosticsTime}); err != nil {
+		t.Fatalf("CreateWorkflowInstance() error = %v", err)
+	}
+
+	bundle, err := ExportDiagnostics(root, DiagnosticsExportOptions{RunID: created.Metadata.RunID, Now: fixedDiagnosticsTime})
+	if err != nil {
+		t.Fatalf("ExportDiagnostics() error = %v", err)
+	}
+	if !bundle.WorkflowCatalog.OK || bundle.WorkflowCatalog.Reason != "workflow_catalog_valid" {
+		t.Fatalf("workflow catalog = %#v, want valid catalog diagnostics", bundle.WorkflowCatalog)
+	}
+	if bundle.WorkflowInstance == nil || bundle.WorkflowInstance.OK || bundle.WorkflowInstance.Reason != "workflow_node_incomplete" {
+		t.Fatalf("workflow instance = %#v, want incomplete instance diagnostics", bundle.WorkflowInstance)
+	}
+	wantInstancePath := filepath.ToSlash(filepath.Join(RunRootPath, created.Metadata.RunID, WorkflowInstanceFile))
+	found := false
+	for _, artifact := range bundle.SelectedArtifacts {
+		if artifact.Path == wantInstancePath {
+			found = true
+			if artifact.Status != "present" {
+				t.Fatalf("workflow-instance artifact = %#v, want present", artifact)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("selected artifacts = %#v, want workflow-instance.json", bundle.SelectedArtifacts)
 	}
 }
 
