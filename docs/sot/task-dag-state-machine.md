@@ -3,7 +3,7 @@
 Date: 2026-06-12
 Owner: KAH deterministic helper layer
 Confirming role: Responsible approver / governance evidence record pending
-Status: current planning SOT for KAH `DAGSM` task-DAG state-machine workstream; DAGSM-001..003 define the initial deterministic substrate, and DAGSM-004+ align or harden that substrate for KAS WFLOW bundle/run-local ephemeral adoption; not implementation behavior until roadmap tasks pass evidence and release gates
+Status: current SOT for KAH `DAGSM` task-DAG state-machine workstream; DAGSM-001..003 define the initial deterministic substrate, DAGSM-004..005 align/harden that substrate for KAS WFLOW bundle/run-local ephemeral adoption, and DAGSM-006 defines the source-side explicit workflow catalog proposal/apply substrate; installed/effective readiness still requires capability evidence from the binary that will run
 Authority level: KAH-side planning authority for deterministic task-DAG schema validation, workflow instance state, node FSM/order enforcement, required evidence checks, diagnostics, gates, and audit events
 Scope: `kkachi-agent-helper` docs, schemas, command JSON contracts, deterministic state transitions, diagnostics, gates, tests, and release notes; no KAS policy selection, no agent suitability judgment, no backend execution, no Kanban assignment authority, no Hermes profile/provider/gateway/auth/token/model mutation
 Related docs: `docs/specs.md`, `docs/compatibility.md`, `docs/roadmap.md`, `docs/sot/graph-workflow-sync-diagnostics-and-repair.md`, KAS `docs/sot/task-dag-workflow-contract.md`
@@ -104,10 +104,12 @@ kkachi-agent-helper workflow ready --run <run_id> --json
 kkachi-agent-helper workflow node start --run <run_id> --node <node_id> --json
 kkachi-agent-helper workflow node complete --run <run_id> --node <node_id> --evidence <path-or-ref> --json
 kkachi-agent-helper workflow node block --run <run_id> --node <node_id> --reason <text> --json
+kkachi-agent-helper workflow catalog propose --packet <kas-promote-packet.json> --reason <text> --json
+kkachi-agent-helper workflow catalog apply --proposal <proposal-id> --approval <evidence-ref> --proposal-hash sha256:<64hex> --json
 kkachi-agent-helper gate final --run <run_id> --json
 ```
 
-KAH should also advertise capabilities for the implemented surfaces, for example task-DAG validation, workflow instances, node FSM, ready-node calculation, catalog diagnostics, and final gate integration.
+KAH should also advertise capabilities for the implemented surfaces, for example task-DAG validation, workflow instances, node FSM, ready-node calculation, catalog diagnostics, workflow catalog proposal/apply, and final gate integration.
 
 ## Catalog and multi-DAG boundary
 
@@ -121,7 +123,7 @@ KAH accepts run-local task-DAG files as ordinary repository-confined workflow in
 
 KAS may materialize bundle-derived or one-off workflows under `.kkachi/runs/<run_id>/...`, but KAH only validates structure, creates/resumes instances, computes ready nodes, checks required outputs/evidence, records transitions, and contributes deterministic final-gate evidence. KAH must fail closed when the effective installed binary does not advertise workflow support, when YAML is not accepted by the current task-DAG parser, when paths escape the repository, or when node completion evidence is missing.
 
-Project-local persistent promotion is out of DAGSM-004. If later approved, a KAH DAGSM-006-style task may add workflow catalog proposal/apply mechanics with base checksum, drift check, backup, approval evidence, and audit events. Until then KAS promotion apply must remain proposal-only or fail closed rather than directly writing authoritative workflow state.
+Project-local persistent promotion remains explicit and approval-gated. DAGSM-006 adds KAH-owned `workflow catalog propose/apply` mechanics for KAS WFLOW-009 packets with base checksums, drift checks, candidate checksums, candidate DAG/catalog/node-contract validation, backup/recovery evidence, hash-bound approval evidence, and audit events. KAS supplies candidate content and approval evidence; KAH validates, proposes, applies, backs up, and audits only. If the effective installed binary does not advertise `workflow_catalog_proposal_apply=true`, KAS promotion apply must fail closed rather than directly writing authoritative workflow state.
 
 ## Evidence and diagnostics
 
@@ -154,7 +156,12 @@ Diagnostics should use stable reason codes where possible, including at least:
 - `node_transition_invalid`
 - `workflow_catalog_invalid`
 - `workflow_catalog_ambiguous_reference`
-- `workflow_apply_requires_approval`
+- `workflow_catalog_apply_requires_approval`
+- `workflow_catalog_proposal_hash_required`
+- `workflow_catalog_proposal_hash_mismatch`
+- `workflow_catalog_base_checksum_mismatch`
+- `workflow_catalog_candidate_checksum_mismatch`
+- `workflow_catalog_hash_bound_approval_missing`
 
 ## Required roadmap sequence
 
@@ -171,7 +178,7 @@ KAH `DAGSM` tasks are part of the cross-repo seven-PR sequence:
 9. KAS `WFLOW-006` implements bundle registry/templates and KAH-compatible DAG rendering.
 10. KAH `DAGSM-005` hardens effective workflow capability, installed-binary alignment, and KAS-generated DAG compatibility evidence where KAH support is required.
 11. KAS `WFLOW-007` and `WFLOW-008` implement deterministic classification routing and run-local ephemeral materialization.
-12. KAS `WFLOW-009` plus optional KAH `DAGSM-006` implement explicit project-local promotion only if proposal/apply support is separately approved.
+12. KAS `WFLOW-009` plus KAH `DAGSM-006` implement explicit project-local promotion through source-side proposal/apply support; effective use remains gated on installed binary capability evidence.
 
 KAH implementation must not add selector policy, custom skill generation, task classification, bundle routing, project-local promotion policy, or agent assignment logic in any `DAGSM` task.
 

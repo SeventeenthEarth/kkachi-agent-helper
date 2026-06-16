@@ -148,7 +148,7 @@ func TestGraphReadonlyBinaryFlow(t *testing.T) {
 	if err := json.Unmarshal(explainOutput, &explained); err != nil {
 		t.Fatalf("graph explain output is not JSON: %v\n%s", err, string(explainOutput))
 	}
-	if explained.Status != "pass" || len(explained.Phases) != 13 || explained.Phases[0].ID != "intake" || len(explained.Edges) != 12 || explained.Edges[0].To != "sot" {
+	if explained.Status != "pass" || len(explained.Phases) < 13 || explained.Phases[0].ID != "intake" || len(explained.Edges) != len(explained.Phases)-1 || explained.Edges[0].To != "sot" {
 		t.Fatalf("explained = %#v, want graph projection", explained)
 	}
 

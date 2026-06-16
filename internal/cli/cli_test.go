@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -109,7 +111,7 @@ func TestCapabilitiesJSONOutputIsProjectIndependent(t *testing.T) {
 		t.Fatalf("project schema version = %q, want %q", payload.ProjectSchemaVersion, project.SchemaVersion)
 	}
 	flags := payload.CompatibilityFlags
-	if !flags.ProjectInit || !flags.RunLifecycle || !flags.ArtifactInit || !flags.ArtifactList || !flags.ArtifactValidate || !flags.ArtifactMutation || !flags.Gates || !flags.BackendEvidenceRequirements || !flags.DiagnosticsExport || !flags.PhasePlan || !flags.ApprovalRecords || !flags.WorkflowGraphReadonly || !flags.WorkflowGraphInit || !flags.WorkflowGraphApply || !flags.WorkflowGraphExport || !flags.WorkflowGraphDiagnostics || !flags.WorkflowGraphNoDirectYAMLFallback || !flags.WorkflowGraphConfigurableFeedbackIntake || !flags.TaskDAGSchemaValidation || !flags.WorkflowInstanceState || !flags.WorkflowCatalogDiagnostics || !flags.WorkflowFinalGateIntegration || !flags.WorkflowNodeContractRegistryEvidence || !flags.TokenEconomyEvidenceGate {
+	if !flags.ProjectInit || !flags.RunLifecycle || !flags.ArtifactInit || !flags.ArtifactList || !flags.ArtifactValidate || !flags.ArtifactMutation || !flags.Gates || !flags.BackendEvidenceRequirements || !flags.DiagnosticsExport || !flags.PhasePlan || !flags.ApprovalRecords || !flags.WorkflowGraphReadonly || !flags.WorkflowGraphInit || !flags.WorkflowGraphApply || !flags.WorkflowGraphExport || !flags.WorkflowGraphDiagnostics || !flags.WorkflowGraphNoDirectYAMLFallback || !flags.WorkflowGraphConfigurableFeedbackIntake || !flags.TaskDAGSchemaValidation || !flags.WorkflowInstanceState || !flags.WorkflowCatalogDiagnostics || !flags.WorkflowCatalogProposalApply || !flags.WorkflowFinalGateIntegration || !flags.WorkflowNodeContractRegistryEvidence || !flags.TokenEconomyEvidenceGate {
 		t.Fatalf("compatibility flags = %#v, want implemented surfaces enabled", flags)
 	}
 	if flags.InstallCommand {
@@ -147,12 +149,12 @@ func TestCapabilitiesWorkflowEvidenceIsMachineReadable(t *testing.T) {
 	if workflow == nil {
 		t.Fatalf("command groups = %#v, want workflow command group", payload.CommandGroups)
 	}
-	wantSubcommands := []string{"validate", "explain", "catalog", "create", "show", "ready", "node"}
+	wantSubcommands := []string{"validate", "explain", "catalog", "catalog propose", "catalog apply", "create", "show", "ready", "node"}
 	if workflow.Status != capabilityStatusSupported || !slices.Equal(workflow.Subcommands, wantSubcommands) {
 		t.Fatalf("workflow group = %#v, want supported subcommands %#v", *workflow, wantSubcommands)
 	}
 	flags := payload.CompatibilityFlags
-	if !flags.TaskDAGSchemaValidation || !flags.WorkflowInstanceState || !flags.WorkflowCatalogDiagnostics || !flags.WorkflowFinalGateIntegration || !flags.WorkflowNodeContractRegistryEvidence {
+	if !flags.TaskDAGSchemaValidation || !flags.WorkflowInstanceState || !flags.WorkflowCatalogDiagnostics || !flags.WorkflowCatalogProposalApply || !flags.WorkflowFinalGateIntegration || !flags.WorkflowNodeContractRegistryEvidence {
 		t.Fatalf("workflow compatibility flags = %#v, want DAGSM workflow evidence flags enabled", flags)
 	}
 }
@@ -216,7 +218,8 @@ func TestHelpCommandsExitZeroWithoutProjectState(t *testing.T) {
 		{name: "phase plan", args: []string{"phase-plan", "--help"}, want: []string{"kkachi-agent-helper phase-plan", "supported", "validate <run_id>"}},
 		{name: "approval group", args: []string{"approval", "--help"}, want: []string{"kkachi-agent-helper approval", "request <run_id>", "--decision <approved|rejected>"}},
 		{name: "graph group", args: []string{"graph", "--help"}, want: []string{"kkachi-agent-helper graph", "diff", "propose", "apply", "export", "--candidate-file <repo-relative-candidate-graph>", "--patch <repo-relative-candidate-graph>", "--approval <evidence-ref>", "audit evidence reference", "--format mermaid|plantuml"}},
-		{name: "workflow group", args: []string{"workflow", "--help"}, want: []string{"workflow catalog validate", "--catalog <repo-relative-path>", "--node-contract-registry <repo-relative-path>", "KAH does not select workflows"}},
+		{name: "workflow group", args: []string{"workflow", "--help"}, want: []string{"workflow catalog validate", "workflow catalog propose", "--proposal-hash sha256:<64hex>", "KAH does not select workflows"}},
+		{name: "workflow catalog apply help alias", args: []string{"workflow", "catalog", "apply", "--help"}, want: []string{"workflow catalog apply", "--proposal-hash sha256:<64hex>", "hash-bound approval"}},
 		{name: "help alias", args: []string{"help", "run", "create"}, want: []string{"kkachi-agent-helper run create", "--execution-mode"}},
 		{name: "help help", args: []string{"help", "help"}, want: []string{"kkachi-agent-helper help", "[command] [subcommand]", "JSON behavior:"}},
 	}
@@ -258,13 +261,13 @@ func TestWorkflowHelpAdvertisesSupportedInventoryAndPolicyBoundary(t *testing.T)
 	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
 		t.Fatalf("stdout is not valid JSON: %v\n%s", err, stdout.String())
 	}
-	wantSubcommands := []string{"validate", "explain", "catalog validate", "catalog explain", "create", "show", "ready", "node start", "node complete", "node block"}
+	wantSubcommands := []string{"validate", "explain", "catalog validate", "catalog explain", "catalog propose", "catalog apply", "create", "show", "ready", "node start", "node complete", "node block"}
 	for _, want := range wantSubcommands {
 		if !helpItemsContainName(payload.Subcommands, want) {
 			t.Fatalf("workflow help subcommands = %#v, want %q", payload.Subcommands, want)
 		}
 	}
-	if !strings.Contains(payload.JSONBehavior, "fail closed") || !strings.Contains(payload.JSONBehavior, "ambiguous catalog references") {
+	if !strings.Contains(payload.JSONBehavior, "fail closed") || !strings.Contains(payload.JSONBehavior, "proposal hashes") || !strings.Contains(payload.JSONBehavior, "ambiguous catalog references") {
 		t.Fatalf("json_behavior = %q, want fail-closed catalog caveats", payload.JSONBehavior)
 	}
 	notes := strings.Join(payload.Notes, "\n")
@@ -1498,7 +1501,7 @@ func assertCapabilityCommandGroups(t *testing.T, groups []capabilityCommandGroup
 		{Name: "phase-plan", Status: capabilityStatusSupported, Subcommands: []string{"init", "show", "set", "validate"}},
 		{Name: "approval", Status: capabilityStatusSupported, Subcommands: []string{"request", "record", "show"}},
 		{Name: "graph", Status: capabilityStatusSupported, Subcommands: []string{"init", "validate", "explain", "diff", "propose", "apply", "export"}},
-		{Name: "workflow", Status: capabilityStatusSupported, Subcommands: []string{"validate", "explain", "catalog", "create", "show", "ready", "node"}},
+		{Name: "workflow", Status: capabilityStatusSupported, Subcommands: []string{"validate", "explain", "catalog", "catalog propose", "catalog apply", "create", "show", "ready", "node"}},
 	}
 	if !slices.EqualFunc(groups, want, func(got capabilityCommandGroup, want capabilityCommandGroup) bool {
 		return got.Name == want.Name && got.Status == want.Status && slices.Equal(got.Subcommands, want.Subcommands)
@@ -2801,6 +2804,65 @@ workflows:
 	}
 }
 
+func TestWorkflowCatalogPromotionCLIProposeAndApplyJSON(t *testing.T) {
+	repo, _ := workflowCLITestRun(t)
+	packetPath := writeCLIWorkflowCatalogPromotionPacket(t, repo, "cli-promoted")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions([]string{"workflow", "catalog", "propose", "--packet", packetPath, "--reason", "promote cli workflow", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("workflow catalog propose exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	var proposal map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &proposal); err != nil {
+		t.Fatalf("proposal stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	proposalID, _ := proposal["proposal_id"].(string)
+	proposalHash, _ := proposal["proposal_hash"].(string)
+	if proposalID == "" || proposalHash != cliWorkflowCatalogApprovalHash() {
+		t.Fatalf("proposal = %#v, want id and KAS approval hash", proposal)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"workflow", "catalog", "apply", "--proposal", proposalID, "--approval", "dry-run:" + proposalHash, "--proposal-hash", proposalHash, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("workflow catalog apply exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	var applied map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &applied); err != nil {
+		t.Fatalf("apply stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if applied["proposal_hash"] != proposalHash || len(applied["applied_paths"].([]any)) != 3 {
+		t.Fatalf("applied = %#v, want hash-bound applied paths", applied)
+	}
+	if data, err := os.ReadFile(filepath.Join(repo, ".kkachi", "workflows", "cli-promoted.yaml")); err != nil || !strings.Contains(string(data), "workflow_id: cli-promoted") {
+		t.Fatalf("applied workflow read err=%v data=%s", err, string(data))
+	}
+}
+
+func TestWorkflowCatalogApplyMissingOptionsHintIncludesProposalApply(t *testing.T) {
+	repo, _ := workflowCLITestRun(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	code := runWithOptions([]string{"--json", "workflow", "catalog", "apply", "--proposal", "wcat-prop-000001", "--proposal-hash", cliWorkflowCatalogApprovalHash()}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+	if code != ExitUsage {
+		t.Fatalf("workflow catalog apply missing approval exit = %d, want %d", code, ExitUsage)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", stdout.String())
+	}
+	env := decodeErrorEnvelope(t, stderr.Bytes())
+	if env.Error.Code != "missing_required_option" || env.Error.Field != "--approval" {
+		t.Fatalf("error = %#v, want missing --approval", env.Error)
+	}
+	for _, want := range []string{"workflow catalog apply", "--approval <evidence-ref>", "--proposal-hash sha256:<64hex>"} {
+		if !strings.Contains(env.Error.Hint, want) {
+			t.Fatalf("hint = %q, want %q", env.Error.Hint, want)
+		}
+	}
+}
+
 func TestWorkflowCreateRejectsMixedFileAndCatalogMode(t *testing.T) {
 	repo, runID := workflowCLITestRun(t)
 	writeCLIWorkflowFixture(t, repo, `schema_version: task-dag/v1
@@ -3039,4 +3101,70 @@ nodes:
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write catalog workflow: %v", err)
 	}
+}
+
+func writeCLIWorkflowCatalogPromotionPacket(t *testing.T, repo string, workflowID string) string {
+	t.Helper()
+	workflowPath := ".kkachi/workflows/" + workflowID + ".yaml"
+	registryPath := ".kkachi/workflows/" + workflowID + "-node-contracts.yaml"
+	catalogPath := ".kkachi/workflow-catalog.yaml"
+	workflow := `schema_version: task-dag/v1
+workflow_id: ` + workflowID + `
+nodes:
+  - id: setup
+    depends_on: []
+    join: all_of
+    required_outputs: ["out/setup.txt"]
+`
+	catalog := `schema_version: workflow-catalog/v1
+catalog_id: kas-promoted-workflows
+workflows:
+  - workflow_id: ` + workflowID + `
+    path: ` + workflowPath + `
+    schema_version: task-dag/v1
+    node_contract_registry: ` + registryPath + `
+`
+	registry := `schema_version: kas-task-dag-workflow-registry/v1
+node_contracts:
+  - workflow_id: ` + workflowID + `
+    node_id: setup
+    task_class: development
+    completion_authority: kah_only
+    direct_kah_state_write: false
+`
+	packet := map[string]any{
+		"schema_version":    "kas-workflow-promote-packet/v1",
+		"canonicalization":  "utf8-json-sorted-keys-normalized-relative-paths/v1",
+		"target_paths":      []string{catalogPath, registryPath, workflowPath},
+		"candidate_paths":   map[string]string{"workflow_dag": workflowPath, "catalog": catalogPath, "node_contract_registry": registryPath},
+		"generated_content": []map[string]string{{"path": workflowPath, "kind": "workflow_dag", "content": workflow, "sha256": cliWorkflowCatalogChecksum(workflow)}, {"path": catalogPath, "kind": "workflow_catalog", "content": catalog, "sha256": cliWorkflowCatalogChecksum(catalog)}, {"path": registryPath, "kind": "node_contract_registry", "content": registry, "sha256": cliWorkflowCatalogChecksum(registry)}},
+		"base_checksums":    map[string]string{workflowPath: "missing", registryPath: "missing", catalogPath: "missing"},
+		"changed_paths":     []map[string]string{{"path": workflowPath, "action": "create", "kind": "workflow_dag"}, {"path": catalogPath, "action": "create", "kind": "workflow_catalog"}, {"path": registryPath, "action": "create", "kind": "node_contract_registry"}},
+		"conflicts":         []map[string]string{},
+		"diagnostics":       []map[string]string{},
+		"no_write":          map[string]any{"guaranteed": true},
+		"approval_hash":     cliWorkflowCatalogApprovalHash(),
+	}
+	data, err := json.MarshalIndent(packet, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal packet: %v", err)
+	}
+	relative := filepath.ToSlash(filepath.Join(".kkachi", "runs", "run-cli", "artifacts", "workflow-promote-packet.json"))
+	path := filepath.Join(repo, filepath.FromSlash(relative))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir packet dir: %v", err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		t.Fatalf("write packet: %v", err)
+	}
+	return relative
+}
+
+func cliWorkflowCatalogChecksum(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func cliWorkflowCatalogApprovalHash() string {
+	return "sha256:" + strings.Repeat("b", 64)
 }
