@@ -124,6 +124,39 @@ func TestCapabilitiesJSONOutputIsProjectIndependent(t *testing.T) {
 	}
 }
 
+func TestCapabilitiesWorkflowEvidenceIsMachineReadable(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runWithOptions([]string{"capabilities", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: t.TempDir()})
+
+	if exitCode != ExitOK {
+		t.Fatalf("exitCode = %d, want %d stderr=%s", exitCode, ExitOK, stderr.String())
+	}
+	var payload capabilitiesOutput
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v\n%s", err, stdout.String())
+	}
+	var workflow *capabilityCommandGroup
+	for i := range payload.CommandGroups {
+		if payload.CommandGroups[i].Name == "workflow" {
+			workflow = &payload.CommandGroups[i]
+			break
+		}
+	}
+	if workflow == nil {
+		t.Fatalf("command groups = %#v, want workflow command group", payload.CommandGroups)
+	}
+	wantSubcommands := []string{"validate", "explain", "catalog", "create", "show", "ready", "node"}
+	if workflow.Status != capabilityStatusSupported || !slices.Equal(workflow.Subcommands, wantSubcommands) {
+		t.Fatalf("workflow group = %#v, want supported subcommands %#v", *workflow, wantSubcommands)
+	}
+	flags := payload.CompatibilityFlags
+	if !flags.TaskDAGSchemaValidation || !flags.WorkflowInstanceState || !flags.WorkflowCatalogDiagnostics || !flags.WorkflowFinalGateIntegration || !flags.WorkflowNodeContractRegistryEvidence {
+		t.Fatalf("workflow compatibility flags = %#v, want DAGSM workflow evidence flags enabled", flags)
+	}
+}
+
 func TestCapabilitiesHumanOutput(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -212,12 +245,51 @@ func TestHelpCommandsExitZeroWithoutProjectState(t *testing.T) {
 	}
 }
 
+func TestWorkflowHelpAdvertisesSupportedInventoryAndPolicyBoundary(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runWithOptions([]string{"--json", "workflow", "--help"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: t.TempDir()})
+
+	if exitCode != ExitOK {
+		t.Fatalf("exitCode = %d, want %d stderr=%s", exitCode, ExitOK, stderr.String())
+	}
+	var payload helpOutput
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v\n%s", err, stdout.String())
+	}
+	wantSubcommands := []string{"validate", "explain", "catalog validate", "catalog explain", "create", "show", "ready", "node start", "node complete", "node block"}
+	for _, want := range wantSubcommands {
+		if !helpItemsContainName(payload.Subcommands, want) {
+			t.Fatalf("workflow help subcommands = %#v, want %q", payload.Subcommands, want)
+		}
+	}
+	if !strings.Contains(payload.JSONBehavior, "fail closed") || !strings.Contains(payload.JSONBehavior, "ambiguous catalog references") {
+		t.Fatalf("json_behavior = %q, want fail-closed catalog caveats", payload.JSONBehavior)
+	}
+	notes := strings.Join(payload.Notes, "\n")
+	for _, forbidden := range []string{"selector matching", "ranking", "fallback choice", "backend execution", "agent assignment"} {
+		if !strings.Contains(notes, forbidden) {
+			t.Fatalf("notes = %q, want KAH policy boundary %q", notes, forbidden)
+		}
+	}
+}
+
 func TestImplementedCommandGroupsHaveHelpPages(t *testing.T) {
 	for command := range commandGroups {
 		if _, ok := helpPages[command]; !ok {
 			t.Fatalf("command group %q missing help page", command)
 		}
 	}
+}
+
+func helpItemsContainName(items []helpItem, want string) bool {
+	for _, item := range items {
+		if item.Name == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestHelpJSONOutput(t *testing.T) {
