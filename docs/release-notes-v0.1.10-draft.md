@@ -1,4 +1,4 @@
-# kkachi-agent-helper v0.1.9 draft release notes
+# kkachi-agent-helper v0.1.10 draft release notes
 
 Release date: pending
 Commit: pending
@@ -9,12 +9,13 @@ Commit: pending
 - Adds DAGSM-001 task-DAG schema validation/explain diagnostics for local workflow YAML inspection.
 - Adds DAGSM-002 run-local workflow instance state, node FSM transitions, ready-node calculation, stale revision refusal, required-output evidence checks, and audit events.
 - Adds DAGSM-003 multi-DAG workflow catalog diagnostics, explicit catalog workflow-instance create mode, optional KAS node-contract registry structural evidence checks, diagnostics export coverage, and workflow-instance final-gate integration.
+- Adds DAGSM-006 workflow catalog proposal/apply substrate for explicit KAS WFLOW-009 project-local promotion.
 
 ## Compatibility
 
 | Component | Version/range | Verification |
 |---|---|---|
-| kkachi-agent-helper | `v0.1.9` target | `kkachi-agent-helper --version` after release/install |
+| kkachi-agent-helper | `v0.1.10` target | `kkachi-agent-helper --version` after release/install |
 | Project schema | `0.1` | `kkachi-agent-helper project doctor --json` |
 | kkachi-agent-bridge | Not checked by helper | Manual; no KAB graph authority is introduced |
 | kkachi-hermes-skills | KAS v0.1.2 planned consumer | KAS decides support envelope and update guidance |
@@ -31,6 +32,8 @@ Commit: pending
 - Workflow catalog diagnostics validate `.kkachi/workflow-catalog.yaml` style multi-DAG catalogs through `workflow catalog validate/explain`, require explicit `--workflow-id` inputs for catalog create mode, preserve existing `workflow create --file` behavior, and advertise `workflow_catalog_diagnostics=true`, `workflow_final_gate_integration=true`, and `workflow_node_contract_registry_evidence=true`.
 - Optional KAS WFLOW-003 node-contract registry checks validate structural evidence such as node coverage, `task_class`, `completion_authority: kah_only`, and `direct_kah_state_write: false`; KAH still does not evaluate selector matches, rank workflows, or choose fallbacks.
 - `gate final` now includes workflow-instance completeness evidence: non-DAGSM runs without `.kkachi/runs/<run_id>/workflow-instance.json` are not applicable, while existing workflow instances must have all nodes succeeded and declared outputs/evidence still present.
+- `workflow catalog propose` records no-write KAS WFLOW-009 promotion proposals with source approval hash binding, base/candidate checksums, validation summary, and audit evidence.
+- `workflow catalog apply` requires explicit `--approval` plus `--proposal-hash`, rechecks proposal/base/candidate/path/schema/coherence safety before writes, backs up existing targets, writes approved project-local catalog targets atomically, and appends `workflow_catalog.applied`.
 - KAH still reports deterministic support facts only; KAS remains the policy owner for supported envelope and update guidance.
 
 ## Verification
@@ -46,6 +49,8 @@ go run . workflow create --run <run_id> --file .kkachi/runs/<run_id>/artifacts/i
 go run . workflow catalog validate --file .kkachi/workflow-catalog.yaml --json
 go run . workflow catalog explain --file .kkachi/workflow-catalog.yaml --workflow-id <workflow_id> --json
 go run . workflow create --run <run_id> --catalog .kkachi/workflow-catalog.yaml --workflow-id <workflow_id> --json
+go run . workflow catalog propose --packet .kkachi/runs/<run_id>/artifacts/workflow-promote-packet.json --reason <reason> --json
+go run . workflow catalog apply --proposal <proposal-id> --approval <approval-ref> --proposal-hash sha256:<hash> --json
 go run . workflow ready --run <run_id> --json
 go run . workflow node start --run <run_id> --node <node_id> --expect-revision 1 --json
 go run . workflow node complete --run <run_id> --node <node_id> --evidence <required-output-path> --expect-revision 2 --json
@@ -61,3 +66,9 @@ Maintainer evidence for the draft was captured with `HOME=/Users/draccoon` becau
 
 ## Known gaps / non-goals
 - No automatic KAH update, automatic graph/catalog apply, KAS compatibility registry, KAS doctor/repair CLI behavior, KAS selector matching, workflow ranking, fallback choice, KAB graph authority, `kah graph` alias behavior, direct `.kkachi-workflow.yaml` edit fallback, or Hermes profile/provider/gateway/auth/token/model mutation is introduced.
+
+## DAGSM-006 promotion substrate
+
+- `workflow_catalog_proposal_apply=true` is advertised only by binaries that include `workflow catalog propose/apply`.
+- KAS WFLOW-009 supplies complete candidate content and hash-bound approval evidence; KAH validates, proposes, applies, backs up, and audits only.
+- Missing effective-binary support must fail closed; do not direct-write `.kkachi/` workflow catalog state as fallback.
