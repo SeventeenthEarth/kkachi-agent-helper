@@ -38,8 +38,9 @@ func TestInitShowAndSetPhasePlan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ShowPhasePlan() error = %v", err)
 	}
-	if shown.Phases[4].ID != "ask" || shown.Phases[4].Reason == "" {
-		t.Fatalf("shown ask phase = %#v, want persisted reason", shown.Phases[4])
+	ask, ok := phaseRowByID(shown.Phases, "ask")
+	if !ok || ask.Reason == "" {
+		t.Fatalf("shown ask phase = %#v, want persisted reason", ask)
 	}
 	if lines := runEventLines(t, repo); len(lines) != 4 || !strings.Contains(lines[2], `"phase_plan.initialized"`) || !strings.Contains(lines[3], `"phase_plan.updated"`) {
 		t.Fatalf("events = %#v, want phase plan events", lines)
@@ -224,13 +225,27 @@ phases:
     status: "pending"
   - id: "roadmap"
     status: "pending"
+  - id: "task-classification"
+    status: "pending"
   - id: "plan"
+    status: "pending"
+  - id: "vet"
     status: "pending"
   - id: "ask"
     status: "pending"
   - id: "implement"
     status: "pending"
+  - id: "enhance-test"
+    status: "pending"
+  - id: "ai-slop-cleaner"
+    status: "pending"
   - id: "optimize"
+    status: "pending"
+  - id: "docs"
+    status: "pending"
+  - id: "verify"
+    status: "pending"
+  - id: "review"
     status: "pending"
   - id: "request-feedback-1"
     status: "pending"
@@ -252,11 +267,9 @@ phases:
     status: "pending"
   - id: "handle-feedback-5"
     status: "pending"
-  - id: "review"
+  - id: "octo-review"
     status: "pending"
-  - id: "verify"
-    status: "pending"
-  - id: "docs"
+  - id: "second-color-review"
     status: "pending"
   - id: "final"
     status: "pending"
@@ -481,8 +494,8 @@ func TestPhasePlanRoundTripWithSpecialCharacters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ShowPhasePlan() error = %v", err)
 	}
-	ask := shown.Phases[4]
-	if ask.ID != "ask" || ask.Reason != reason || ask.Evidence != evidence {
+	ask, ok := phaseRowByID(shown.Phases, "ask")
+	if !ok || ask.Reason != reason || ask.Evidence != evidence {
 		t.Fatalf("ask phase = %#v, want reason %q and evidence %q", ask, reason, evidence)
 	}
 }
@@ -530,12 +543,17 @@ func phaseCheckFailed(checks []PhasePlanCheck, name string) bool {
 }
 
 func phaseRowPresent(rows []PhaseRow, id string) bool {
+	_, ok := phaseRowByID(rows, id)
+	return ok
+}
+
+func phaseRowByID(rows []PhaseRow, id string) (PhaseRow, bool) {
 	for _, row := range rows {
 		if row.ID == id {
-			return true
+			return row, true
 		}
 	}
-	return false
+	return PhaseRow{}, false
 }
 
 func phaseCheckPassed(checks []PhasePlanCheck, name string) bool {

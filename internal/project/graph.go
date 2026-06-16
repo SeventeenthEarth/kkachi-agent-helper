@@ -914,6 +914,14 @@ func builtInKHSDefaultWorkflowGraph() WorkflowGraph {
 		Gates:     []WorkflowGraphGate{},
 		Approvals: []WorkflowGraphApproval{},
 		Proposals: WorkflowGraphProposals{Policy: "proposal-first"},
+		FeedbackIntake: &WorkflowGraphFeedbackIntake{
+			Policy:         graphFeedbackIntakePolicy,
+			SchemaVersion:  graphFeedbackIntakeSchema,
+			MinRounds:      1,
+			MaxRounds:      5,
+			RequiredRounds: []int{1},
+			OptionalRounds: []int{2, 3, 4, 5},
+		},
 	}
 }
 
