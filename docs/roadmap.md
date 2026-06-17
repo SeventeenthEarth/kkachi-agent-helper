@@ -26,6 +26,7 @@ Status values: `Planned`, `In Progress`, `Blocked`, `Completed`, `Deferred`.
 | 8 | `token` | KAH supplies deterministic evidence gates for KAS token-economy, English-output, agent-instruction, and project KAS lifecycle work without becoming policy or prose-judgment authority. |
 | 9 | `grsync` | KAH hardens workflow graph diagnostics and approval-gated repair substrate so KAS can safely manage graph workflow sync compatibility for KAH v0.1.9 / KAS v0.1.2. |
 | 10 | `DAGSM` | KAH supplies deterministic task-DAG validation, workflow instance state, node FSM/order enforcement, ready-node calculation, multi-DAG catalog diagnostics, final gates, effective capability evidence, and run-local ephemeral workflow support boundaries for KAS WFLOW-triggered workflows. |
+| 11 | `marev` | KAH records and, if later implemented, validates deterministic evidence for KAS Multi-Agent Review without choosing reviewers or adjudicating findings. |
 
 ## Active roadmap
 
@@ -168,6 +169,20 @@ GRSYNC deferrals unless separately approved: KAS compatibility registry, KAS doc
 | DAGSM-006 | Add workflow catalog proposal/apply substrate for explicit promotion | Completed | If WFLOW-009 needs approved project-local persistence, add KAH-owned workflow catalog proposal/apply mechanics with base checksum, drift check, backup/recovery, approval evidence, and audit events. | Completed under KAH run `run-20260616T161807Z-9e005169e954` with implementation, enhanced tests, docs, Red/Orange/Gray review, official KAB GLM Octo review, post-Octo triage, final verification, KAH final gate, and local commit `[DAGSM-006] Add workflow catalog promotion`. `workflow catalog propose` records no-write KAS WFLOW-009 proposal evidence with canonical proposal/source approval hash binding, target/base/candidate checksums, validation summaries, and audit event; `workflow catalog apply` requires `--approval` plus `--proposal-hash sha256:<64hex>`, fails closed before backup/write/audit on hash/base/candidate/path/schema/coherence problems, creates backups, writes project-local workflow catalog targets, and appends `workflow_catalog.applied`. KAH does not decide promotion policy or workflow semantic preference; KAS supplies candidate content and operator approval. Effective readiness requires a binary advertising `workflow_catalog_proposal_apply=true`; install/release/runtime activation remain evidence-gated. |
 
 DAGSM deferrals unless separately approved: KAS selector implementation, KAS task classification, KAS bundle routing, KAS custom trigger generation, KAB backend execution, Kanban assignment, automatic KAH/KAS update, automatic graph/catalog apply, automatic run-local-to-project-local persistence, dynamic node creation, retry/rollback automation, fallback agent selection, webhook daemons, and Hermes profile/provider/gateway/auth/token/model mutation.
+
+### EPIC: marev — Multi-Agent Review evidence gates
+
+> Goal: provide the deterministic KAH evidence substrate for KAS Multi-Agent Review without KAH choosing reviewers, running providers, adjudicating findings, or replacing Blue/Red authority.
+>
+> Source of truth: `docs/sot/multi-agent-review-evidence-gates.md`. Upstream KAS policy epic: `MAR` in `kkachi-hermes-skills/docs/roadmap.md` and KAS SOT `kkachi-hermes-skills/docs/sot/multi-agent-review-policy.md`. `MAREV-001` is a docs/SOT planning task only; actual helper behavior requires `MAREV-002` or later.
+
+| Task ID | Title | Status | Work guide | Notes |
+|---|---|---|---|---|
+| marev-001 | Accept MAR evidence-gate planning SOT | Completed | Add KAH-side planning SOT for MAR artifact layout, deterministic validation targets, final-gate semantics, and KAH/KAS/KAB boundaries. Register it in docs index and roadmap without claiming helper behavior. | Completed as docs/SOT planning after docs readback, `git diff --check`, `make test`, Red `t_cba51c9f` ACCEPT, Orange `t_1679eed7` ACCEPT, Gray `t_d25a82a1` REQUEST_CHANGES, and Gray focused re-review `t_09da112b` ACCEPT after fixing the upstream KAS path to `kkachi-hermes-skills`. No code, schema, command, gate, diagnostics, installed binary, KAB runtime, profile/provider/gateway/auth/token/model mutation, or MAR replacement behavior is authorized. |
+| marev-002 | Implement deterministic MAR artifact/gate/schema support | Planned | If selected, add helper validation for declared MAR artifacts: status vocabulary, reviewer coverage state, degraded/insufficient coverage evidence, Blue disposition, Red adjudication when triggered, premium approval reference, safe paths, freshness, and read-only mutation guard evidence. | Code/tests/docs, focused gate fixtures, diagnostics/readback as needed, full verification, review gates, and final gate evidence. KAH must not judge finding correctness or run reviewers. |
+| marev-003 | Add compatibility/release diagnostics for MAR evidence support | Planned | If MAREV-002 needs release-facing activation, advertise capability/help/compatibility evidence for MAR gate support and preserve fail-closed absence semantics for older binaries. | Capability/help smoke, docs/compatibility/release-note updates, and no warning-only advisory states. |
+
+MAREV deferrals unless separately approved: provider execution, model selection, prompt generation, finding adjudication, automatic Red/Kanban routing, premium-review approval decisions, KAB session control, auth/token/provider/gateway/model mutation, and warning-only MAR gate states.
 
 ### EPIC: token — KAS token-economy evidence gates
 

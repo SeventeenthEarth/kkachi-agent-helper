@@ -24,6 +24,7 @@ This directory is the project archive for `kkachi-agent-helper` docs. It separat
 | `docs/sot/graph-workflow-sync-diagnostics-and-repair.md` | KAH-side planning SOT for graph workflow sync diagnostics and approval-gated repair substrate | KAH deterministic helper layer with KAS v0.1.2 dependency | Historical planning authority for KAH v0.1.9 graph diagnostics/repair work; implemented behavior is reflected in specs, compatibility, and release notes |
 | `docs/sot/task-dag-state-machine.md` | KAH-side planning SOT for task-DAG workflow state machine support | KAH deterministic helper layer with KAS WFLOW dependency | Planning authority for KAH DAGSM schema validation, workflow instance state, node FSM/order enforcement, ready-node calculation, diagnostics, and final gates; not implemented behavior by itself |
 | `docs/sot/token-economy-evidence-gates.md` | KAH-side planning SOT for future token-economy / English-output evidence gates | KAH deterministic helper layer with KAS workstream dependency | Planning authority for future KAH gate work; not implemented behavior by itself |
+| `docs/sot/multi-agent-review-evidence-gates.md` | KAH-side planning SOT for MAR evidence capture and future gates | KAH deterministic helper layer with KAS MAR dependency | Planning authority for MAR artifact layout, deterministic validation targets, and final-gate posture; `MAREV-001` is docs-only and helper behavior requires `MAREV-002` or later implementation evidence |
 | `docs/release-notes-template.md` | Release note template | KAH release owner | Template only |
 | `docs/.omx/` if present | Tool/runtime/agent state | Tooling | Non-authoritative; never a KAH docs SOT |
 
@@ -51,6 +52,7 @@ This directory is the project archive for `kkachi-agent-helper` docs. It separat
 - Graph workflow sync KAH planning lives in `docs/sot/graph-workflow-sync-diagnostics-and-repair.md`; `grsync-001` implements diagnostics/reason-code hardening for KAS v0.1.2 consumption, and `grsync-002` implements approval-gated complete-candidate graph repair substrate while preserving the no-direct-YAML-fallback boundary.
 - Task-DAG workflow state-machine planning lives in `docs/sot/task-dag-state-machine.md`; `DAGSM-001` through `DAGSM-003` implement deterministic task-DAG validation, run-local workflow instance state, node FSM/order enforcement, ready-node calculation, multi-DAG catalog diagnostics, explicit catalog create mode, and final gate integration without KAH choosing agents, prompts, or workflow policy.
 - Token-economy / English-output KAH evidence-gate planning lives in `docs/sot/token-economy-evidence-gates.md`; `token-001` and `token-002` deterministic evidence validation are implemented, reviewed, and accepted for commit-readiness pending separate 주군 commit/install approval.
+- Multi-Agent Review evidence-gate planning lives in `docs/sot/multi-agent-review-evidence-gates.md`; `MAREV-001` is the docs/SOT record only, and actual helper artifact/gate/schema support belongs to `MAREV-002` or later.
 
 ## Stale/conflict markers
 
