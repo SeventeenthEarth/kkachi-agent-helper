@@ -1,6 +1,6 @@
 BINARY := kkachi-agent-helper
 BIN_DIR := bin
-VERSION ?= 0.0.0-dev
+VERSION ?= 0.1.11
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 PREFIX ?= $(HOME)/.local

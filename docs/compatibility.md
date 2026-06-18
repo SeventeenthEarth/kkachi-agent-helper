@@ -13,8 +13,8 @@ This matrix records the local-only compatibility contract for `kkachi-agent-help
 
 | Helper version | Supported project schema | Required `kkachi-agent-bridge` | Required `kkachi-hermes-skills` | Notes |
 |---|---|---|---|---|
-| `0.1.x` | `0.1` | Not checked by helper | Hermes native install | MVP helper release line. KAH project bootstrap is handled by `project init`; Hermes skill content is installed outside KAH through Hermes native tooling. |
-| `0.0.0-dev` | Development only | Not checked by helper | Hermes native install | Local development builds are for local bootstrap/testing only. Build with `make VERSION=0.1.0 build` or `make VERSION=0.1.0 release` for release validation. |
+| `0.1.x` | `0.1` | Not checked by helper | Hermes native install | MVP helper release line. KAH project bootstrap is handled by `project init`; Hermes skill content is installed outside KAH through Hermes native tooling. Build release binaries with an explicit `VERSION=0.1.x`; the v0.1.11 source default is `0.1.11`. |
+| `0.0.0-dev` | Development only | Not checked by helper | Hermes native install | Legacy local development builds are for local bootstrap/testing only when explicitly requested with `VERSION=0.0.0-dev`. |
 
 ## Compatibility rules
 
