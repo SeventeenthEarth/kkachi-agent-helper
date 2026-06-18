@@ -119,6 +119,15 @@ func TestGraphReadonlyBinaryFlow(t *testing.T) {
 	initOutput := runHelper(t, binary, repo, "graph", "init", "--from-template", "khs-default", "--json")
 	assertOutputContains(t, initOutput, `"template_id":"khs-default"`, "graph init")
 	assertOutputContains(t, initOutput, `"event_id":"evt-000002"`, "graph init")
+	initializedGraph := readFile(t, filepath.Join(repo, ".kkachi-workflow.yaml"))
+	assertOutputContains(t, initializedGraph, `id: "mar-review"`, "graph init")
+	assertOutputContains(t, initializedGraph, `from: "handle-feedback-1"`, "graph init")
+	assertOutputContains(t, initializedGraph, `to: "mar-review"`, "graph init")
+	assertOutputContains(t, initializedGraph, `from: "mar-review"`, "graph init")
+	assertOutputContains(t, initializedGraph, `to: "second-color-review"`, "graph init")
+	if strings.Contains(string(initializedGraph), `id: "octo-review"`) {
+		t.Fatalf("graph init output contains octo-review:\n%s", initializedGraph)
+	}
 
 	validateOutput := runHelper(t, binary, repo, "graph", "validate", "--json")
 	var validation struct {

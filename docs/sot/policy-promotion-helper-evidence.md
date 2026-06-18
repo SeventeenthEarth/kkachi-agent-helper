@@ -37,8 +37,8 @@ KAH follows the upstream approved shared-numbering strategy for this tightly cou
 
 | Task ID | Title | Status | Work guide | Notes |
 |---|---|---|---|---|
-| `POLPR-002` | Register POLPR helper SOT and roadmap companion | In Progress | Add this SOT, roadmap entry, docs index/map registration, and cross-link to the KAS `POLPR-001` SOT. | Docs/SOT planning only; no helper behavior claim. |
-| `POLPR-005` | Align default phase-plan and MAR naming support | Planned | Update KAH default phase-plan support/tests and related docs so active KAS defaults use `mar-review` instead of `octo-review`, while custom project workflows remain supportability-based. | KAH does not choose MAR providers or adjudicate findings. |
+| `POLPR-002` | Register POLPR helper SOT and roadmap companion | Completed | Add this SOT, roadmap entry, docs index/map registration, and cross-link to the KAS `POLPR-001` SOT. | Stale-status cleanup: existing SOT evidence satisfies docs/SOT registration acceptance; no helper behavior claim. |
+| `POLPR-005` | Align default phase-plan and MAR naming support | In Progress | Update KAH default phase-plan support/tests and related docs so active KAS defaults use `mar-review` instead of `octo-review`, while custom project workflows remain supportability-based. | Stage 1 implementation slice only; KAH does not choose MAR providers or adjudicate findings. |
 | `POLPR-007` | Add deterministic docs/test/review evidence support if needed | Planned | Add or document machine-checkable evidence fields for document impact maps, project-Gray coverage refs, test-layer labels, failed-test repair ownership, and final stale-status checks when KAS POLPR implementation needs helper validation. | Scope is evidence presence/shape only; KAS owns policy and reviewer meaning. |
 
 ## Impact map baseline

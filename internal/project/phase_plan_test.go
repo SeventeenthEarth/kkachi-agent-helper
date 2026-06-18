@@ -3,9 +3,32 @@ package project
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+var expectedDefaultPhaseIDs = []string{
+	"intake",
+	"sot",
+	"roadmap",
+	"task-classification",
+	"plan",
+	"vet",
+	"ask",
+	"implement",
+	"enhance-test",
+	"ai-slop-cleaner",
+	"optimize",
+	"docs",
+	"verify",
+	"review",
+	"request-feedback-1",
+	"handle-feedback-1",
+	"mar-review",
+	"second-color-review",
+	"final",
+}
 
 func TestInitShowAndSetPhasePlan(t *testing.T) {
 	repo := initializedRepo(t)
@@ -22,9 +45,12 @@ func TestInitShowAndSetPhasePlan(t *testing.T) {
 	if initialized.EventID != "evt-000003" || initialized.Plan.RunID != created.Metadata.RunID || len(initialized.Plan.Phases) == 0 {
 		t.Fatalf("initialized = %#v, want event and phases", initialized)
 	}
+	if got := phaseIDs(initialized.Plan.Phases); !reflect.DeepEqual(got, expectedDefaultPhaseIDs) {
+		t.Fatalf("phase ids = %#v, want %#v", got, expectedDefaultPhaseIDs)
+	}
 	path := filepath.Join(repo, ".kkachi", "runs", created.Metadata.RunID, "phase-plan.yaml")
-	if got := readText(t, path); !strings.Contains(got, `id: "ask"`) || !strings.Contains(got, `id: "handle-feedback-1"`) {
-		t.Fatalf("phase-plan.yaml = %q, want required phases", got)
+	if got := readText(t, path); !strings.Contains(got, `id: "mar-review"`) || strings.Contains(got, `id: "octo-review"`) {
+		t.Fatalf("phase-plan.yaml = %q, want mar-review default and no octo-review", got)
 	}
 
 	updated, err := SetPhasePlanPhase(root, PhasePlanSetOptions{RunID: created.Metadata.RunID, PhaseID: "ask", Status: PhaseStatusNotApplicable, Reason: "No actionable clarification needed.", Now: testRunNow(5)})
@@ -267,7 +293,7 @@ phases:
     status: "pending"
   - id: "handle-feedback-5"
     status: "pending"
-  - id: "octo-review"
+  - id: "mar-review"
     status: "pending"
   - id: "second-color-review"
     status: "pending"
@@ -554,6 +580,14 @@ func phaseRowByID(rows []PhaseRow, id string) (PhaseRow, bool) {
 		}
 	}
 	return PhaseRow{}, false
+}
+
+func phaseIDs(rows []PhaseRow) []string {
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.ID)
+	}
+	return ids
 }
 
 func phaseCheckPassed(checks []PhasePlanCheck, name string) bool {

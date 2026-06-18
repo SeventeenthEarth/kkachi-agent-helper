@@ -10,4 +10,5 @@ dist/
 .vscode/
 .codegraph/
 
+.kkachi-workflow.yaml
 .kkachi/

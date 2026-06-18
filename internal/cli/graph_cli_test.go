@@ -147,10 +147,13 @@ func TestGraphInitJSONAndHumanOutput(t *testing.T) {
 		t.Fatalf("initialized = %#v, want khs-default init result", initialized)
 	}
 	graph := readCLITestText(t, filepath.Join(repo, project.WorkflowGraphDefaultPath))
-	for _, want := range []string{`graph_id: "graph-kkachi-project-kkachi-test-`, `project: "kkachi-test"`, `source_template: "khs-default"`, `last_applied_event_id: "evt-000002"`, `id: "request-feedback-1"`} {
+	for _, want := range []string{`graph_id: "graph-kkachi-project-kkachi-test-`, `project: "kkachi-test"`, `source_template: "khs-default"`, `last_applied_event_id: "evt-000002"`, `id: "request-feedback-1"`, `id: "mar-review"`, `from: "handle-feedback-1"`, `to: "mar-review"`, `from: "mar-review"`, `to: "second-color-review"`} {
 		if !strings.Contains(graph, want) {
 			t.Fatalf("graph = %s, want %s", graph, want)
 		}
+	}
+	if strings.Contains(graph, `id: "octo-review"`) {
+		t.Fatalf("graph = %s, want no octo-review in khs-default", graph)
 	}
 
 	repo = tempGitRepo(t)

@@ -261,13 +261,21 @@ func TestInitWorkflowGraphFromKHSDefault(t *testing.T) {
 	if loaded.graph.GraphID != "graph-kkachi-project-kkachi-test-abcdef123456" || loaded.graph.Metadata.Project != "kkachi-test" || loaded.graph.Metadata.SourceTemplate != graphTemplateKHSDefault || loaded.graph.Metadata.LastAppliedEventID != result.EventID {
 		t.Fatalf("metadata = graph_id:%s metadata:%#v, want stamped project metadata", loaded.graph.GraphID, loaded.graph.Metadata)
 	}
-	if len(loaded.graph.Phases) != len(defaultPhaseIDs) || len(loaded.graph.Edges) != len(defaultPhaseIDs)-1 || len(loaded.graph.Gates) != 0 || len(loaded.graph.Approvals) != 0 {
+	if len(loaded.graph.Phases) != 19 || len(loaded.graph.Edges) != 18 || len(loaded.graph.Gates) != 0 || len(loaded.graph.Approvals) != 0 {
 		t.Fatalf("graph = phases:%d edges:%d gates:%d approvals:%d, want khs-default spine only", len(loaded.graph.Phases), len(loaded.graph.Edges), len(loaded.graph.Gates), len(loaded.graph.Approvals))
 	}
-	for i, id := range defaultPhaseIDs {
+	for i, id := range expectedDefaultPhaseIDs {
 		if loaded.graph.Phases[i].ID != id {
 			t.Fatalf("phase[%d] = %s, want %s", i, loaded.graph.Phases[i].ID, id)
 		}
+	}
+	for _, phase := range loaded.graph.Phases {
+		if phase.ID == "octo-review" {
+			t.Fatalf("phases = %#v, want no octo-review in khs-default", loaded.graph.Phases)
+		}
+	}
+	if loaded.graph.Edges[15].From != "handle-feedback-1" || loaded.graph.Edges[15].To != "mar-review" || loaded.graph.Edges[16].From != "mar-review" || loaded.graph.Edges[16].To != "second-color-review" {
+		t.Fatalf("edges[15:17] = %#v, want handle-feedback-1 -> mar-review -> second-color-review", loaded.graph.Edges[15:17])
 	}
 	lines := runEventLines(t, repo)
 	if !strings.Contains(lines[len(lines)-1], graphInitEventType) || !strings.Contains(lines[len(lines)-1], result.Checksum) {

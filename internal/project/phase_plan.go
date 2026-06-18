@@ -44,7 +44,7 @@ var (
 		"review",
 		"request-feedback-1",
 		"handle-feedback-1",
-		"octo-review",
+		"mar-review",
 		"second-color-review",
 		"final",
 	}

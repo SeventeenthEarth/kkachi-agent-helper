@@ -987,6 +987,10 @@ func TestGraphInitApplyAndReadonlyFlow(t *testing.T) {
 	requireContains(t, initializedValidation.stdout, `"status":"pass"`, "initialized graph validation")
 	initializedExplanation := requireCLI(t, r, "graph", "explain", "--json")
 	requireContains(t, initializedExplanation.stdout, `"id":"request-feedback-1"`, "initialized graph explanation")
+	requireContains(t, initializedExplanation.stdout, `"id":"mar-review"`, "initialized graph explanation")
+	requireContains(t, initializedExplanation.stdout, `"from":"handle-feedback-1","to":"mar-review"`, "initialized graph explanation")
+	requireContains(t, initializedExplanation.stdout, `"from":"mar-review","to":"second-color-review"`, "initialized graph explanation")
+	requireNotContains(t, initializedExplanation.stdout, `"id":"octo-review"`, "initialized graph explanation")
 
 	invalidExisting := repo(t, "graph-existing-invalid")
 	requireCLI(t, invalidExisting, "project", "init", "--json")
