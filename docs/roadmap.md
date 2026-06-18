@@ -27,6 +27,7 @@ Status values: `Planned`, `In Progress`, `Blocked`, `Completed`, `Deferred`.
 | 9 | `grsync` | KAH hardens workflow graph diagnostics and approval-gated repair substrate so KAS can safely manage graph workflow sync compatibility for KAH v0.1.9 / KAS v0.1.2. |
 | 10 | `DAGSM` | KAH supplies deterministic task-DAG validation, workflow instance state, node FSM/order enforcement, ready-node calculation, multi-DAG catalog diagnostics, final gates, effective capability evidence, and run-local ephemeral workflow support boundaries for KAS WFLOW-triggered workflows. |
 | 11 | `marev` | KAH records and, if later implemented, validates deterministic evidence for KAS Multi-Agent Review without choosing reviewers or adjudicating findings. |
+| 12 | `POLPR` | KAH aligns deterministic helper evidence, default phase-plan support, and docs/test surfaces needed by KAS POLPR while leaving workflow policy ownership in KAS. |
 
 ## Active roadmap
 
@@ -183,6 +184,21 @@ DAGSM deferrals unless separately approved: KAS selector implementation, KAS tas
 | marev-003 | Add compatibility/release diagnostics for MAR evidence support | Completed | Advertise capability/help/compatibility evidence for MAR gate support and preserve fail-closed absence semantics for older binaries. | Completed for v0.1.11 by release-note/compatibility docs and capability flags. Absence of MAR capability in older effective binaries remains fail-closed for KAS activation checks. |
 
 MAREV deferrals unless separately approved: provider execution, model selection, prompt generation, finding adjudication, automatic Red/Kanban routing, premium-review approval decisions, alternate-provider selection decisions, waiver approval decisions, provider retry policy decisions, KAB session control, auth/token/provider/gateway/model mutation, and warning-only MAR gate states.
+
+
+### EPIC: POLPR — Policy-promotion helper evidence alignment
+
+> Goal: support the KAS POLPR policy-promotion epic with deterministic KAH evidence, default phase-plan, docs, and tests while preserving the boundary that KAS owns workflow/review/docs-update/test policy and KAH owns only machine-checkable helper state and validation.
+>
+> Source of truth: `docs/sot/policy-promotion-helper-evidence.md`. Upstream KAS authority: `kkachi-hermes-skills/docs/sot/policy-promotion-governance-contract.md`. Candidate-source evidence: `/Users/draccoon/Workspace/Hermes/17thHermes/40_outputs/projects/kkachi/2026-06-14-kas-policy-promotion-candidates.md`.
+
+| Task ID | Title | Status | Work guide | Notes |
+|---|---|---|---|---|
+| POLPR-002 | Register POLPR helper SOT and roadmap companion | In Progress | Add KAH-side planning SOT, roadmap entry, docs index/map registration, and cross-link to the KAS `POLPR-001` SOT. | Docs/SOT planning only; no helper behavior, schema, command, gate, diagnostics, release, or runtime claim. |
+| POLPR-005 | Align default phase-plan and MAR naming support | Planned | Update KAH default phase-plan support/tests and related docs so active KAS defaults use `mar-review` instead of `octo-review`, while custom project workflows remain supportability-based. | KAH does not choose MAR providers, reviewers, or adjudication outcomes. |
+| POLPR-007 | Add deterministic docs/test/review evidence support if needed | Planned | Add or document machine-checkable evidence fields for document impact maps, project-Gray coverage refs, test-layer labels, failed-test repair ownership, and final stale-status checks when KAS POLPR implementation requires helper validation. | Evidence presence/shape only; KAS owns policy and reviewer meaning. |
+
+POLPR deferrals unless separately approved: provider execution, reviewer choice, MAR adjudication, model voting, automatic Red/Kanban routing, profile mutation, KAB session control, auth/token/provider/gateway/model mutation, warning-only MAR gate states, automatic graph apply, and KAH ownership of KAS policy.
 
 ### EPIC: token — KAS token-economy evidence gates
 

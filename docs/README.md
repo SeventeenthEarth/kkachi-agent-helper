@@ -6,7 +6,7 @@ Confirming role: Responsible approver / governance evidence record
 Status: docs index; workflow graph init/validation/explanation/diff/proposal/apply/export, graph compatibility reason-code diagnostics, approval-gated complete-candidate repair substrate, and phase-plan feedback-bound validation evidence present
 Authority level: reading guide for KAH docs; graph export records are implemented evidence and generated-artifact boundaries
 Scope: `kkachi-agent-helper/docs` only
-Related docs: `docs/specs.md`, `docs/roadmap.md`, `docs/compatibility.md`, `docs/sot/graph-workflow-sync-diagnostics-and-repair.md`, `docs/sot/task-dag-state-machine.md`, `docs/sot/token-economy-evidence-gates.md`, `docs/sot/multi-agent-review-evidence-gates.md`
+Related docs: `docs/specs.md`, `docs/roadmap.md`, `docs/compatibility.md`, `docs/sot/graph-workflow-sync-diagnostics-and-repair.md`, `docs/sot/task-dag-state-machine.md`, `docs/sot/token-economy-evidence-gates.md`, `docs/sot/multi-agent-review-evidence-gates.md`, `docs/sot/policy-promotion-helper-evidence.md`
 Evidence/source paths:
 - Governance evidence record in kanban task `t_2fb00394`
 
@@ -25,6 +25,7 @@ This directory is the project archive for `kkachi-agent-helper` docs. It separat
 | `docs/sot/task-dag-state-machine.md` | KAH-side planning SOT for task-DAG workflow state machine support | KAH deterministic helper layer with KAS WFLOW dependency | Planning authority for KAH DAGSM schema validation, workflow instance state, node FSM/order enforcement, ready-node calculation, diagnostics, and final gates; not implemented behavior by itself |
 | `docs/sot/token-economy-evidence-gates.md` | KAH-side planning SOT for future token-economy / English-output evidence gates | KAH deterministic helper layer with KAS workstream dependency | Planning authority for future KAH gate work; not implemented behavior by itself |
 | `docs/sot/multi-agent-review-evidence-gates.md` | KAH-side SOT for MAR evidence capture and deterministic gate/schema behavior | KAH deterministic helper layer with KAS MAR dependency | Source of truth for MAR artifact layout, deterministic validation targets, and final-gate posture; `MAREV-002` implements source-side helper artifact/gate/schema support while KAS remains policy owner |
+| `docs/sot/policy-promotion-helper-evidence.md` | KAH-side POLPR planning SOT | KAH deterministic helper layer with KAS POLPR dependency | Planning authority for KAH companion docs, default phase-plan support, evidence fields, diagnostics, and tests needed by KAS POLPR without moving workflow/review policy ownership into KAH |
 | `docs/release-notes-template.md` | Release note template | KAH release owner | Template only |
 | `docs/.omx/` if present | Tool/runtime/agent state | Tooling | Non-authoritative; never a KAH docs SOT |
 
@@ -53,6 +54,7 @@ This directory is the project archive for `kkachi-agent-helper` docs. It separat
 - Task-DAG workflow state-machine planning lives in `docs/sot/task-dag-state-machine.md`; `DAGSM-001` through `DAGSM-003` implement deterministic task-DAG validation, run-local workflow instance state, node FSM/order enforcement, ready-node calculation, multi-DAG catalog diagnostics, explicit catalog create mode, and final gate integration without KAH choosing agents, prompts, or workflow policy.
 - Token-economy / English-output KAH evidence-gate planning lives in `docs/sot/token-economy-evidence-gates.md`; `token-001` and `token-002` deterministic evidence validation are implemented, reviewed, and accepted for commit-readiness pending separate 주군 commit/install approval.
 - Multi-Agent Review evidence-gate behavior lives in `docs/sot/multi-agent-review-evidence-gates.md`; `MAREV-001` recorded the planning SOT and `MAREV-002` implements source-side canonical `multi-agent-review/status.json`, `multi-agent-review` gate, schema validation/export, and final-gate integration when MAR is required.
+- POLPR helper companion planning lives in `docs/sot/policy-promotion-helper-evidence.md`; `POLPR-002` is KAH docs/SOT registration only under the shared cross-repo numbering, and later KAH slices remain limited to deterministic evidence/default phase-plan/docs/test support for KAS-owned policy.
 
 ## Stale/conflict markers
 
