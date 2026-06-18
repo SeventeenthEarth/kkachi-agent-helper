@@ -364,6 +364,15 @@ func TestArtifactSetStatusRejectsSchemaOwnedBackendJSON(t *testing.T) {
 		t.Fatalf("write bridge snapshot: %v", err)
 	}
 
+	marPath := filepath.Join(runDir, "multi-agent-review", "status.json")
+	marContent := []byte(`{"schema_version":"mar-evidence.v1","run_id":"` + created.Metadata.RunID + `","task_id":"` + metadataTaskID(created.Metadata) + `","status":"PASS"}` + "\n")
+	if err := os.MkdirAll(filepath.Dir(marPath), 0o700); err != nil {
+		t.Fatalf("mkdir MAR status dir: %v", err)
+	}
+	if err := os.WriteFile(marPath, marContent, 0o600); err != nil {
+		t.Fatalf("write MAR status: %v", err)
+	}
+
 	beforeEvents := runEventLines(t, repo)
 	_, err = SetArtifactStatus(root, ArtifactMutateOptions{RunID: created.Metadata.RunID, Artifact: "selected-cli.json", Status: "complete", Now: testRunNow(5)})
 	assertProblemCode(t, err, "artifact_status_not_applicable")
@@ -381,6 +390,15 @@ func TestArtifactSetStatusRejectsSchemaOwnedBackendJSON(t *testing.T) {
 	}
 	if afterEvents := runEventLines(t, repo); len(afterEvents) != len(beforeEvents) {
 		t.Fatalf("events changed after bridge snapshot rejection: before=%d after=%d", len(beforeEvents), len(afterEvents))
+	}
+
+	_, err = SetArtifactStatus(root, ArtifactMutateOptions{RunID: created.Metadata.RunID, Artifact: "multi-agent-review/status.json", Status: "complete", Now: testRunNow(7)})
+	assertProblemCode(t, err, "artifact_status_not_applicable")
+	if got := readText(t, marPath); got != string(marContent) {
+		t.Fatalf("multi-agent-review/status.json after rejected set-status = %q, want unchanged", got)
+	}
+	if afterEvents := runEventLines(t, repo); len(afterEvents) != len(beforeEvents) {
+		t.Fatalf("events changed after MAR status rejection: before=%d after=%d", len(beforeEvents), len(afterEvents))
 	}
 }
 

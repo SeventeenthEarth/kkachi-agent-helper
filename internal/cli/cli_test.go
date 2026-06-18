@@ -111,7 +111,7 @@ func TestCapabilitiesJSONOutputIsProjectIndependent(t *testing.T) {
 		t.Fatalf("project schema version = %q, want %q", payload.ProjectSchemaVersion, project.SchemaVersion)
 	}
 	flags := payload.CompatibilityFlags
-	if !flags.ProjectInit || !flags.RunLifecycle || !flags.ArtifactInit || !flags.ArtifactList || !flags.ArtifactValidate || !flags.ArtifactMutation || !flags.Gates || !flags.BackendEvidenceRequirements || !flags.DiagnosticsExport || !flags.PhasePlan || !flags.ApprovalRecords || !flags.WorkflowGraphReadonly || !flags.WorkflowGraphInit || !flags.WorkflowGraphApply || !flags.WorkflowGraphExport || !flags.WorkflowGraphDiagnostics || !flags.WorkflowGraphNoDirectYAMLFallback || !flags.WorkflowGraphConfigurableFeedbackIntake || !flags.TaskDAGSchemaValidation || !flags.WorkflowInstanceState || !flags.WorkflowCatalogDiagnostics || !flags.WorkflowCatalogProposalApply || !flags.WorkflowFinalGateIntegration || !flags.WorkflowNodeContractRegistryEvidence || !flags.TokenEconomyEvidenceGate {
+	if !flags.ProjectInit || !flags.RunLifecycle || !flags.ArtifactInit || !flags.ArtifactList || !flags.ArtifactValidate || !flags.ArtifactMutation || !flags.Gates || !flags.BackendEvidenceRequirements || !flags.DiagnosticsExport || !flags.PhasePlan || !flags.ApprovalRecords || !flags.WorkflowGraphReadonly || !flags.WorkflowGraphInit || !flags.WorkflowGraphApply || !flags.WorkflowGraphExport || !flags.WorkflowGraphDiagnostics || !flags.WorkflowGraphNoDirectYAMLFallback || !flags.WorkflowGraphConfigurableFeedbackIntake || !flags.TaskDAGSchemaValidation || !flags.WorkflowInstanceState || !flags.WorkflowCatalogDiagnostics || !flags.WorkflowCatalogProposalApply || !flags.WorkflowFinalGateIntegration || !flags.WorkflowNodeContractRegistryEvidence || !flags.TokenEconomyEvidenceGate || !flags.TokenEconomyToken002EvidenceGate || !flags.MultiAgentReviewEvidenceGate || !flags.MultiAgentReviewEvidenceSchema {
 		t.Fatalf("compatibility flags = %#v, want implemented surfaces enabled", flags)
 	}
 	if flags.InstallCommand {
@@ -525,8 +525,11 @@ func TestProjectInitJSONOutput(t *testing.T) {
 	if payload.InitialEventID != "evt-000001" {
 		t.Fatalf("initial event id = %q, want evt-000001", payload.InitialEventID)
 	}
-	if len(payload.CreatedPaths) != 5 || len(payload.SchemaPaths) != 7 {
-		t.Fatalf("payload paths = %#v/%#v, want created and schema paths", payload.CreatedPaths, payload.SchemaPaths)
+	if len(payload.CreatedPaths) != 5 || len(payload.SchemaPaths) != len(project.CanonicalSchemaNames()) {
+		t.Fatalf("payload paths = %#v/%#v, want created and canonical schema paths", payload.CreatedPaths, payload.SchemaPaths)
+	}
+	if !slices.Contains(payload.SchemaPaths, ".kkachi/schemas/multi-agent-review-evidence.schema.json") {
+		t.Fatalf("schema paths = %#v, want multi-agent-review-evidence schema", payload.SchemaPaths)
 	}
 }
 
@@ -899,8 +902,8 @@ func TestSchemaExportCLIWritesAllIdempotentAndRespectsLocks(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &exported); err != nil {
 		t.Fatalf("schema export stdout is not JSON: %v\n%s", err, stdout.String())
 	}
-	if exported.EventID != "evt-000002" || len(exported.Schemas) != 7 || len(exported.Written) != 1 || exported.Written[0] != ".kkachi/schemas/config.schema.json" || len(exported.Unchanged) != 6 {
-		t.Fatalf("exported = %#v, want one refreshed config schema, six unchanged, and evt-000002", exported)
+	if exported.EventID != "evt-000002" || len(exported.Schemas) != len(project.CanonicalSchemaNames()) || len(exported.Written) != 1 || exported.Written[0] != ".kkachi/schemas/config.schema.json" || len(exported.Unchanged) != len(project.CanonicalSchemaNames())-1 {
+		t.Fatalf("exported = %#v, want one refreshed config schema, canonical unchanged schemas, and evt-000002", exported)
 	}
 	if !strings.Contains(readCLIText(t, filepath.Join(repo, ".kkachi", "events.jsonl")), `"type":"schema.exported"`) {
 		t.Fatalf("events missing schema.exported")
@@ -915,7 +918,7 @@ func TestSchemaExportCLIWritesAllIdempotentAndRespectsLocks(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &exported); err != nil {
 		t.Fatalf("idempotent export stdout is not JSON: %v\n%s", err, stdout.String())
 	}
-	if exported.EventID != "" || len(exported.Written) != 0 || len(exported.Unchanged) != 7 {
+	if exported.EventID != "" || len(exported.Written) != 0 || len(exported.Unchanged) != len(project.CanonicalSchemaNames()) {
 		t.Fatalf("idempotent exported = %#v, want no writes and no event", exported)
 	}
 
@@ -2505,7 +2508,7 @@ func TestDiagnosticsExportRedactsBundleAndWritesOutput(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &bundle); err != nil {
 		t.Fatalf("diagnostics stdout is not JSON: %v\n%s", err, stdout.String())
 	}
-	if bundle.RunID != created.RunID || len(bundle.SchemaVersions) != 7 || len(bundle.GateReports) == 0 || len(bundle.SelectedArtifacts) == 0 {
+	if bundle.RunID != created.RunID || len(bundle.SchemaVersions) != len(project.CanonicalSchemaNames()) || len(bundle.GateReports) == 0 || len(bundle.SelectedArtifacts) == 0 {
 		t.Fatalf("bundle = %#v, want run, schemas, gate reports, and selected artifacts", bundle)
 	}
 	if bundle.GraphCompatibility.SupportStatus != "supported" || bundle.GraphCompatibility.StateStatus != "missing" || !bundle.GraphCompatibility.NoDirectYAMLFallback {

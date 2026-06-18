@@ -100,6 +100,8 @@ type compatibilityFlagsOutput struct {
 	WorkflowNodeContractRegistryEvidence    bool `json:"workflow_node_contract_registry_evidence"`
 	TokenEconomyEvidenceGate                bool `json:"token_economy_evidence_gate"`
 	TokenEconomyToken002EvidenceGate        bool `json:"token_economy_token002_evidence_gate"`
+	MultiAgentReviewEvidenceGate            bool `json:"multi_agent_review_evidence_gate"`
+	MultiAgentReviewEvidenceSchema          bool `json:"multi_agent_review_evidence_schema"`
 	InstallCommand                          bool `json:"install_command"`
 }
 
@@ -2784,6 +2786,8 @@ func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
 			WorkflowNodeContractRegistryEvidence:    true,
 			TokenEconomyEvidenceGate:                true,
 			TokenEconomyToken002EvidenceGate:        true,
+			MultiAgentReviewEvidenceGate:            true,
+			MultiAgentReviewEvidenceSchema:          true,
 			InstallCommand:                          false,
 		},
 		DeprecatedSurfaces: []capabilitySurfaceOutput{},

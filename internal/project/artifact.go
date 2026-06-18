@@ -35,6 +35,7 @@ var canonicalArtifactPaths = []string{
 	"bridge-session-snapshot.json",
 	"bridge-events.md",
 	"token-economy-evidence.json",
+	"multi-agent-review/status.json",
 	"prompt.md",
 	"context-pack.md",
 	"cli-output.md",
@@ -328,6 +329,9 @@ func ArtifactManifest(metadata RunMetadata) []string {
 	if metadata.TaskID != nil && (strings.TrimSpace(*metadata.TaskID) == "token-001" || strings.TrimSpace(*metadata.TaskID) == "token-002") {
 		required = append(required, "token-economy-evidence.json")
 	}
+	if metadata.TaskID != nil && multiAgentReviewTaskID(*metadata.TaskID) {
+		required = append(required, "multi-agent-review/status.json")
+	}
 	if metadata.WorkPath == "A_development_execution" {
 		required = append(required, "sot-basis.md", "roadmap-update.md", "plan.md", "checklist.md")
 	} else if metadata.WorkPath == "B_discovery_shaping" {
@@ -545,7 +549,8 @@ func validArtifactStatus(status string) bool {
 func schemaOwnedJSONArtifact(relative string) bool {
 	return strings.HasSuffix(relative, "/selected-cli.json") ||
 		strings.HasSuffix(relative, "/bridge-session-snapshot.json") ||
-		strings.HasSuffix(relative, "/token-economy-evidence.json")
+		strings.HasSuffix(relative, "/token-economy-evidence.json") ||
+		strings.HasSuffix(relative, "/multi-agent-review/status.json")
 }
 
 func readArtifactForStatus(path SafePath) ([]byte, error) {

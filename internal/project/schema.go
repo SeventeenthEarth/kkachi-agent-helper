@@ -14,13 +14,14 @@ import (
 const (
 	SchemaVersion = "0.1"
 
-	SchemaConfig                = "config"
-	SchemaStatus                = "status"
-	SchemaEvent                 = "event"
-	SchemaRunMetadata           = "run-metadata"
-	SchemaSelectedCLI           = "selected-cli"
-	SchemaBridgeSessionSnapshot = "bridge-session-snapshot"
-	SchemaTokenEconomyEvidence  = "token-economy-evidence"
+	SchemaConfig                   = "config"
+	SchemaStatus                   = "status"
+	SchemaEvent                    = "event"
+	SchemaRunMetadata              = "run-metadata"
+	SchemaSelectedCLI              = "selected-cli"
+	SchemaBridgeSessionSnapshot    = "bridge-session-snapshot"
+	SchemaTokenEconomyEvidence     = "token-economy-evidence"
+	SchemaMultiAgentReviewEvidence = "multi-agent-review-evidence"
 
 	schemaExportedEventType = "schema.exported"
 
@@ -37,6 +38,7 @@ var canonicalSchemaNames = []string{
 	SchemaSelectedCLI,
 	SchemaBridgeSessionSnapshot,
 	SchemaTokenEconomyEvidence,
+	SchemaMultiAgentReviewEvidence,
 }
 
 type SchemaCheck struct {
@@ -326,6 +328,8 @@ func validateContentAgainstSchema(schemaName, relative string, content []byte) [
 		return validateBridgeSnapshotObject(relative, object)
 	case SchemaTokenEconomyEvidence:
 		return validateTokenEconomyEvidenceSchema(relative, content)
+	case SchemaMultiAgentReviewEvidence:
+		return validateMultiAgentReviewEvidenceSchema(relative, content)
 	default:
 		return []SchemaCheck{schemaPass("schema", relative, "schema is registered")}
 	}
@@ -727,6 +731,62 @@ func schemaObject(name string) map[string]any {
 			"final_report_evidence":      sectionProperty,
 			"kas_lifecycle_evidence":     map[string]any{"type": "object"},
 			"mutation_approval_evidence": map[string]any{"type": "object"},
+		}
+	case SchemaMultiAgentReviewEvidence:
+		object["description"] = "KAS MAR role-first review coverage and provider-attempt evidence artifact."
+		object["required"] = []string{"schema_version", "run_id", "task_id", "status", "reason", "coverage", "provider_attempts", "blue_disposition_ref"}
+		refProperty := map[string]any{
+			"type":     "object",
+			"required": []string{"path"},
+			"properties": map[string]any{
+				"path":     map[string]any{"type": "string", "minLength": 1},
+				"checksum": map[string]any{"type": "string", "pattern": "^sha256:[0-9a-fA-F]{64}$"},
+				"markers":  map[string]any{"type": "array", "items": map[string]any{"type": "string", "minLength": 1}},
+			},
+			"additionalProperties": true,
+		}
+		attemptProperty := map[string]any{
+			"type":     "object",
+			"required": []string{"schema_version", "run_id", "task_id", "attempt_id", "role_id", "provider_id", "provider_candidate", "terminal_status"},
+			"properties": map[string]any{
+				"schema_version":          map[string]any{"const": "mar.provider_attempt.v1"},
+				"run_id":                  map[string]any{"type": "string", "pattern": "^run-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$"},
+				"task_id":                 map[string]any{"type": "string", "minLength": 1},
+				"attempt_id":              map[string]any{"type": "string", "minLength": 1},
+				"role_id":                 map[string]any{"type": "string", "minLength": 1},
+				"provider_id":             map[string]any{"type": "string", "minLength": 1},
+				"provider_candidate":      map[string]any{"enum": multiAgentReviewProviderCandidates},
+				"terminal_status":         map[string]any{"enum": multiAgentReviewStatuses},
+				"parser_status":           map[string]any{"type": "string"},
+				"provider_failure_reason": map[string]any{"type": "string"},
+				"raw_output_path":         map[string]any{"type": "string"},
+				"parsed_finding_path":     map[string]any{"type": "string"},
+				"mutation_check":          map[string]any{"type": "object"},
+			},
+			"additionalProperties": true,
+		}
+		object["properties"] = map[string]any{
+			"schema_version": map[string]any{"const": multiAgentReviewSchemaVersion},
+			"run_id":         map[string]any{"type": "string", "pattern": "^run-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$"},
+			"task_id":        map[string]any{"type": "string", "minLength": 1},
+			"status":         map[string]any{"enum": multiAgentReviewStatuses},
+			"reason":         map[string]any{"type": "string", "minLength": 1},
+			"coverage": map[string]any{"type": "object", "required": []string{"required_roles", "covered_roles", "by_role"}, "properties": map[string]any{
+				"required_roles":            map[string]any{"type": "array", "items": map[string]any{"type": "string", "minLength": 1}},
+				"observed_roles":            map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				"covered_roles":             map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				"minimum_met":               map[string]any{"type": "boolean"},
+				"unresolved_required_roles": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				"by_role":                   map[string]any{"type": "object"},
+			}, "additionalProperties": true},
+			"provider_attempts":      map[string]any{"type": "array", "items": attemptProperty},
+			"blue_disposition_ref":   refProperty,
+			"red_adjudication_ref":   refProperty,
+			"alternate_approval_ref": refProperty,
+			"waiver_ref":             refProperty,
+			"premium_approval_ref":   refProperty,
+			"premium_review_used":    map[string]any{"type": "boolean"},
+			"blue_reason":            map[string]any{"type": "string"},
 		}
 	}
 	if _, ok := object["properties"]; !ok {

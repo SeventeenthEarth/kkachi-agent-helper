@@ -2,7 +2,7 @@
 
 Date: 2026-04-30
 Owner: KAH maintainers
-Status: source of truth for implemented helper behavior; graph init, validation/explanation, semantic diff, proposal records, approval-gated apply, non-authoritative graph export, compatibility diagnostics, configurable feedback-intake activation evidence, and graph-policy-driven phase-plan feedback validation are implemented; graph workflow sync diagnostics now also expose stable reason codes; DAGSM-001 task-DAG schema validation/explain, DAGSM-002 run-local workflow instance state, DAGSM-003 multi-DAG catalog diagnostics/final-gate integration, and DAGSM-006 explicit workflow catalog proposal/apply substrate are implemented source-side; token-001 and token-002 token-economy evidence gating are implemented
+Status: source of truth for implemented helper behavior; graph init, validation/explanation, semantic diff, proposal records, approval-gated apply, non-authoritative graph export, compatibility diagnostics, configurable feedback-intake activation evidence, and graph-policy-driven phase-plan feedback validation are implemented; graph workflow sync diagnostics now also expose stable reason codes; DAGSM-001 task-DAG schema validation/explain, DAGSM-002 run-local workflow instance state, DAGSM-003 multi-DAG catalog diagnostics/final-gate integration, and DAGSM-006 explicit workflow catalog proposal/apply substrate are implemented source-side; token-001/token-002 token-economy evidence gating and MAREV-002 multi-agent-review evidence gate/schema support are implemented
 Planning graph update date: 2026-05-24
 Planning graph evidence: governance evidence record in kanban task `t_2fb00394`
 
@@ -70,6 +70,7 @@ Default target-project layout:
     selected-cli.schema.json
     bridge-session-snapshot.schema.json
     token-economy-evidence.schema.json
+    multi-agent-review-evidence.schema.json
   capabilities/               # planned capability cache/evidence, not native inventory SOT
     current.json
     snapshots/<snapshot_id>.json
@@ -99,6 +100,8 @@ Default target-project layout:
       test-log.md
       verification.md
       token-economy-evidence.json
+      multi-agent-review/
+        status.json
       review.md
       docs-update.md
       sot-update.md
@@ -354,7 +357,8 @@ Initial required-artifact derivation:
 | `execution_mode=verification` | `review.md` |
 | `execution_mode=docs_only` | `sot-update.md`, `roadmap-update.md` |
 | `redteam` assigned | `redteam/plan-review.md`, `redteam/shaping-review.md`, `redteam/final-gate-review.md` |
-| `task_id=token-001` | `token-economy-evidence.json` |
+| `task_id=token-001` or `task_id=token-002` | `token-economy-evidence.json` |
+| `task_id` with `mar-` prefix | `multi-agent-review/status.json` |
 
 ## 8. Work paths and gates
 
@@ -464,7 +468,7 @@ kkachi-agent-helper run create --help
 
 `align-003` introduces a project-independent capabilities report for KHS activation checks. The command exits `0` on a healthy binary and does not require `.kkachi/` project state. JSON output is the compatibility contract; human output is informational only.
 
-Stable JSON output includes helper build info, `capabilities_schema_version`, embedded `project_schema_version`, supported command groups/subcommands, compatibility booleans, deprecated surfaces, and omitted surfaces. Current compatibility flags report project init/status/doctor, run lifecycle, artifact init/list/validate/mutation, gates, declared backend evidence requirements, diagnostics export, phase-plan support, approval records, read-only workflow graph support, workflow graph init support, workflow graph apply support, workflow graph export support, workflow graph diagnostics support, workflow graph no-direct-YAML-fallback support, workflow graph configurable feedback-intake support, task-DAG schema validation support, workflow instance state support, workflow catalog diagnostics support, workflow catalog proposal/apply support, workflow final-gate integration support, KAS node-contract registry evidence support, and token-economy evidence gate support as supported; the graph command inventory advertises implemented `init`, `validate`, `explain`, `diff`, `propose`, `apply`, and `export` subcommands, and the workflow command inventory advertises implemented `validate`, `explain`, `catalog`, `catalog propose`, `catalog apply`, `create`, `show`, `ready`, and `node` subcommands. The removed `install` command is reported as an omitted surface because Hermes/KHS skill installation belongs to Hermes native tooling. KHS `main` may use KAH `@latest` when the effective binary's report advertises all required surfaces; source-built checkout evidence must not be promoted into installed/effective runtime readiness when the installed binary lacks those surfaces. KHS release tags should publish tested/recommended KAH versions for reproducible historical runs.
+Stable JSON output includes helper build info, `capabilities_schema_version`, embedded `project_schema_version`, supported command groups/subcommands, compatibility booleans, deprecated surfaces, and omitted surfaces. Current compatibility flags report project init/status/doctor, run lifecycle, artifact init/list/validate/mutation, gates, declared backend evidence requirements, diagnostics export, phase-plan support, approval records, read-only workflow graph support, workflow graph init support, workflow graph apply support, workflow graph export support, workflow graph diagnostics support, workflow graph no-direct-YAML-fallback support, workflow graph configurable feedback-intake support, task-DAG schema validation support, workflow instance state support, workflow catalog diagnostics support, workflow catalog proposal/apply support, workflow final-gate integration support, KAS node-contract registry evidence support, token-economy evidence gate support, and MAR evidence gate/schema support as supported; the graph command inventory advertises implemented `init`, `validate`, `explain`, `diff`, `propose`, `apply`, and `export` subcommands, and the workflow command inventory advertises implemented `validate`, `explain`, `catalog`, `catalog propose`, `catalog apply`, `create`, `show`, `ready`, and `node` subcommands. The removed `install` command is reported as an omitted surface because Hermes/KHS skill installation belongs to Hermes native tooling. KHS `main` may use KAH `@latest` when the effective binary's report advertises all required surfaces; source-built checkout evidence must not be promoted into installed/effective runtime readiness when the installed binary lacks those surfaces. KHS release tags should publish tested/recommended KAH versions for reproducible historical runs.
 
 ### Help UX
 
@@ -513,6 +517,7 @@ Behavior in `gates-001` through `gates-005`:
 - `docs` is implemented by requiring completed `docs-update.md` that records either `Changed Docs` or `No Change Reason`.
 - `final` is implemented by requiring completed `final-report.md` and `pass` status in `metadata.GateState` for `intake`, `sot`, `roadmap`, `plan`, `implementation`, `review`, `verification`, and `docs`. The `backend` gate is also required when `backend_evidence` is `required` or the run manifest includes backend evidence artifacts.
 - `token-economy` is implemented for token-001 and token-002. Non-token runs emit `not_applicable`. Token-001 runs require canonical `token-economy-evidence.json` with `schema_version: "token001.v1"`, matching run id and `task_id: "token-001"`, non-empty `task_class`, and sections `scope`, `compact_output_policy`, `artifact_first_detail`, `agent_instruction_evidence`, `final_report_evidence`, `kas_lifecycle_evidence`, and `mutation_approval_evidence`. Section statuses are limited to `pass` or `not_applicable`; every `not_applicable` section requires a non-empty reason. Token-002 runs require `schema_version: "token002.v1"`, matching run id and `task_id: "token-002"`, non-empty `task_class`, and sections `scope`, `verification_profile_evidence`, `phase_packet_evidence`, `review_bundle_evidence`, `watcher_evidence`, `change_verification_matrix_evidence`, and `mutation_approval_evidence`. Token-002 validation checks repository-confined paths, `sha256:<64hex>` checksums, selected gate/runner result records, bounded failure excerpts for failed runner results, token008 phase packet/run summary records, token009 review bundle/watcher terminal evidence, token010 change-verification matrix records, required KAS/KAH boundary notes, and required reasons for `not_applicable` evidence. The gate rejects unsupported schemas, token-002-only fields in token-001 evidence, unsafe paths, malformed JSON, missing required fields, checksum mismatch, missing broad-mutation approval refs, fake runner fields for `not_applicable` gates, missing boundary notes, or unsupported result/applicability/change-class vocabulary. It emits only `pass`, `fail`, or `not_applicable`, and failing outcomes exit `3`.
+- `multi-agent-review` is implemented for `task_id` values with the `mar-` prefix or run manifests that explicitly require `multi-agent-review/status.json`; otherwise it emits `not_applicable`. Required MAR runs validate canonical `multi-agent-review/status.json` with `schema_version: "mar-evidence.v1"`, matching run id/task id, status vocabulary `PASS|PASS_WITH_FINDINGS|REQUEST_CHANGES|BLOCKED|DEGRADED|FAILED`, passable top-level status limited to `PASS` or `PASS_WITH_FINDINGS`, required role coverage records, provider attempt records with candidate/status vocabulary and non-clean failure reason evidence, successful-attempt mutation guard fields, repository-confined raw/parsed/disposition refs, optional `sha256:<64hex>` checksums and marker checks, Blue disposition refs, Red adjudication refs when `coverage.red_trigger_summary.red_adjudication_required=true`, alternate approval refs when secondary/alternate provider evidence is counted, waiver refs when role coverage is accepted by explicit waiver, and premium approval refs when premium review is used or a premium attempt is present. KAH does not choose review roles/providers/models, execute reviewers, adjudicate findings, approve waivers, or downgrade failed role coverage to warning-only pass.
 - `gate final <run_id>` is implemented with the same lock, event, and status-update contract as `gate check`. It exits `0` on pass and `3` on fail.
 - Unknown gate names are usage errors.
 - Passing checks append `gate.passed`; failing checks append `gate.failed`; blocked checks append `gate.checked`.
@@ -548,7 +553,7 @@ Behavior in `gates-001` through `gates-005`:
 }
 ```
 
-The schema selector accepts canonical embedded names (`config`, `status`, `event`, `run-metadata`, `selected-cli`, `bridge-session-snapshot`, `token-economy-evidence`) or canonical project-local schema paths under `.kkachi/schemas/`. Project-local schema paths are identity-checked, but validation remains embedded-registry-backed so a relaxed local schema cannot make invalid helper state pass.
+The schema selector accepts canonical embedded names (`config`, `status`, `event`, `run-metadata`, `selected-cli`, `bridge-session-snapshot`, `token-economy-evidence`, `multi-agent-review-evidence`) or canonical project-local schema paths under `.kkachi/schemas/`. Project-local schema paths are identity-checked, but validation remains embedded-registry-backed so a relaxed local schema cannot make invalid helper state pass.
 
 `schema export [--schema <schema>|--all] [--dry-run]` JSON output has the following stable shape:
 

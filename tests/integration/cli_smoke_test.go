@@ -672,8 +672,8 @@ func TestProjectInitCreatesStateAndRefusesOverwrite(t *testing.T) {
 	if payload.ProjectID == "" || payload.ProjectName == "" || payload.InitialEventID != "evt-000001" {
 		t.Fatalf("payload = %#v, want project identity and initial event", payload)
 	}
-	if len(payload.CreatedPaths) != 5 || len(payload.SchemaPaths) != 7 {
-		t.Fatalf("paths = %#v/%#v, want state and schema paths", payload.CreatedPaths, payload.SchemaPaths)
+	if len(payload.CreatedPaths) != 5 || len(payload.SchemaPaths) != 8 || !strings.Contains(strings.Join(payload.SchemaPaths, ","), ".kkachi/schemas/multi-agent-review-evidence.schema.json") {
+		t.Fatalf("paths = %#v/%#v, want state and canonical schema paths including MAR evidence", payload.CreatedPaths, payload.SchemaPaths)
 	}
 
 	statusCmd := exec.Command(binary, "project", "status", "--json")

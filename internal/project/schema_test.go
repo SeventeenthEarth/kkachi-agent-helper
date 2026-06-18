@@ -77,15 +77,15 @@ func TestSchemaValidateInitializedProjectFiles(t *testing.T) {
 			}
 		})
 	}
-	if len(result.SchemaPaths) != 7 || !containsString(result.SchemaPaths, ".kkachi/schemas/config.schema.json") || !containsString(result.SchemaPaths, ".kkachi/schemas/bridge-session-snapshot.schema.json") || !containsString(result.SchemaPaths, ".kkachi/schemas/token-economy-evidence.schema.json") {
-		t.Fatalf("schema paths = %#v, want seven canonical schema paths including config, bridge-session-snapshot, and token-economy-evidence", result.SchemaPaths)
+	if len(result.SchemaPaths) != len(canonicalSchemaNames) || !containsString(result.SchemaPaths, ".kkachi/schemas/config.schema.json") || !containsString(result.SchemaPaths, ".kkachi/schemas/bridge-session-snapshot.schema.json") || !containsString(result.SchemaPaths, ".kkachi/schemas/token-economy-evidence.schema.json") || !containsString(result.SchemaPaths, ".kkachi/schemas/multi-agent-review-evidence.schema.json") {
+		t.Fatalf("schema paths = %#v, want canonical schema paths including config, bridge-session-snapshot, token-economy-evidence, and multi-agent-review-evidence", result.SchemaPaths)
 	}
 }
 
 func TestSchemaRegistryContracts(t *testing.T) {
 	names := CanonicalSchemaNames()
-	if len(names) != 7 {
-		t.Fatalf("CanonicalSchemaNames() = %#v, want seven schemas", names)
+	if len(names) != 8 {
+		t.Fatalf("CanonicalSchemaNames() = %#v, want eight schemas", names)
 	}
 	names[0] = "mutated"
 	if CanonicalSchemaNames()[0] == "mutated" {
@@ -108,7 +108,7 @@ func TestSchemaRegistryContracts(t *testing.T) {
 				t.Fatalf("type = %#v, want object", object["type"])
 			}
 			requiredVersionField := "version"
-			if name == SchemaTokenEconomyEvidence {
+			if name == SchemaTokenEconomyEvidence || name == SchemaMultiAgentReviewEvidence {
 				requiredVersionField = "schema_version"
 			}
 			if !schemaRequiresField(object, requiredVersionField) {
@@ -234,7 +234,7 @@ func TestSchemaExportAllIdempotentAndConflictFailures(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExportSchemas(all unchanged) error = %v", err)
 	}
-	if len(unchanged.Schemas) != 7 || len(unchanged.Unchanged) != 7 || len(unchanged.Written) != 0 || unchanged.EventID != "" {
+	if len(unchanged.Schemas) != len(canonicalSchemaNames) || len(unchanged.Unchanged) != len(canonicalSchemaNames) || len(unchanged.Written) != 0 || unchanged.EventID != "" {
 		t.Fatalf("unchanged = %#v, want all schemas unchanged without event", unchanged)
 	}
 

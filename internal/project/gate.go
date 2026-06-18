@@ -8,17 +8,18 @@ import (
 )
 
 const (
-	GateIntake         = "intake"
-	GateSOT            = "sot"
-	GateRoadmap        = "roadmap"
-	GatePlan           = "plan"
-	GateBackend        = "backend"
-	GateImplementation = "implementation"
-	GateReview         = "review"
-	GateVerification   = "verification"
-	GateDocs           = "docs"
-	GateTokenEconomy   = "token-economy"
-	GateFinal          = "final"
+	GateIntake           = "intake"
+	GateSOT              = "sot"
+	GateRoadmap          = "roadmap"
+	GatePlan             = "plan"
+	GateBackend          = "backend"
+	GateImplementation   = "implementation"
+	GateReview           = "review"
+	GateVerification     = "verification"
+	GateDocs             = "docs"
+	GateTokenEconomy     = "token-economy"
+	GateMultiAgentReview = "multi-agent-review"
+	GateFinal            = "final"
 
 	GateStatusPass          = "pass"
 	GateStatusFail          = "fail"
@@ -36,7 +37,8 @@ var gateDefinitions = []GateDefinition{
 	{Name: GateReview, Implemented: true, Description: "review and red-team evidence artifacts"},
 	{Name: GateVerification, Implemented: true, Description: "test-log and verification verdict artifacts"},
 	{Name: GateDocs, Implemented: true, Description: "docs-update decision artifacts"},
-	{Name: GateTokenEconomy, Implemented: true, Description: "token-001 token-economy and English-output evidence contract"},
+	{Name: GateTokenEconomy, Implemented: true, Description: "token-001/token-002 token-economy and English-output evidence contract"},
+	{Name: GateMultiAgentReview, Implemented: true, Description: "KAS MAR role-first review evidence contract"},
 	{Name: GateFinal, Implemented: true, Description: "all required gates pass and final-report.md exists"},
 }
 
@@ -174,6 +176,8 @@ func checkGateResult(root Root, metadata RunMetadata, metadataRelative string, d
 		return checkDocsGate(root, metadata)
 	case GateTokenEconomy:
 		return checkTokenEconomyGate(root, metadata)
+	case GateMultiAgentReview:
+		return checkMultiAgentReviewGate(root, metadata)
 	case GateFinal:
 		return checkFinalGate(root, metadata, metadataRelative)
 	}
