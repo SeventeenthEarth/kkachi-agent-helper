@@ -372,6 +372,11 @@ func TestArtifactSetStatusRejectsSchemaOwnedBackendJSON(t *testing.T) {
 	if err := os.WriteFile(marPath, marContent, 0o600); err != nil {
 		t.Fatalf("write MAR status: %v", err)
 	}
+	policyPromotionPath := filepath.Join(runDir, policyPromotionArtifact)
+	policyPromotionContent := []byte(`{"schema_version":"` + policyPromotionSchemaVersion + `","run_id":"` + created.Metadata.RunID + `","task_id":"` + policyPromotionTaskID + `","task_class":"policy-promotion-helper-evidence"}` + "\n")
+	if err := os.WriteFile(policyPromotionPath, policyPromotionContent, 0o600); err != nil {
+		t.Fatalf("write policy-promotion evidence: %v", err)
+	}
 
 	beforeEvents := runEventLines(t, repo)
 	_, err = SetArtifactStatus(root, ArtifactMutateOptions{RunID: created.Metadata.RunID, Artifact: "selected-cli.json", Status: "complete", Now: testRunNow(5)})
@@ -399,6 +404,15 @@ func TestArtifactSetStatusRejectsSchemaOwnedBackendJSON(t *testing.T) {
 	}
 	if afterEvents := runEventLines(t, repo); len(afterEvents) != len(beforeEvents) {
 		t.Fatalf("events changed after MAR status rejection: before=%d after=%d", len(beforeEvents), len(afterEvents))
+	}
+
+	_, err = SetArtifactStatus(root, ArtifactMutateOptions{RunID: created.Metadata.RunID, Artifact: policyPromotionArtifact, Status: "complete", Now: testRunNow(8)})
+	assertProblemCode(t, err, "artifact_status_not_applicable")
+	if got := readText(t, policyPromotionPath); got != string(policyPromotionContent) {
+		t.Fatalf("policy-promotion-evidence.json after rejected set-status = %q, want unchanged", got)
+	}
+	if afterEvents := runEventLines(t, repo); len(afterEvents) != len(beforeEvents) {
+		t.Fatalf("events changed after policy-promotion evidence rejection: before=%d after=%d", len(beforeEvents), len(afterEvents))
 	}
 }
 

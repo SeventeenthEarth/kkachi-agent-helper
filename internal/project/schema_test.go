@@ -77,15 +77,15 @@ func TestSchemaValidateInitializedProjectFiles(t *testing.T) {
 			}
 		})
 	}
-	if len(result.SchemaPaths) != len(canonicalSchemaNames) || !containsString(result.SchemaPaths, ".kkachi/schemas/config.schema.json") || !containsString(result.SchemaPaths, ".kkachi/schemas/bridge-session-snapshot.schema.json") || !containsString(result.SchemaPaths, ".kkachi/schemas/token-economy-evidence.schema.json") || !containsString(result.SchemaPaths, ".kkachi/schemas/multi-agent-review-evidence.schema.json") {
-		t.Fatalf("schema paths = %#v, want canonical schema paths including config, bridge-session-snapshot, token-economy-evidence, and multi-agent-review-evidence", result.SchemaPaths)
+	if len(result.SchemaPaths) != len(canonicalSchemaNames) || !containsString(result.SchemaPaths, ".kkachi/schemas/config.schema.json") || !containsString(result.SchemaPaths, ".kkachi/schemas/bridge-session-snapshot.schema.json") || !containsString(result.SchemaPaths, ".kkachi/schemas/token-economy-evidence.schema.json") || !containsString(result.SchemaPaths, ".kkachi/schemas/multi-agent-review-evidence.schema.json") || !containsString(result.SchemaPaths, ".kkachi/schemas/policy-promotion-evidence.schema.json") {
+		t.Fatalf("schema paths = %#v, want canonical schema paths including config, bridge-session-snapshot, token-economy-evidence, multi-agent-review-evidence, and policy-promotion-evidence", result.SchemaPaths)
 	}
 }
 
 func TestSchemaRegistryContracts(t *testing.T) {
 	names := CanonicalSchemaNames()
-	if len(names) != 8 {
-		t.Fatalf("CanonicalSchemaNames() = %#v, want eight schemas", names)
+	if len(names) != 9 {
+		t.Fatalf("CanonicalSchemaNames() = %#v, want nine schemas", names)
 	}
 	names[0] = "mutated"
 	if CanonicalSchemaNames()[0] == "mutated" {
@@ -108,7 +108,7 @@ func TestSchemaRegistryContracts(t *testing.T) {
 				t.Fatalf("type = %#v, want object", object["type"])
 			}
 			requiredVersionField := "version"
-			if name == SchemaTokenEconomyEvidence || name == SchemaMultiAgentReviewEvidence {
+			if name == SchemaTokenEconomyEvidence || name == SchemaMultiAgentReviewEvidence || name == SchemaPolicyPromotionEvidence {
 				requiredVersionField = "schema_version"
 			}
 			if !schemaRequiresField(object, requiredVersionField) {
@@ -122,6 +122,24 @@ func TestSchemaRegistryContracts(t *testing.T) {
 				t.Fatalf("additionalProperties = %#v, want true", object["additionalProperties"])
 			}
 		})
+	}
+}
+
+func TestPolicyPromotionSchemaObjectDeclaresRequiredSurface(t *testing.T) {
+	object := schemaObject(SchemaPolicyPromotionEvidence)
+	for _, field := range policyPromotionRequiredFields {
+		if !schemaRequiresField(object, field) {
+			t.Fatalf("policy promotion schema required = %#v, missing %s", object["required"], field)
+		}
+	}
+	properties, ok := object["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties = %#v, want object", object["properties"])
+	}
+	for _, field := range []string{"schema_version", "task_id", "project_gray_coverage", "test_layer_evidence", "boundary_evidence", "mutation_approval_evidence"} {
+		if _, ok := properties[field]; !ok {
+			t.Fatalf("policy promotion schema properties missing %s: %#v", field, properties)
+		}
 	}
 }
 

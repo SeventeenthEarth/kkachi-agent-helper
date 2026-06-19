@@ -19,6 +19,7 @@ const (
 	GateDocs             = "docs"
 	GateTokenEconomy     = "token-economy"
 	GateMultiAgentReview = "multi-agent-review"
+	GatePolicyPromotion  = "policy-promotion"
 	GateFinal            = "final"
 
 	GateStatusPass          = "pass"
@@ -39,6 +40,7 @@ var gateDefinitions = []GateDefinition{
 	{Name: GateDocs, Implemented: true, Description: "docs-update decision artifacts"},
 	{Name: GateTokenEconomy, Implemented: true, Description: "token-001/token-002 token-economy and English-output evidence contract"},
 	{Name: GateMultiAgentReview, Implemented: true, Description: "KAS MAR role-first review evidence contract"},
+	{Name: GatePolicyPromotion, Implemented: true, Description: "POLPR-007 policy-promotion deterministic evidence shape contract"},
 	{Name: GateFinal, Implemented: true, Description: "all required gates pass and final-report.md exists"},
 }
 
@@ -178,6 +180,8 @@ func checkGateResult(root Root, metadata RunMetadata, metadataRelative string, d
 		return checkTokenEconomyGate(root, metadata)
 	case GateMultiAgentReview:
 		return checkMultiAgentReviewGate(root, metadata)
+	case GatePolicyPromotion:
+		return checkPolicyPromotionGate(root, metadata)
 	case GateFinal:
 		return checkFinalGate(root, metadata, metadataRelative)
 	}

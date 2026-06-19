@@ -3,7 +3,7 @@
 Date: 2026-06-18
 Owner: KAH deterministic helper layer
 Confirming role: Responsible approver / KAS Blue command with Red, Orange, and project-Gray review evidence
-Status: planning SOT for KAH companion work; not implemented helper behavior by itself
+Status: accepted SOT for KAH companion work; POLPR-007 source changes completed after review and commit gates
 Authority level: KAH-side planning authority for shared POLPR companion tasks
 Scope: KAH roadmap/docs registration, helper default phase-plan support, deterministic evidence/gate fields, diagnostics, and tests required to support KAS POLPR without moving policy ownership into KAH
 Source evidence: `/Users/draccoon/Workspace/Hermes/17thHermes/40_outputs/projects/kkachi/2026-06-14-kas-policy-promotion-candidates.md`
@@ -38,8 +38,8 @@ KAH follows the upstream approved shared-numbering strategy for this tightly cou
 | Task ID | Title | Status | Work guide | Notes |
 |---|---|---|---|---|
 | `POLPR-002` | Register POLPR helper SOT and roadmap companion | Completed | Add this SOT, roadmap entry, docs index/map registration, and cross-link to the KAS `POLPR-001` SOT. | Stale-status cleanup: existing SOT evidence satisfies docs/SOT registration acceptance; no helper behavior claim. |
-| `POLPR-005` | Align default phase-plan and MAR naming support | In Progress | Update KAH default phase-plan support/tests and related docs so active KAS defaults use `mar-review` instead of `octo-review`, while custom project workflows remain supportability-based. | Stage 1 implementation slice only; KAH does not choose MAR providers or adjudicate findings. |
-| `POLPR-007` | Add deterministic docs/test/review evidence support if needed | Planned | Add or document machine-checkable evidence fields for document impact maps, project-Gray coverage refs, test-layer labels, failed-test repair ownership, and final stale-status checks when KAS POLPR implementation needs helper validation. | Scope is evidence presence/shape only; KAS owns policy and reviewer meaning. |
+| `POLPR-005` | Align default phase-plan and MAR naming support | Completed | Update KAH default phase-plan support/tests and related docs so active KAS defaults use `mar-review` instead of `octo-review`, while custom project workflows remain supportability-based. | Completed as default MAR phase naming support. KAH does not choose MAR providers or adjudicate findings. |
+| `POLPR-007` | Add deterministic docs/test/review evidence support | Completed | Add machine-checkable evidence fields for document impact maps, project-Gray coverage refs, test-layer labels, failed-test repair ownership, and final stale-status checks. | Completed as the `policy-promotion` gate, canonical `policy-promotion-evidence.json`, `policy-promotion-evidence` schema (`polpr007.v1`), and capability flags. KAH checks evidence shape only; KAS owns policy and reviewer meaning. |
 
 ## Impact map baseline
 
@@ -59,12 +59,21 @@ KAH POLPR work must inspect at least:
 - Cross-links to the KAS POLPR SOT and source candidate note are present.
 - Verification includes docs readback, docs-map YAML parse, `git diff --check`, and repository test command or explicit blocker/degraded reason.
 
+## Acceptance criteria for POLPR-007
+
+- `artifact init` includes canonical `policy-promotion-evidence.json` and `project init` / schema export include `policy-promotion-evidence.schema.json`.
+- `gate check <run_id> policy-promotion` is built in and applies only to `task_id=POLPR-007`; other task ids return `not_applicable` without requiring a policy artifact.
+- The `polpr007.v1` evidence artifact records deterministic fields for `document_impact_map`, `project_gray_coverage`, `test_layer_evidence`, `failed_test_repair_ownership`, `final_stale_status_check`, `boundary_evidence`, and `mutation_approval_evidence`.
+- KAH validates only evidence presence/shape, repository-confined refs, checksums/markers when supplied, required labels/surfaces, KAS ownership boundary, project-Gray role-resolution evidence, and required `not_applicable` reasons. KAH must not judge policy quality or review sufficiency.
+- Capability output advertises `policy_promotion_evidence_gate=true` and `policy_promotion_evidence_schema=true` before KAS relies on the surface.
+- Tests cover pass, fail-closed malformed/missing/unsafe/boundary cases, non-POLPR not-applicable behavior, schema validation, and canonical schema/project bootstrap updates.
+
 ## Deferrals and non-goals
 
-- No KAH behavior, command, schema, gate, diagnostics, release, install, or runtime state change is completed by `POLPR-002`.
+- No KAH behavior, command, schema, gate, diagnostics, release, install, or runtime state change is completed by `POLPR-002`; POLPR-007 adds only deterministic evidence gate/schema support, not KAS policy authority.
 - No provider execution, reviewer choice, MAR adjudication, model voting, automatic Red/Kanban routing, profile mutation, KAB session control, auth/token/provider/gateway/model mutation, warning-only MAR gate, or automatic graph apply is authorized.
 - No KAH policy ownership over KAS docs-update, agent-instruction lifecycle, test taxonomy, review governance, or default workflow selection is introduced.
 
 ## Next action
 
-After `POLPR-002` docs/SOT registration is accepted, implement companion changes only when a KAS POLPR slice requires deterministic helper support and the KAS plan/impact map names the exact KAH surface to update.
+KAS may now use the helper evidence surface for `POLPR-008` mirror/stale-scan/closeout work.

@@ -22,6 +22,7 @@ const (
 	SchemaBridgeSessionSnapshot    = "bridge-session-snapshot"
 	SchemaTokenEconomyEvidence     = "token-economy-evidence"
 	SchemaMultiAgentReviewEvidence = "multi-agent-review-evidence"
+	SchemaPolicyPromotionEvidence  = "policy-promotion-evidence"
 
 	schemaExportedEventType = "schema.exported"
 
@@ -39,6 +40,7 @@ var canonicalSchemaNames = []string{
 	SchemaBridgeSessionSnapshot,
 	SchemaTokenEconomyEvidence,
 	SchemaMultiAgentReviewEvidence,
+	SchemaPolicyPromotionEvidence,
 }
 
 type SchemaCheck struct {
@@ -330,6 +332,8 @@ func validateContentAgainstSchema(schemaName, relative string, content []byte) [
 		return validateTokenEconomyEvidenceSchema(relative, content)
 	case SchemaMultiAgentReviewEvidence:
 		return validateMultiAgentReviewEvidenceSchema(relative, content)
+	case SchemaPolicyPromotionEvidence:
+		return validatePolicyPromotionEvidenceSchema(relative, content)
 	default:
 		return []SchemaCheck{schemaPass("schema", relative, "schema is registered")}
 	}
@@ -787,6 +791,26 @@ func schemaObject(name string) map[string]any {
 			"premium_approval_ref":   refProperty,
 			"premium_review_used":    map[string]any{"type": "boolean"},
 			"blue_reason":            map[string]any{"type": "string"},
+		}
+	case SchemaPolicyPromotionEvidence:
+		object["description"] = "POLPR-007 policy-promotion helper evidence artifact; KAH validates deterministic evidence presence and shape only."
+		object["required"] = policyPromotionRequiredFields
+		statusProperty := map[string]any{"enum": []string{GateStatusPass, GateStatusFail, GateStatusNotApplicable}}
+		refProperty := map[string]any{"type": "object", "required": []string{"path"}, "properties": map[string]any{"path": map[string]any{"type": "string", "minLength": 1}, "checksum": map[string]any{"type": "string", "pattern": "^sha256:[0-9a-fA-F]{64}$"}, "markers": map[string]any{"type": "array", "items": map[string]any{"type": "string", "minLength": 1}}}, "additionalProperties": true}
+		sectionProperty := map[string]any{"type": "object", "required": []string{"status"}, "properties": map[string]any{"status": statusProperty, "reason": map[string]any{"type": "string"}, "evidence_refs": map[string]any{"type": "array", "items": refProperty}, "detail_ref": refProperty}, "additionalProperties": true}
+		object["properties"] = map[string]any{
+			"schema_version":               map[string]any{"const": policyPromotionSchemaVersion},
+			"run_id":                       map[string]any{"type": "string", "pattern": "^run-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$"},
+			"task_id":                      map[string]any{"const": policyPromotionTaskID},
+			"task_class":                   map[string]any{"type": "string", "minLength": 1},
+			"scope":                        sectionProperty,
+			"document_impact_map":          sectionProperty,
+			"project_gray_coverage":        sectionProperty,
+			"test_layer_evidence":          sectionProperty,
+			"failed_test_repair_ownership": sectionProperty,
+			"final_stale_status_check":     sectionProperty,
+			"boundary_evidence":            sectionProperty,
+			"mutation_approval_evidence":   sectionProperty,
 		}
 	}
 	if _, ok := object["properties"]; !ok {

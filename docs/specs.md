@@ -71,6 +71,7 @@ Default target-project layout:
     bridge-session-snapshot.schema.json
     token-economy-evidence.schema.json
     multi-agent-review-evidence.schema.json
+    policy-promotion-evidence.schema.json
   capabilities/               # planned capability cache/evidence, not native inventory SOT
     current.json
     snapshots/<snapshot_id>.json
@@ -102,6 +103,7 @@ Default target-project layout:
       token-economy-evidence.json
       multi-agent-review/
         status.json
+      policy-promotion-evidence.json
       review.md
       docs-update.md
       sot-update.md
@@ -152,6 +154,8 @@ Status: `graph-011` external feedback intake migration, diagnostics, and capabil
 Graph source and evidence precedence is explicit. Applied `.kkachi-workflow.yaml` state whose checksum/version matches KAH graph audit evidence is the effective graph authority, followed by graph init/proposal/apply audit records, then run-local `phase-plan.yaml` for one run's execution state, and `.kkachi/config.yaml` for helper config only. KHS defaults and explicit candidate graph files are init/proposal/diff inputs only; inspection commands do not make a candidate file authoritative. Generated Mermaid/PlantUML diagrams, stale `.kkachi/` runtime state, KHS defaults, Kkachi v2 `.kkachi/config/workflows/`, and `.kkachi/config.yaml` are never fallback graph authority.
 
 KAH fails closed when graph-managed workflow support is required but `.kkachi-workflow.yaml` is missing, invalid, ambiguous, duplicated, or conflicts with KHS phase policy or run-local `phase-plan.yaml`; when direct manual edits lack validation/proposal/apply/audit evidence; when candidate graph changes affect gates, approvals, review policy, or dependencies without approval/audit evidence; or when KHS asks KAH to use imperative workflow-policy commands.
+
+The built-in `policy-promotion` gate validates POLPR-007 helper evidence for `task_id=POLPR-007` using canonical `.kkachi/runs/<run_id>/policy-promotion-evidence.json` and embedded/exported `policy-promotion-evidence` schema version `polpr007.v1`. KAH checks deterministic presence and shape only: document impact map refs, project-Gray coverage refs, test-layer labels, failed-test repair ownership fields, final stale-status surfaces, KAS ownership boundary evidence, mutation approval evidence, repository-confined refs, checksums, markers, and required `not_applicable` reasons. KAH does not judge policy quality or review sufficiency.
 
 Workflow graph gates are additive to built-in gates. Built-in gate names are evaluated first; otherwise `gate check <run_id> <gate_id>` falls back to a graph-declared gate with deterministic `checks`. Existing gates that declare only `id` and `requires` remain valid graph rows. A graph gate may set `final_required: true`, causing `gate final` to require that graph gate's current pass report and freshness. Supported check types are fixed: `artifact.exists`, `markdown.field`, `text.contains`, `text.contains_all`, `gitignore.contains_all`, `codegraph.evidence`, and `phase.status`; no regex, expression language, command execution, or fallback policy is supported. Optional check `name`, `message`, and `hint` fields only shape the emitted gate report and do not change evaluation semantics.
 
