@@ -34,22 +34,26 @@ var (
 )
 
 type RunMetadata struct {
-	Version           string         `json:"version"`
-	RunID             string         `json:"run_id"`
-	TaskID            *string        `json:"task_id"`
-	Title             string         `json:"title"`
-	WorkPath          string         `json:"work_path"`
-	WorkMode          string         `json:"work_mode"`
-	Urgency           string         `json:"urgency"`
-	SOTPolicy         string         `json:"sot_policy"`
-	ExecutionMode     string         `json:"execution_mode"`
-	BackendEvidence   string         `json:"backend_evidence"`
-	Commander         string         `json:"commander"`
-	Redteam           *string        `json:"redteam"`
-	CreatedAt         string         `json:"created_at"`
-	State             string         `json:"state"`
-	RequiredArtifacts []string       `json:"required_artifacts"`
-	GateState         map[string]any `json:"gate_state"`
+	Version             string         `json:"version"`
+	RunID               string         `json:"run_id"`
+	TaskID              *string        `json:"task_id"`
+	Title               string         `json:"title"`
+	WorkPath            string         `json:"work_path"`
+	WorkMode            string         `json:"work_mode"`
+	Urgency             string         `json:"urgency"`
+	SOTPolicy           string         `json:"sot_policy"`
+	ExecutionMode       string         `json:"execution_mode"`
+	BackendEvidence     string         `json:"backend_evidence"`
+	WorkflowManaged     bool           `json:"workflow_managed,omitempty"`
+	StrictWorkflowOrder bool           `json:"strict_workflow_order,omitempty"`
+	SelectedWorkflowID  *string        `json:"selected_workflow_id,omitempty"`
+	WorkflowSource      *string        `json:"workflow_source,omitempty"`
+	Commander           string         `json:"commander"`
+	Redteam             *string        `json:"redteam"`
+	CreatedAt           string         `json:"created_at"`
+	State               string         `json:"state"`
+	RequiredArtifacts   []string       `json:"required_artifacts"`
+	GateState           map[string]any `json:"gate_state"`
 }
 
 type RunSummary struct {
@@ -470,6 +474,12 @@ func validateRunMetadata(metadata RunMetadata, relative string) error {
 	}
 	if !allowed(metadata.BackendEvidence, BackendEvidenceRequired, BackendEvidenceNotApplicable) {
 		return invalidRunField(relative, "backend_evidence", "required or not_applicable", metadata.BackendEvidence)
+	}
+	if metadata.SelectedWorkflowID != nil && strings.TrimSpace(*metadata.SelectedWorkflowID) == "" {
+		return invalidRunField(relative, "selected_workflow_id", "non-empty string or null", "empty")
+	}
+	if metadata.WorkflowSource != nil && strings.TrimSpace(*metadata.WorkflowSource) == "" {
+		return invalidRunField(relative, "workflow_source", "non-empty string or null", "empty")
 	}
 	if !allowed(metadata.State, RunStateCreated, RunStateActive, RunStateClosed, RunStateAborted) {
 		return invalidRunField(relative, "state", "created, active, closed, or aborted", metadata.State)

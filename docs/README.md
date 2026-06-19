@@ -56,7 +56,7 @@ This directory is the project archive for `kkachi-agent-helper` docs. It separat
 - Token-economy / English-output KAH evidence-gate planning lives in `docs/sot/token-economy-evidence-gates.md`; `token-001` and `token-002` deterministic evidence validation are implemented, reviewed, and accepted for commit-readiness pending separate 주군 commit/install approval.
 - Multi-Agent Review evidence-gate behavior lives in `docs/sot/multi-agent-review-evidence-gates.md`; `MAREV-001` recorded the planning SOT and `MAREV-002` implements source-side canonical `multi-agent-review/status.json`, `multi-agent-review` gate, schema validation/export, and final-gate integration when MAR is required.
 - POLPR helper companion planning lives in `docs/sot/policy-promotion-helper-evidence.md`; `POLPR-002` is KAH docs/SOT registration only under the shared cross-repo numbering, and later KAH slices remain limited to deterministic evidence/default phase-plan/docs/test support for KAS-owned policy.
-- STRICT helper companion planning lives in `docs/sot/strict-workflow-enforcement.md`; KAH-owned `STRICT-002`, `STRICT-004`, and `STRICT-006` are planned deterministic helper slices for workflow-managed final-gate markers, node claim ledger/order verification, and phase-plan projection consistency after KAS selects the workflow.
+- STRICT helper companion planning lives in `docs/sot/strict-workflow-enforcement.md`; KAH-owned `STRICT-002` has source-side implementation in review for workflow-managed final-gate markers, while `STRICT-004` and `STRICT-006` remain planned deterministic helper slices for node claim ledger/order verification and phase-plan projection consistency after KAS selects the workflow.
 
 ## Stale/conflict markers
 

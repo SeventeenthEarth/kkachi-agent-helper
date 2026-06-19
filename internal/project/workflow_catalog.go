@@ -617,6 +617,7 @@ type WorkflowInstanceCompletenessResult struct {
 	RunID       string               `json:"run_id,omitempty"`
 	Path        string               `json:"path,omitempty"`
 	WorkflowID  string               `json:"workflow_id,omitempty"`
+	SourcePath  string               `json:"source_path,omitempty"`
 	Revision    int                  `json:"revision,omitempty"`
 	Ready       []WorkflowReadyNode  `json:"ready,omitempty"`
 	Diagnostics []WorkflowDiagnostic `json:"diagnostics,omitempty"`
@@ -656,6 +657,7 @@ func CheckWorkflowInstanceCompleteness(root Root, runID string) (WorkflowInstanc
 		return result, nil
 	}
 	result.WorkflowID = instance.WorkflowID
+	result.SourcePath = instance.SourcePath
 	result.Revision = instance.Revision
 	result.Ready = readyWorkflowNodes(instance)
 	for _, node := range instance.Nodes {

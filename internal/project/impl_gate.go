@@ -99,7 +99,7 @@ func checkDocsUpdateArtifact(root Root, runID string) GateCheck {
 }
 
 func checkFinalGate(root Root, metadata RunMetadata, _ string) (GateCheckResult, error) {
-	checks := []GateCheck{checkFinalReportArtifact(root, metadata.RunID), checkWorkflowInstanceCompletenessGate(root, metadata.RunID)}
+	checks := []GateCheck{checkFinalReportArtifact(root, metadata.RunID), checkWorkflowInstanceCompletenessGate(root, metadata)}
 
 	requiredGates := []string{GateIntake, GateSOT, GateRoadmap, GatePlan, GateImplementation, GateReview, GateVerification, GateDocs}
 	if backendGateRequired(metadata) {
@@ -126,23 +126,59 @@ func checkFinalGate(root Root, metadata RunMetadata, _ string) (GateCheckResult,
 	return gateResultFromChecks(metadata.RunID, GateFinal, checks), nil
 }
 
-func checkWorkflowInstanceCompletenessGate(root Root, runID string) GateCheck {
-	result, err := CheckWorkflowInstanceCompleteness(root, runID)
+func checkWorkflowInstanceCompletenessGate(root Root, metadata RunMetadata) GateCheck {
+	result, err := CheckWorkflowInstanceCompleteness(root, metadata.RunID)
 	if err != nil {
 		return GateCheck{Name: "workflow_instance", Status: GateStatusFail, Message: "workflow instance completeness could not be checked", Hint: "Repair run metadata or workflow instance state before running gate final.", Field: "workflow_instance", Expected: "checkable workflow instance state", Actual: err.Error()}
 	}
 	switch result.Status {
 	case WorkflowCatalogStatusMissing:
+		if metadata.WorkflowManaged {
+			return GateCheck{Name: "workflow_instance", Status: GateStatusFail, Path: result.Path, Message: "workflow-managed run is missing workflow instance state", Hint: "Create the selected workflow instance for this run before running gate final.", Field: "workflow_instance", Expected: "required workflow-instance.json", Actual: result.Reason}
+		}
 		return GateCheck{Name: "workflow_instance", Status: GateStatusNotApplicable, Path: result.Path, Message: "no workflow instance is present for this run", Field: "workflow_instance", Expected: "optional workflow-instance.json", Actual: "missing"}
 	case WorkflowCatalogStatusPass:
+		if check := checkWorkflowInstanceIdentity(metadata, result); check != nil {
+			return *check
+		}
 		return GateCheck{Name: "workflow_instance", Status: GateStatusPass, Path: result.Path, Message: "workflow instance is complete", Field: "reason", Expected: "workflow_instance_complete", Actual: result.Reason}
 	default:
+		if check := checkWorkflowInstanceIdentity(metadata, result); check != nil {
+			return *check
+		}
 		actual := result.Reason
 		if len(result.Diagnostics) > 0 {
 			actual = result.Diagnostics[0].Code
 		}
 		return GateCheck{Name: "workflow_instance", Status: GateStatusFail, Path: result.Path, Message: "workflow instance is incomplete", Hint: "Complete all workflow nodes and preserve required outputs/evidence before final gate.", Field: "reason", Expected: "workflow_instance_complete", Actual: actual}
 	}
+}
+
+func checkWorkflowInstanceIdentity(metadata RunMetadata, result WorkflowInstanceCompletenessResult) *GateCheck {
+	if !metadata.WorkflowManaged {
+		return nil
+	}
+	selectedWorkflowID := ""
+	if metadata.SelectedWorkflowID != nil {
+		selectedWorkflowID = strings.TrimSpace(*metadata.SelectedWorkflowID)
+	}
+	if selectedWorkflowID == "" {
+		return &GateCheck{Name: "workflow_instance", Status: GateStatusFail, Path: result.Path, Message: "workflow-managed run is missing selected workflow id metadata", Hint: "Set selected_workflow_id from the selected workflow before running gate final.", Field: "selected_workflow_id", Expected: result.WorkflowID, Actual: "missing"}
+	}
+	if selectedWorkflowID != result.WorkflowID {
+		return &GateCheck{Name: "workflow_instance", Status: GateStatusFail, Path: result.Path, Message: "workflow instance id does not match run metadata", Hint: "Create the workflow instance from the run metadata selected_workflow_id or repair stale run metadata.", Field: "selected_workflow_id", Expected: selectedWorkflowID, Actual: result.WorkflowID}
+	}
+	workflowSource := ""
+	if metadata.WorkflowSource != nil {
+		workflowSource = strings.TrimSpace(*metadata.WorkflowSource)
+	}
+	if workflowSource == "" {
+		return &GateCheck{Name: "workflow_instance", Status: GateStatusFail, Path: result.Path, Message: "workflow-managed run is missing workflow source metadata", Hint: "Set workflow_source from the selected workflow before running gate final.", Field: "workflow_source", Expected: result.SourcePath, Actual: "missing"}
+	}
+	if workflowSource != result.SourcePath {
+		return &GateCheck{Name: "workflow_instance", Status: GateStatusFail, Path: result.Path, Message: "workflow instance source does not match run metadata", Hint: "Create the workflow instance from the run metadata workflow_source or repair stale run metadata.", Field: "workflow_source", Expected: workflowSource, Actual: result.SourcePath}
+	}
+	return nil
 }
 
 func checkFinalReportArtifact(root Root, runID string) GateCheck {

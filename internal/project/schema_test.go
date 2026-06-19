@@ -125,6 +125,36 @@ func TestSchemaRegistryContracts(t *testing.T) {
 	}
 }
 
+func TestRunMetadataSchemaAcceptsOptionalWorkflowManagedMarkers(t *testing.T) {
+	repo, root, _ := initSchemaTestProject(t)
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	metadata := readRunMetadata(t, repo, created.Metadata.RunID)
+	metadata.WorkflowManaged = true
+	metadata.StrictWorkflowOrder = true
+	metadata.SelectedWorkflowID = optionalTrimmedString("development_full")
+	metadata.WorkflowSource = optionalTrimmedString(".kkachi/runs/" + created.Metadata.RunID + "/workflow/workflow.yaml")
+	writeRunMetadataForTest(t, repo, metadata)
+
+	validated, err := ValidateSchemaFile(root, SchemaValidateOptions{File: ".kkachi/runs/" + created.Metadata.RunID + "/run-metadata.json", Schema: SchemaRunMetadata})
+	if err != nil {
+		t.Fatalf("ValidateSchemaFile() error = %v", err)
+	}
+	if validated.Status != "pass" || !schemaTestCheck(validated.Checks, "workflow_managed", "pass") || !schemaTestCheck(validated.Checks, "strict_workflow_order", "pass") || !schemaTestCheck(validated.Checks, "selected_workflow_id", "pass") || !schemaTestCheck(validated.Checks, "workflow_source", "pass") {
+		t.Fatalf("validated = %#v, want workflow marker schema checks to pass", validated)
+	}
+
+	object := schemaObject(SchemaRunMetadata)
+	properties := object["properties"].(map[string]any)
+	for _, field := range []string{"workflow_managed", "strict_workflow_order", "selected_workflow_id", "workflow_source"} {
+		if _, ok := properties[field]; !ok {
+			t.Fatalf("run metadata schema missing property %s", field)
+		}
+	}
+}
+
 func TestPolicyPromotionSchemaObjectDeclaresRequiredSurface(t *testing.T) {
 	object := schemaObject(SchemaPolicyPromotionEvidence)
 	for _, field := range policyPromotionRequiredFields {

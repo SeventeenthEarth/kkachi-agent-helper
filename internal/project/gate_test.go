@@ -528,6 +528,15 @@ func gateCheckActual(checks []GateCheck, name string, actual string) bool {
 	return false
 }
 
+func gateCheckFieldActual(checks []GateCheck, name string, field string, actual string) bool {
+	for _, check := range checks {
+		if check.Name == name && check.Field == field && check.Actual == actual {
+			return true
+		}
+	}
+	return false
+}
+
 func assertGateState(t *testing.T, gateState map[string]any, gate string, status string, eventID string) {
 	t.Helper()
 	entry, ok := gateState[gate].(map[string]any)
@@ -1216,6 +1225,158 @@ nodes:
 	}
 	if missingOutput.Status != GateStatusFail || !gateCheckActual(missingOutput.Checks, "workflow_instance", "workflow_required_output_missing") {
 		t.Fatalf("missingOutput = %#v, want workflow_required_output_missing", missingOutput)
+	}
+}
+
+func TestFinalGateWorkflowManagedRunRequiresWorkflowInstance(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(28)}); err != nil {
+		t.Fatalf("InitArtifacts() error = %v", err)
+	}
+	passAllPriorGates(t, root, repo, created.Metadata.RunID)
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "final-report.md", "Status: complete\nVerdict: pass\n")
+	metadata := readRunMetadata(t, repo, created.Metadata.RunID)
+	metadata.WorkflowManaged = true
+	metadata.StrictWorkflowOrder = true
+	metadata.SelectedWorkflowID = optionalTrimmedString("demo")
+	metadata.WorkflowSource = optionalTrimmedString("workflow.yaml")
+	writeRunMetadataForTest(t, repo, metadata)
+
+	result, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateFinal, Now: testRunNow(28)})
+	if err != nil {
+		t.Fatalf("CheckGate(final workflow-managed missing instance) error = %v", err)
+	}
+	if result.Status != GateStatusFail || !gateCheckActual(result.Checks, "workflow_instance", "workflow_instance_missing") {
+		t.Fatalf("result = %#v, want workflow_instance_missing fail", result)
+	}
+}
+
+func TestFinalGateWorkflowManagedRunRequiresWorkflowIdentityMarkers(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(29)}); err != nil {
+		t.Fatalf("InitArtifacts() error = %v", err)
+	}
+	passAllPriorGates(t, root, repo, created.Metadata.RunID)
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "final-report.md", "Status: complete\nVerdict: pass\n")
+	writeWorkflowFixture(t, repo, `schema_version: task-dag/v1
+workflow_id: demo
+nodes:
+  - id: setup
+    depends_on: []
+    join: all_of
+    required_outputs: ["out/setup.txt"]
+`)
+	if _, err := CreateWorkflowInstance(root, WorkflowCreateOptions{RunID: created.Metadata.RunID, File: "workflow.yaml", Now: testRunNow(29)}); err != nil {
+		t.Fatalf("CreateWorkflowInstance() error = %v", err)
+	}
+	if _, err := StartWorkflowNode(root, WorkflowNodeOptions{RunID: created.Metadata.RunID, NodeID: "setup", Now: testRunNow(30)}); err != nil {
+		t.Fatalf("start setup: %v", err)
+	}
+	mustWriteText(t, filepath.Join(repo, "out", "setup.txt"), "done\n")
+	if _, err := CompleteWorkflowNode(root, WorkflowNodeOptions{RunID: created.Metadata.RunID, NodeID: "setup", Evidence: "out/setup.txt", Now: testRunNow(31)}); err != nil {
+		t.Fatalf("complete setup: %v", err)
+	}
+
+	metadata := readRunMetadata(t, repo, created.Metadata.RunID)
+	metadata.WorkflowManaged = true
+	metadata.StrictWorkflowOrder = true
+	metadata.SelectedWorkflowID = nil
+	metadata.WorkflowSource = optionalTrimmedString("workflow.yaml")
+	writeRunMetadataForTest(t, repo, metadata)
+	missingID, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateFinal, Now: testRunNow(32)})
+	if err != nil {
+		t.Fatalf("CheckGate(final missing selected workflow id) error = %v", err)
+	}
+	if missingID.Status != GateStatusFail || !gateCheckFieldActual(missingID.Checks, "workflow_instance", "selected_workflow_id", "missing") {
+		t.Fatalf("missingID = %#v, want missing selected_workflow_id fail", missingID)
+	}
+
+	metadata.SelectedWorkflowID = optionalTrimmedString("demo")
+	metadata.WorkflowSource = nil
+	writeRunMetadataForTest(t, repo, metadata)
+	missingSource, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateFinal, Now: testRunNow(33)})
+	if err != nil {
+		t.Fatalf("CheckGate(final missing workflow source) error = %v", err)
+	}
+	if missingSource.Status != GateStatusFail || !gateCheckFieldActual(missingSource.Checks, "workflow_instance", "workflow_source", "missing") {
+		t.Fatalf("missingSource = %#v, want missing workflow_source fail", missingSource)
+	}
+}
+
+func TestFinalGateWorkflowManagedRunValidatesWorkflowIdentity(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(29)}); err != nil {
+		t.Fatalf("InitArtifacts() error = %v", err)
+	}
+	passAllPriorGates(t, root, repo, created.Metadata.RunID)
+	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "final-report.md", "Status: complete\nVerdict: pass\n")
+	writeWorkflowFixture(t, repo, `schema_version: task-dag/v1
+workflow_id: demo
+nodes:
+  - id: setup
+    depends_on: []
+    join: all_of
+    required_outputs: ["out/setup.txt"]
+`)
+	if _, err := CreateWorkflowInstance(root, WorkflowCreateOptions{RunID: created.Metadata.RunID, File: "workflow.yaml", Now: testRunNow(29)}); err != nil {
+		t.Fatalf("CreateWorkflowInstance() error = %v", err)
+	}
+	if _, err := StartWorkflowNode(root, WorkflowNodeOptions{RunID: created.Metadata.RunID, NodeID: "setup", Now: testRunNow(30)}); err != nil {
+		t.Fatalf("start setup: %v", err)
+	}
+	mustWriteText(t, filepath.Join(repo, "out", "setup.txt"), "done\n")
+	if _, err := CompleteWorkflowNode(root, WorkflowNodeOptions{RunID: created.Metadata.RunID, NodeID: "setup", Evidence: "out/setup.txt", Now: testRunNow(31)}); err != nil {
+		t.Fatalf("complete setup: %v", err)
+	}
+
+	metadata := readRunMetadata(t, repo, created.Metadata.RunID)
+	metadata.WorkflowManaged = true
+	metadata.StrictWorkflowOrder = true
+	metadata.SelectedWorkflowID = optionalTrimmedString("other")
+	metadata.WorkflowSource = optionalTrimmedString("workflow.yaml")
+	writeRunMetadataForTest(t, repo, metadata)
+	idMismatch, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateFinal, Now: testRunNow(32)})
+	if err != nil {
+		t.Fatalf("CheckGate(final workflow id mismatch) error = %v", err)
+	}
+	if idMismatch.Status != GateStatusFail || !gateCheckFieldActual(idMismatch.Checks, "workflow_instance", "selected_workflow_id", "demo") {
+		t.Fatalf("idMismatch = %#v, want actual workflow instance id", idMismatch)
+	}
+
+	metadata.SelectedWorkflowID = optionalTrimmedString("demo")
+	metadata.WorkflowSource = optionalTrimmedString("other.yaml")
+	writeRunMetadataForTest(t, repo, metadata)
+	sourceMismatch, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateFinal, Now: testRunNow(33)})
+	if err != nil {
+		t.Fatalf("CheckGate(final workflow source mismatch) error = %v", err)
+	}
+	if sourceMismatch.Status != GateStatusFail || !gateCheckFieldActual(sourceMismatch.Checks, "workflow_instance", "workflow_source", "workflow.yaml") {
+		t.Fatalf("sourceMismatch = %#v, want actual workflow instance source", sourceMismatch)
+	}
+
+	metadata.WorkflowSource = optionalTrimmedString("workflow.yaml")
+	writeRunMetadataForTest(t, repo, metadata)
+	matching, err := CheckGate(root, GateCheckOptions{RunID: created.Metadata.RunID, Gate: GateFinal, Now: testRunNow(34)})
+	if err != nil {
+		t.Fatalf("CheckGate(final matching workflow) error = %v", err)
+	}
+	if matching.Status != GateStatusPass || !gateCheckStatus(matching.Checks, "workflow_instance", GateStatusPass) {
+		t.Fatalf("matching = %#v, want workflow_instance pass", matching)
 	}
 }
 

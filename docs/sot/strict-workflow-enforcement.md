@@ -33,7 +33,7 @@ Epic: `STRICT` — strict workflow execution and order enforcement
 | Task ID | Repo | Title | Status | KAH boundary |
 |---|---|---|---|---|
 | `STRICT-001` | KAS | Strict workflow execution SOT and roadmap registration | Completed | Upstream policy/registration. KAH carries companion references and uses this accepted baseline before `STRICT-002`. |
-| `STRICT-002` | KAH | Workflow-managed run marker and strict final-gate mode | Planned | Add deterministic workflow-managed metadata/marker validation and fail final when the required instance is absent or mismatched. |
+| `STRICT-002` | KAH | Workflow-managed run marker and strict final-gate mode | In Progress | Source-side implementation adds optional deterministic run metadata markers and final-gate fail-closed behavior when workflow-managed runs lack the required instance, lack selected workflow/source metadata, or carry selected workflow/source mismatches; review/final closeout remains pending. |
 | `STRICT-003` | KAS | Classification route/trigger mandatory orchestration | Planned | Upstream KAS orchestration; KAH consumes the resulting selected workflow evidence only. |
 | `STRICT-004` | KAH | Node claim ledger and transition-order verification | Planned | Harden node start/complete/block audit events and verify transition order against the selected DAG. |
 | `STRICT-005` | KAS | Dispatch packet expected-revision and node execution guard | Planned | Upstream KAS dispatch packet and runner policy; KAH validates expected revisions supplied to node transitions. |
@@ -55,9 +55,10 @@ KAH should support a run-local marker or run metadata fields such as:
 }
 ```
 
-Final gate behavior should be:
+Final gate behavior is:
 
 - workflow-managed run with no workflow instance: fail closed;
+- workflow-managed run with missing selected workflow id/source metadata: fail closed;
 - selected workflow id/source mismatch: fail closed;
 - incomplete workflow instance or missing required node evidence: fail closed;
 - non-workflow-managed run: retain existing not-applicable behavior.
