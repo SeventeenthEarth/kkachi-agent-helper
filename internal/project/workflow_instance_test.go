@@ -1,6 +1,8 @@
 package project
 
 import (
+	"bufio"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -191,6 +193,187 @@ nodes:
 	}
 }
 
+func TestStartWorkflowNodeRecordsStrictLedgerPayload(t *testing.T) {
+	repo, root, runID := workflowInstanceTestRun(t)
+	writeWorkflowFixture(t, repo, strictLedgerWorkflowYAML())
+	if _, err := CreateWorkflowInstance(root, WorkflowCreateOptions{RunID: runID, File: "workflow.yaml", Now: testRunNow(4)}); err != nil {
+		t.Fatalf("create workflow instance: %v", err)
+	}
+
+	started, err := StartWorkflowNode(root, WorkflowNodeOptions{RunID: runID, NodeID: "setup", ExpectedRevision: intPtr(1), Now: testRunNow(5)})
+	if err != nil {
+		t.Fatalf("StartWorkflowNode() error = %v", err)
+	}
+	if !started.OK {
+		t.Fatalf("started = %#v, want pass", started)
+	}
+
+	event := readWorkflowEventByID(t, repo, started.EventID)
+	assertStrictLedgerPayload(t, event, runID, "strict-ledger", "setup", "start", 1, 2, WorkflowNodePending, WorkflowNodeRunning)
+	assertPayloadStringSlice(t, event.Payload, "ready_before", []string{"setup"})
+	assertPayloadStringSlice(t, event.Payload, "ready_after", []string{})
+	assertPayloadStringMap(t, event.Payload, "dependency_states", map[string]string{})
+}
+
+func TestCompleteWorkflowNodeRecordsStrictLedgerPayload(t *testing.T) {
+	repo, root, runID := workflowInstanceTestRun(t)
+	writeWorkflowFixture(t, repo, strictLedgerWorkflowYAML())
+	if _, err := CreateWorkflowInstance(root, WorkflowCreateOptions{RunID: runID, File: "workflow.yaml", Now: testRunNow(4)}); err != nil {
+		t.Fatalf("create workflow instance: %v", err)
+	}
+	if _, err := StartWorkflowNode(root, WorkflowNodeOptions{RunID: runID, NodeID: "setup", ExpectedRevision: intPtr(1), Now: testRunNow(5)}); err != nil {
+		t.Fatalf("start setup: %v", err)
+	}
+	mustWriteText(t, filepath.Join(repo, "out", "setup.txt"), "done\n")
+
+	completed, err := CompleteWorkflowNode(root, WorkflowNodeOptions{RunID: runID, NodeID: "setup", Evidence: "out/setup.txt", ExpectedRevision: intPtr(2), Now: testRunNow(6)})
+	if err != nil {
+		t.Fatalf("CompleteWorkflowNode() error = %v", err)
+	}
+	if !completed.OK {
+		t.Fatalf("completed = %#v, want pass", completed)
+	}
+
+	event := readWorkflowEventByID(t, repo, completed.EventID)
+	assertStrictLedgerPayload(t, event, runID, "strict-ledger", "setup", "complete", 2, 3, WorkflowNodeRunning, WorkflowNodeSucceeded)
+	assertPayloadStringSlice(t, event.Payload, "ready_before", []string{})
+	assertPayloadStringSlice(t, event.Payload, "ready_after", []string{"build"})
+}
+
+func TestBlockWorkflowNodeRecordsStrictLedgerPayload(t *testing.T) {
+	repo, root, runID := workflowInstanceTestRun(t)
+	writeWorkflowFixture(t, repo, strictLedgerWorkflowYAML())
+	if _, err := CreateWorkflowInstance(root, WorkflowCreateOptions{RunID: runID, File: "workflow.yaml", Now: testRunNow(4)}); err != nil {
+		t.Fatalf("create workflow instance: %v", err)
+	}
+
+	blocked, err := BlockWorkflowNode(root, WorkflowNodeOptions{RunID: runID, NodeID: "setup", Reason: "blocked by review", ExpectedRevision: intPtr(1), Now: testRunNow(5)})
+	if err != nil {
+		t.Fatalf("BlockWorkflowNode() error = %v", err)
+	}
+	if !blocked.OK {
+		t.Fatalf("blocked = %#v, want pass", blocked)
+	}
+
+	event := readWorkflowEventByID(t, repo, blocked.EventID)
+	assertStrictLedgerPayload(t, event, runID, "strict-ledger", "setup", "block", 1, 2, WorkflowNodePending, WorkflowNodeBlocked)
+}
+
+func TestWorkflowNodeRejectsInvalidTransitionsWithoutMutation(t *testing.T) {
+	tests := []struct {
+		name       string
+		mutate     func(t *testing.T, repo string, root Root, runID string)
+		action     func(root Root, runID string) (WorkflowInstanceResult, error)
+		wantReason string
+		wantError  string
+	}{
+		{
+			name: "stale expected revision",
+			action: func(root Root, runID string) (WorkflowInstanceResult, error) {
+				return StartWorkflowNode(root, WorkflowNodeOptions{RunID: runID, NodeID: "setup", ExpectedRevision: intPtr(2), Now: testRunNow(5)})
+			},
+			wantReason: "workflow_instance_stale",
+		},
+		{
+			name: "unknown node",
+			action: func(root Root, runID string) (WorkflowInstanceResult, error) {
+				return StartWorkflowNode(root, WorkflowNodeOptions{RunID: runID, NodeID: "missing", ExpectedRevision: intPtr(1), Now: testRunNow(5)})
+			},
+			wantReason: "node_unknown",
+		},
+		{
+			name: "non-ready dependency start",
+			action: func(root Root, runID string) (WorkflowInstanceResult, error) {
+				return StartWorkflowNode(root, WorkflowNodeOptions{RunID: runID, NodeID: "build", ExpectedRevision: intPtr(1), Now: testRunNow(5)})
+			},
+			wantReason: "node_dependency_unsatisfied",
+		},
+		{
+			name: "complete without running start",
+			action: func(root Root, runID string) (WorkflowInstanceResult, error) {
+				return CompleteWorkflowNode(root, WorkflowNodeOptions{RunID: runID, NodeID: "setup", ExpectedRevision: intPtr(1), Now: testRunNow(5)})
+			},
+			wantReason: "node_transition_invalid",
+		},
+		{
+			name: "downstream complete before upstream",
+			action: func(root Root, runID string) (WorkflowInstanceResult, error) {
+				return CompleteWorkflowNode(root, WorkflowNodeOptions{RunID: runID, NodeID: "build", ExpectedRevision: intPtr(1), Now: testRunNow(5)})
+			},
+			wantReason: "node_transition_invalid",
+		},
+		{
+			name: "succeeded-node restart",
+			mutate: func(t *testing.T, repo string, root Root, runID string) {
+				t.Helper()
+				completeSetupForStrictLedgerTest(t, repo, root, runID)
+			},
+			action: func(root Root, runID string) (WorkflowInstanceResult, error) {
+				return StartWorkflowNode(root, WorkflowNodeOptions{RunID: runID, NodeID: "setup", ExpectedRevision: intPtr(3), Now: testRunNow(8)})
+			},
+			wantReason: "node_transition_invalid",
+		},
+		{
+			name: "block succeeded node",
+			mutate: func(t *testing.T, repo string, root Root, runID string) {
+				t.Helper()
+				completeSetupForStrictLedgerTest(t, repo, root, runID)
+			},
+			action: func(root Root, runID string) (WorkflowInstanceResult, error) {
+				return BlockWorkflowNode(root, WorkflowNodeOptions{RunID: runID, NodeID: "setup", Reason: "too late", ExpectedRevision: intPtr(3), Now: testRunNow(8)})
+			},
+			wantReason: "node_transition_invalid",
+		},
+		{
+			name: "empty block reason",
+			action: func(root Root, runID string) (WorkflowInstanceResult, error) {
+				return BlockWorkflowNode(root, WorkflowNodeOptions{RunID: runID, NodeID: "setup", Reason: " ", ExpectedRevision: intPtr(1), Now: testRunNow(5)})
+			},
+			wantError: "workflow_node_block_reason_required",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, root, runID := workflowInstanceTestRun(t)
+			writeWorkflowFixture(t, repo, strictLedgerWorkflowYAML())
+			if _, err := CreateWorkflowInstance(root, WorkflowCreateOptions{RunID: runID, File: "workflow.yaml", Now: testRunNow(4)}); err != nil {
+				t.Fatalf("create workflow instance: %v", err)
+			}
+			if tt.mutate != nil {
+				tt.mutate(t, repo, root, runID)
+			}
+			before := readWorkflowInstanceForTest(t, repo, runID)
+			beforeEvents := countWorkflowTestEvents(t, repo)
+
+			result, err := tt.action(root, runID)
+			if tt.wantError != "" {
+				problem, _ := err.(*Problem)
+				if err == nil || problem == nil || problem.Code != tt.wantError {
+					t.Fatalf("error = %v, want %s", err, tt.wantError)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("action error = %v", err)
+				}
+				if result.OK || result.Reason != tt.wantReason {
+					t.Fatalf("result = %#v, want rejected reason %s", result, tt.wantReason)
+				}
+			}
+
+			after := readWorkflowInstanceForTest(t, repo, runID)
+			afterEvents := countWorkflowTestEvents(t, repo)
+			if after.Revision != before.Revision || after.UpdatedEventID != before.UpdatedEventID || afterEvents != beforeEvents {
+				t.Fatalf("mutation occurred: before rev/event/count=%d/%s/%d after=%d/%s/%d", before.Revision, before.UpdatedEventID, beforeEvents, after.Revision, after.UpdatedEventID, afterEvents)
+			}
+			for i := range before.Nodes {
+				if after.Nodes[i].State != before.Nodes[i].State || after.Nodes[i].LastTransitionEventID != before.Nodes[i].LastTransitionEventID {
+					t.Fatalf("node %s changed: before=%#v after=%#v", before.Nodes[i].ID, before.Nodes[i], after.Nodes[i])
+				}
+			}
+		})
+	}
+}
+
 func workflowInstanceTestRun(t *testing.T) (string, Root, string) {
 	t.Helper()
 	repo := initializedRepo(t)
@@ -203,6 +386,140 @@ func workflowInstanceTestRun(t *testing.T) (string, Root, string) {
 		t.Fatalf("CreateRun() error = %v", err)
 	}
 	return repo, root, created.Metadata.RunID
+}
+
+func strictLedgerWorkflowYAML() string {
+	return `schema_version: task-dag/v1
+workflow_id: strict-ledger
+nodes:
+  - id: setup
+    depends_on: []
+    join: all_of
+    required_outputs: ["out/setup.txt"]
+  - id: build
+    depends_on: [setup]
+    join: all_of
+    required_outputs: ["out/build.txt"]
+`
+}
+
+func completeSetupForStrictLedgerTest(t *testing.T, repo string, root Root, runID string) {
+	t.Helper()
+	if _, err := StartWorkflowNode(root, WorkflowNodeOptions{RunID: runID, NodeID: "setup", ExpectedRevision: intPtr(1), Now: testRunNow(5)}); err != nil {
+		t.Fatalf("start setup: %v", err)
+	}
+	mustWriteText(t, filepath.Join(repo, "out", "setup.txt"), "done\n")
+	if _, err := CompleteWorkflowNode(root, WorkflowNodeOptions{RunID: runID, NodeID: "setup", Evidence: "out/setup.txt", ExpectedRevision: intPtr(2), Now: testRunNow(6)}); err != nil {
+		t.Fatalf("complete setup: %v", err)
+	}
+}
+
+func readWorkflowInstanceForTest(t *testing.T, repo string, runID string) WorkflowInstance {
+	t.Helper()
+	var instance WorkflowInstance
+	readJSONFile(t, filepath.Join(repo, ".kkachi", "runs", runID, WorkflowInstanceFile), &instance)
+	return instance
+}
+
+func readWorkflowEventByID(t *testing.T, repo string, eventID string) Event {
+	t.Helper()
+	file, err := os.Open(filepath.Join(repo, EventsPath))
+	if err != nil {
+		t.Fatalf("open events: %v", err)
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		var event Event
+		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+			t.Fatalf("decode event: %v", err)
+		}
+		if event.EventID == eventID {
+			return event
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan events: %v", err)
+	}
+	t.Fatalf("event %s not found", eventID)
+	return Event{}
+}
+
+func countWorkflowTestEvents(t *testing.T, repo string) int {
+	t.Helper()
+	file, err := os.Open(filepath.Join(repo, EventsPath))
+	if err != nil {
+		t.Fatalf("open events: %v", err)
+	}
+	defer file.Close()
+	count := 0
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		count++
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan events: %v", err)
+	}
+	return count
+}
+
+func assertStrictLedgerPayload(t *testing.T, event Event, runID string, workflowID string, nodeID string, kind string, previousRevision int, resultingRevision int, previousState string, resultingState string) {
+	t.Helper()
+	if event.RunID == nil || *event.RunID != runID {
+		t.Fatalf("event run_id = %#v, want %s", event.RunID, runID)
+	}
+	assertPayloadString(t, event.Payload, "run_id", runID)
+	assertPayloadString(t, event.Payload, "workflow_id", workflowID)
+	assertPayloadString(t, event.Payload, "node_id", nodeID)
+	assertPayloadString(t, event.Payload, "transition_kind", kind)
+	assertPayloadNumber(t, event.Payload, "previous_revision", previousRevision)
+	assertPayloadNumber(t, event.Payload, "resulting_revision", resultingRevision)
+	assertPayloadString(t, event.Payload, "previous_state", previousState)
+	assertPayloadString(t, event.Payload, "resulting_state", resultingState)
+}
+
+func assertPayloadString(t *testing.T, payload map[string]any, key string, want string) {
+	t.Helper()
+	got, ok := payload[key].(string)
+	if !ok || got != want {
+		t.Fatalf("payload[%s] = %#v, want %q", key, payload[key], want)
+	}
+}
+
+func assertPayloadNumber(t *testing.T, payload map[string]any, key string, want int) {
+	t.Helper()
+	got, ok := payload[key].(float64)
+	if !ok || int(got) != want || got != float64(want) {
+		t.Fatalf("payload[%s] = %#v, want %d", key, payload[key], want)
+	}
+}
+
+func assertPayloadStringSlice(t *testing.T, payload map[string]any, key string, want []string) {
+	t.Helper()
+	values, ok := payload[key].([]any)
+	if !ok || len(values) != len(want) {
+		t.Fatalf("payload[%s] = %#v, want %#v", key, payload[key], want)
+	}
+	for i, value := range values {
+		got, ok := value.(string)
+		if !ok || got != want[i] {
+			t.Fatalf("payload[%s][%d] = %#v, want %q", key, i, value, want[i])
+		}
+	}
+}
+
+func assertPayloadStringMap(t *testing.T, payload map[string]any, key string, want map[string]string) {
+	t.Helper()
+	values, ok := payload[key].(map[string]any)
+	if !ok || len(values) != len(want) {
+		t.Fatalf("payload[%s] = %#v, want %#v", key, payload[key], want)
+	}
+	for key, wantValue := range want {
+		got, ok := values[key].(string)
+		if !ok || got != wantValue {
+			t.Fatalf("payload map value = %#v, want %s=%s", values, key, wantValue)
+		}
+	}
 }
 
 func writeWorkflowFixture(t *testing.T, repo string, content string) {

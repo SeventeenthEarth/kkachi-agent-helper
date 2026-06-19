@@ -35,20 +35,21 @@ type DiagnosticsExportOptions struct {
 }
 
 type DiagnosticsBundle struct {
-	Version            string                              `json:"version"`
-	GeneratedAt        string                              `json:"generated_at"`
-	RootPath           string                              `json:"root_path"`
-	Redaction          DiagnosticsRedaction                `json:"redaction"`
-	Project            DiagnosticsProject                  `json:"project"`
-	SchemaVersions     []DiagnosticsSchema                 `json:"schema_versions"`
-	GraphCompatibility DiagnosticsGraphCompatibility       `json:"graph_compatibility"`
-	WorkflowCatalog    WorkflowCatalogResult               `json:"workflow_catalog"`
-	RunID              string                              `json:"run_id,omitempty"`
-	WorkflowInstance   *WorkflowInstanceCompletenessResult `json:"workflow_instance,omitempty"`
-	GateReports        []DiagnosticsFile                   `json:"gate_reports"`
-	SelectedArtifacts  []DiagnosticsFile                   `json:"selected_artifacts"`
-	ApprovalRecords    []ApprovalRecord                    `json:"approval_records,omitempty"`
-	OutputPath         string                              `json:"output_path,omitempty"`
+	Version                 string                              `json:"version"`
+	GeneratedAt             string                              `json:"generated_at"`
+	RootPath                string                              `json:"root_path"`
+	Redaction               DiagnosticsRedaction                `json:"redaction"`
+	Project                 DiagnosticsProject                  `json:"project"`
+	SchemaVersions          []DiagnosticsSchema                 `json:"schema_versions"`
+	GraphCompatibility      DiagnosticsGraphCompatibility       `json:"graph_compatibility"`
+	WorkflowCatalog         WorkflowCatalogResult               `json:"workflow_catalog"`
+	RunID                   string                              `json:"run_id,omitempty"`
+	WorkflowInstance        *WorkflowInstanceCompletenessResult `json:"workflow_instance,omitempty"`
+	WorkflowTransitionOrder *WorkflowTransitionOrderResult      `json:"workflow_transition_order,omitempty"`
+	GateReports             []DiagnosticsFile                   `json:"gate_reports"`
+	SelectedArtifacts       []DiagnosticsFile                   `json:"selected_artifacts"`
+	ApprovalRecords         []ApprovalRecord                    `json:"approval_records,omitempty"`
+	OutputPath              string                              `json:"output_path,omitempty"`
 }
 
 type DiagnosticsRedaction struct {
@@ -144,6 +145,11 @@ func ExportDiagnostics(root Root, options DiagnosticsExportOptions) (Diagnostics
 			return DiagnosticsBundle{}, err
 		}
 		bundle.WorkflowInstance = &workflowInstance
+		workflowTransitionOrder, err := CheckWorkflowTransitionOrder(root, runID)
+		if err != nil {
+			return DiagnosticsBundle{}, err
+		}
+		bundle.WorkflowTransitionOrder = &workflowTransitionOrder
 		bundle.GateReports = diagnosticGateReports(root, runID)
 		bundle.SelectedArtifacts = diagnosticSelectedArtifacts(root, runID)
 		records, err := ApprovalRecords(root, runID)

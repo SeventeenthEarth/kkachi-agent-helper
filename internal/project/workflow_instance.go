@@ -300,6 +300,10 @@ func mutateWorkflowNode(root Root, command string, eventType string, options Wor
 			result.Ready = readyWorkflowNodes(instance)
 			return nil
 		}
+		previousRevision := instance.Revision
+		previousNode := instance.Nodes[index]
+		readyBefore := workflowReadyNodeIDs(instance)
+		dependencyStates := workflowDependencyStates(instance, previousNode)
 		reason, diagnostic, err := mutate(&instance, index)
 		if err != nil {
 			return err
@@ -315,7 +319,24 @@ func mutateWorkflowNode(root Root, command string, eventType string, options Wor
 			instance.Revision++
 			instance.UpdatedEventID = nextID
 			instance.Nodes[index].LastTransitionEventID = nextID
-			payload := map[string]any{"run_id": runID, "workflow_id": instance.WorkflowID, "node_id": instance.Nodes[index].ID, "state": instance.Nodes[index].State, "revision": instance.Revision}
+			payload := map[string]any{
+				"run_id":             runID,
+				"workflow_id":        instance.WorkflowID,
+				"node_id":            instance.Nodes[index].ID,
+				"transition_kind":    workflowTransitionKind(eventType),
+				"previous_revision":  previousRevision,
+				"resulting_revision": instance.Revision,
+				"previous_state":     previousNode.State,
+				"resulting_state":    instance.Nodes[index].State,
+				"dependency_states":  dependencyStates,
+				"ready_before":       readyBefore,
+				"ready_after":        workflowReadyNodeIDs(instance),
+				"state":              instance.Nodes[index].State,
+				"revision":           instance.Revision,
+			}
+			if options.ExpectedRevision != nil {
+				payload["expected_revision"] = *options.ExpectedRevision
+			}
 			if strings.TrimSpace(options.Evidence) != "" {
 				payload["evidence"] = strings.TrimSpace(options.Evidence)
 			}
@@ -458,6 +479,42 @@ func workflowNodeDependenciesSucceeded(instance WorkflowInstance, node WorkflowI
 		}
 	}
 	return true
+}
+
+func workflowDependencyStates(instance WorkflowInstance, node WorkflowInstanceNode) map[string]string {
+	states := map[string]string{}
+	for _, dep := range node.DependsOn {
+		states[dep] = ""
+		for _, candidate := range instance.Nodes {
+			if candidate.ID == dep {
+				states[dep] = candidate.State
+				break
+			}
+		}
+	}
+	return states
+}
+
+func workflowReadyNodeIDs(instance WorkflowInstance) []string {
+	ready := readyWorkflowNodes(instance)
+	ids := make([]string, 0, len(ready))
+	for _, node := range ready {
+		ids = append(ids, node.ID)
+	}
+	return ids
+}
+
+func workflowTransitionKind(eventType string) string {
+	switch eventType {
+	case "workflow.node.started":
+		return "start"
+	case "workflow.node.completed":
+		return "complete"
+	case "workflow.node.blocked":
+		return "block"
+	default:
+		return strings.TrimPrefix(eventType, "workflow.node.")
+	}
 }
 
 func workflowNodeIndex(instance WorkflowInstance, nodeID string) int {

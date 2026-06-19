@@ -99,7 +99,7 @@ func checkDocsUpdateArtifact(root Root, runID string) GateCheck {
 }
 
 func checkFinalGate(root Root, metadata RunMetadata, _ string) (GateCheckResult, error) {
-	checks := []GateCheck{checkFinalReportArtifact(root, metadata.RunID), checkWorkflowInstanceCompletenessGate(root, metadata)}
+	checks := []GateCheck{checkFinalReportArtifact(root, metadata.RunID), checkWorkflowInstanceCompletenessGate(root, metadata), checkWorkflowTransitionOrderGate(root, metadata)}
 
 	requiredGates := []string{GateIntake, GateSOT, GateRoadmap, GatePlan, GateImplementation, GateReview, GateVerification, GateDocs}
 	if backendGateRequired(metadata) {
@@ -124,6 +124,28 @@ func checkFinalGate(root Root, metadata RunMetadata, _ string) (GateCheckResult,
 	}
 
 	return gateResultFromChecks(metadata.RunID, GateFinal, checks), nil
+}
+
+func checkWorkflowTransitionOrderGate(root Root, metadata RunMetadata) GateCheck {
+	result, err := CheckWorkflowTransitionOrder(root, metadata.RunID)
+	if err != nil {
+		return GateCheck{Name: "workflow_transition_order", Status: GateStatusFail, Message: "workflow transition order could not be checked", Hint: "Repair run metadata, workflow instance state, or event log before running gate final.", Field: "workflow_transition_order", Expected: "checkable transition ledger", Actual: err.Error()}
+	}
+	switch result.Status {
+	case WorkflowCatalogStatusMissing:
+		if metadata.WorkflowManaged || metadata.StrictWorkflowOrder {
+			return GateCheck{Name: "workflow_transition_order", Status: GateStatusFail, Path: result.Path, Message: "workflow-managed run is missing transition ledger state", Hint: "Create and mutate the selected workflow instance through KAH workflow node commands before final gate.", Field: "workflow_transition_order", Expected: "workflow instance and transition ledger", Actual: result.Reason}
+		}
+		return GateCheck{Name: "workflow_transition_order", Status: GateStatusNotApplicable, Path: result.Path, Message: "no workflow instance is present for transition-order verification", Field: "workflow_transition_order", Expected: "optional workflow transition ledger", Actual: "missing"}
+	case WorkflowCatalogStatusPass:
+		return GateCheck{Name: "workflow_transition_order", Status: GateStatusPass, Path: result.Path, Message: "workflow transition order is valid", Field: "reason", Expected: "workflow_transition_order_valid", Actual: result.Reason}
+	default:
+		actual := result.Reason
+		if len(result.Diagnostics) > 0 {
+			actual = result.Diagnostics[0].Code
+		}
+		return GateCheck{Name: "workflow_transition_order", Status: GateStatusFail, Path: result.Path, Message: "workflow transition order is invalid", Hint: "Recreate or repair workflow-instance.json and events.jsonl from coherent KAH transition evidence.", Field: "reason", Expected: "workflow_transition_order_valid", Actual: actual}
+	}
 }
 
 func checkWorkflowInstanceCompletenessGate(root Root, metadata RunMetadata) GateCheck {

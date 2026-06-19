@@ -98,6 +98,8 @@ type compatibilityFlagsOutput struct {
 	WorkflowCatalogProposalApply            bool `json:"workflow_catalog_proposal_apply"`
 	WorkflowFinalGateIntegration            bool `json:"workflow_final_gate_integration"`
 	WorkflowNodeContractRegistryEvidence    bool `json:"workflow_node_contract_registry_evidence"`
+	WorkflowStrictTransitionLedger          bool `json:"workflow_strict_transition_ledger"`
+	WorkflowTransitionOrderVerification     bool `json:"workflow_transition_order_verification"`
 	TokenEconomyEvidenceGate                bool `json:"token_economy_evidence_gate"`
 	TokenEconomyToken002EvidenceGate        bool `json:"token_economy_token002_evidence_gate"`
 	MultiAgentReviewEvidenceGate            bool `json:"multi_agent_review_evidence_gate"`
@@ -2786,6 +2788,8 @@ func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
 			WorkflowCatalogProposalApply:            true,
 			WorkflowFinalGateIntegration:            true,
 			WorkflowNodeContractRegistryEvidence:    true,
+			WorkflowStrictTransitionLedger:          true,
+			WorkflowTransitionOrderVerification:     true,
 			TokenEconomyEvidenceGate:                true,
 			TokenEconomyToken002EvidenceGate:        true,
 			MultiAgentReviewEvidenceGate:            true,

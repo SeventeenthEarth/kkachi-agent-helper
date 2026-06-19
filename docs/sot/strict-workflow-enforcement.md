@@ -2,8 +2,8 @@
 
 Date: 2026-06-19
 Owner: KAH deterministic helper layer
-Confirming role: Responsible approver / KAS Blue command with Red, Orange, and project-Gray review evidence accepted for `STRICT-001`
-Status: accepted companion SOT for KAH-owned `STRICT` tasks; `STRICT-001` docs/SOT registration is complete and does not implement new helper behavior
+Confirming role: Responsible approver / KAS Blue command with Red, Orange, and project-Gray review evidence accepted for STRICT companion slices
+Status: accepted companion SOT for KAH-owned `STRICT` tasks; `STRICT-002` and `STRICT-004` source-side helper slices are implemented, while install/release/push/live activation remain separate approvals
 Authority level: KAH-side planning authority for strict workflow-managed run markers, node transition ledger/order verification, and workflow projection gates
 Scope: `kkachi-agent-helper` docs, schemas, command JSON contracts, deterministic state transitions, diagnostics, gates, and tests. No KAS task classification, workflow selection, node owner/prompt/backend policy, KAB runtime activation, profile/provider/gateway/auth/token/model mutation, install, release, push, or automatic rollback is authorized by this document.
 Upstream KAS SOT: `kkachi-hermes-skills/docs/sot/strict-workflow-execution-contract.md`
@@ -33,9 +33,9 @@ Epic: `STRICT` — strict workflow execution and order enforcement
 | Task ID | Repo | Title | Status | KAH boundary |
 |---|---|---|---|---|
 | `STRICT-001` | KAS | Strict workflow execution SOT and roadmap registration | Completed | Upstream policy/registration. KAH carries companion references and uses this accepted baseline before `STRICT-002`. |
-| `STRICT-002` | KAH | Workflow-managed run marker and strict final-gate mode | In Progress | Source-side implementation adds optional deterministic run metadata markers and final-gate fail-closed behavior when workflow-managed runs lack the required instance, lack selected workflow/source metadata, or carry selected workflow/source mismatches; review/final closeout remains pending. |
-| `STRICT-003` | KAS | Classification route/trigger mandatory orchestration | Planned | Upstream KAS orchestration; KAH consumes the resulting selected workflow evidence only. |
-| `STRICT-004` | KAH | Node claim ledger and transition-order verification | Planned | Harden node start/complete/block audit events and verify transition order against the selected DAG. |
+| `STRICT-002` | KAH | Workflow-managed run marker and strict final-gate mode | Completed | Completed in KAH commit `97acd29`; KAH supports optional deterministic run metadata markers and final-gate fail-closed behavior for missing/mismatched workflow-managed state. |
+| `STRICT-003` | KAS | Classification route/trigger mandatory orchestration | Completed | Completed in KAS commit `196d8d0`; KAH consumes the resulting selected workflow evidence only. |
+| `STRICT-004` | KAH | Node claim ledger and transition-order verification | Completed | Completed source-side in run `run-20260619T123948Z-2e44f34ec8d7`; KAH adds strict transition ledger payloads, transition-order verification, final-gate check `workflow_transition_order`, diagnostics evidence, capability flags, and fail-closed invalid/mismatched instance handling. |
 | `STRICT-005` | KAS | Dispatch packet expected-revision and node execution guard | Planned | Upstream KAS dispatch packet and runner policy; KAH validates expected revisions supplied to node transitions. |
 | `STRICT-006` | KAH | Phase-plan projection and workflow consistency gate | Planned | Validate workflow-managed phase-plan/checklist projection against KAH workflow instance and transition ledger. |
 | `STRICT-007` | KAS | Strict orchestration skill/templates/e2e adoption | Planned | Upstream KAS skill/template adoption; KAH supplies deterministic test and gate surfaces only as implemented. |
@@ -67,7 +67,7 @@ Final gate behavior is:
 
 KAH should treat `workflow node start` as the claim/admission event. A strict transition event should preserve enough state to reconstruct order, such as run id, workflow id, node id, previous revision, resulting revision, expected revision, transition kind, state, and relevant ready/dependency context.
 
-Final/diagnostic verification should detect at least:
+Final/diagnostic verification detects at least:
 
 - start attempted before dependencies succeeded;
 - complete without a running start;
@@ -75,6 +75,8 @@ Final/diagnostic verification should detect at least:
 - stale revision transition;
 - succeeded node restarted without explicit future repair semantics;
 - downstream node completed before upstream dependency succeeded.
+
+KAH advertises this source-side support with `workflow_strict_transition_ledger=true` and `workflow_transition_order_verification=true` in `capabilities --json`. The verifier fails closed for invalid workflow-instance files, workflow-instance run mismatches, malformed or old minimal transition payloads, workflow mismatches, revision gaps, stale/out-of-order revisions, missing instance/event correlation, and manually appended transition events that do not reconstruct against the workflow instance. KAH does not claim cross-file atomicity between `workflow-instance.json` and `.kkachi/events.jsonl`; it reports incoherence through the transition-order result.
 
 ### STRICT-006 — phase-plan projection and workflow consistency gate
 
@@ -103,4 +105,4 @@ For workflow-managed runs, KAH should validate phase-plan/checklist consistency 
 
 ## Next action
 
-After `STRICT-001` review acceptance, implement `STRICT-002` so KAH can distinguish ordinary runs from workflow-managed strict runs and fail final readiness when required workflow-instance evidence is absent or mismatched.
+Keep STRICT-006 as the next KAH-owned projection slice. Do not mutate upstream KAS docs from this KAH lane.

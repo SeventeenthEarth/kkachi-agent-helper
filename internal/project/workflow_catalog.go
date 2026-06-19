@@ -656,6 +656,14 @@ func CheckWorkflowInstanceCompleteness(root Root, runID string) (WorkflowInstanc
 		result.Diagnostics = []WorkflowDiagnostic{{Code: "workflow_instance_invalid", Message: "workflow instance is invalid", Field: "workflow_instance", Expected: "valid workflow-instance.json", Actual: err.Error(), Path: path.Relative}}
 		return result, nil
 	}
+	if instance.RunID != resolved {
+		result.Status = WorkflowCatalogStatusFail
+		result.OK = false
+		result.Reason = "workflow_instance_run_mismatch"
+		result.ReasonCodes = []string{"workflow_instance_run_mismatch"}
+		result.Diagnostics = []WorkflowDiagnostic{{Code: "workflow_instance_run_mismatch", Message: "workflow instance run_id does not match the selected run", Field: "run_id", Expected: resolved, Actual: instance.RunID, Path: path.Relative}}
+		return result, nil
+	}
 	result.WorkflowID = instance.WorkflowID
 	result.SourcePath = instance.SourcePath
 	result.Revision = instance.Revision

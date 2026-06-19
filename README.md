@@ -108,7 +108,7 @@ kkachi-agent-helper --help
 kkachi-agent-helper [--json] <command>
 ```
 
-`capabilities --json` is the stable machine-readable command-surface report for KHS activation checks. It includes helper build info, the embedded project schema version, supported command groups, compatibility flags such as artifact mutation, phase-plan support, approval records, read-only workflow graph support, workflow graph init/apply/export/diagnostics support, explicit no-direct-YAML-fallback graph support, configurable feedback-intake graph support, task-DAG schema validation, workflow instance state, workflow catalog diagnostics, workflow catalog proposal/apply support, workflow final-gate integration, KAS node-contract registry evidence, token-economy evidence gate support, and explicit omitted surfaces such as the removed `install` command.
+`capabilities --json` is the stable machine-readable command-surface report for KHS activation checks. It includes helper build info, the embedded project schema version, supported command groups, compatibility flags such as artifact mutation, phase-plan support, approval records, read-only workflow graph support, workflow graph init/apply/export/diagnostics support, explicit no-direct-YAML-fallback graph support, configurable feedback-intake graph support, task-DAG schema validation, workflow instance state, workflow catalog diagnostics, workflow catalog proposal/apply support, workflow final-gate integration, KAS node-contract registry evidence, strict workflow transition ledger/order verification, token-economy evidence gate support, and explicit omitted surfaces such as the removed `install` command.
 
 Help is project-independent and exits `0`. Use `kkachi-agent-helper <command> --help`, supported subcommand topics such as `kkachi-agent-helper project init --help` and `kkachi-agent-helper run create --help`, or `kkachi-agent-helper help <command> [subcommand]` for required arguments, options, and JSON behavior. Implemented command groups have group help pages, including `schema`, `event`, `lock`, `phase-plan`, `approval`, and `graph`. `--json` with help emits structured help JSON; compatibility automation should still prefer `capabilities --json`.
 
@@ -241,6 +241,8 @@ kkachi-agent-helper diagnostics export [--run <run_id>] [--output <repo-relative
 ```
 
 Diagnostics bundles include top-level `graph_compatibility` evidence with graph support status, `.kkachi-workflow.yaml` validation state, nested `feedback_intake` status/effective bounds/repair issues, forbidden fallback sources, and `no_direct_yaml_fallback: true`. Missing or invalid graph state is reported inside the support-safe bundle so KHS can fail closed when graph support is required; diagnostics export itself still succeeds unless the export path or run selection is invalid.
+
+Diagnostics bundles for runs with workflow instances include `workflow_transition_order` evidence. The result reports whether `.kkachi/runs/<run_id>/workflow-instance.json` is coherently backed by `.kkachi/events.jsonl` transition events and uses bounded diagnostics for malformed payloads, unknown nodes, workflow mismatches, revision gaps/stale revisions, dependency-order violations, complete-without-start, succeeded-node restart, and instance/event mismatches.
 
 ## KHS/KAH compatibility contract
 

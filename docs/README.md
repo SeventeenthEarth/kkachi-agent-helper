@@ -56,7 +56,7 @@ This directory is the project archive for `kkachi-agent-helper` docs. It separat
 - Token-economy / English-output KAH evidence-gate planning lives in `docs/sot/token-economy-evidence-gates.md`; `token-001` and `token-002` deterministic evidence validation are implemented, reviewed, and accepted for commit-readiness pending separate 주군 commit/install approval.
 - Multi-Agent Review evidence-gate behavior lives in `docs/sot/multi-agent-review-evidence-gates.md`; `MAREV-001` recorded the planning SOT and `MAREV-002` implements source-side canonical `multi-agent-review/status.json`, `multi-agent-review` gate, schema validation/export, and final-gate integration when MAR is required.
 - POLPR helper companion planning lives in `docs/sot/policy-promotion-helper-evidence.md`; `POLPR-002` is KAH docs/SOT registration only under the shared cross-repo numbering, and later KAH slices remain limited to deterministic evidence/default phase-plan/docs/test support for KAS-owned policy.
-- STRICT helper companion planning lives in `docs/sot/strict-workflow-enforcement.md`; KAH-owned `STRICT-002` has source-side implementation in review for workflow-managed final-gate markers, while `STRICT-004` and `STRICT-006` remain planned deterministic helper slices for node claim ledger/order verification and phase-plan projection consistency after KAS selects the workflow.
+- STRICT helper companion planning lives in `docs/sot/strict-workflow-enforcement.md`; KAH-owned `STRICT-002` is completed in KAH commit `97acd29`, KAS `STRICT-003` is completed in KAS commit `196d8d0`, and KAH `STRICT-004` is implemented source-side for node claim ledger/order verification pending only separate install/release/push/live activation approvals. `STRICT-006` remains the planned deterministic helper slice for phase-plan projection consistency after KAS dispatch evidence is available.
 
 ## Stale/conflict markers
 
@@ -67,7 +67,7 @@ This directory is the project archive for `kkachi-agent-helper` docs. It separat
 ## Open questions
 
 - The `.kkachi-workflow.yaml` schema is implemented for init/validation/explanation/diff/proposal/apply records and graph compatibility diagnostics with stable reason codes; export is implemented as non-authoritative generated artifacts only.
-- Strict workflow order enforcement is planned under `docs/sot/strict-workflow-enforcement.md`; the current SOT registers KAH companion tasks but does not by itself claim implemented strict runtime behavior beyond the existing DAGSM baseline.
+- Strict workflow order enforcement is implemented source-side through `STRICT-004` under `docs/sot/strict-workflow-enforcement.md`; effective installed/runtime behavior still depends on the committed build being installed or activated through a separate approval path.
 - The real command name is `kkachi-agent-helper graph`; alias policy for `kah graph` remains unimplemented and current binary evidence must be checked before use.
 - Generated graph exports are implemented as non-authoritative artifacts; future graph slices should not promote export output into graph authority.
 
