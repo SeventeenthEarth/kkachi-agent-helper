@@ -8,6 +8,7 @@ sot_docs:
   - "docs/sot/task-dag-state-machine.md"
   - "docs/sot/token-economy-evidence-gates.md"
   - "docs/sot/policy-promotion-helper-evidence.md"
+  - "docs/sot/strict-workflow-enforcement.md"
 adr_dir: "docs/sot"
 todo_dir: "docs"
 spec_dir: "docs"

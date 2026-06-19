@@ -6,7 +6,7 @@ Confirming role: Responsible approver / governance evidence record
 Status: docs index; workflow graph init/validation/explanation/diff/proposal/apply/export, graph compatibility reason-code diagnostics, approval-gated complete-candidate repair substrate, and phase-plan feedback-bound validation evidence present
 Authority level: reading guide for KAH docs; graph export records are implemented evidence and generated-artifact boundaries
 Scope: `kkachi-agent-helper/docs` only
-Related docs: `docs/specs.md`, `docs/roadmap.md`, `docs/compatibility.md`, `docs/sot/graph-workflow-sync-diagnostics-and-repair.md`, `docs/sot/task-dag-state-machine.md`, `docs/sot/token-economy-evidence-gates.md`, `docs/sot/multi-agent-review-evidence-gates.md`, `docs/sot/policy-promotion-helper-evidence.md`
+Related docs: `docs/specs.md`, `docs/roadmap.md`, `docs/compatibility.md`, `docs/sot/graph-workflow-sync-diagnostics-and-repair.md`, `docs/sot/task-dag-state-machine.md`, `docs/sot/token-economy-evidence-gates.md`, `docs/sot/multi-agent-review-evidence-gates.md`, `docs/sot/policy-promotion-helper-evidence.md`, `docs/sot/strict-workflow-enforcement.md`
 Evidence/source paths:
 - Governance evidence record in kanban task `t_2fb00394`
 
@@ -26,6 +26,7 @@ This directory is the project archive for `kkachi-agent-helper` docs. It separat
 | `docs/sot/token-economy-evidence-gates.md` | KAH-side planning SOT for future token-economy / English-output evidence gates | KAH deterministic helper layer with KAS workstream dependency | Planning authority for future KAH gate work; not implemented behavior by itself |
 | `docs/sot/multi-agent-review-evidence-gates.md` | KAH-side SOT for MAR evidence capture and deterministic gate/schema behavior | KAH deterministic helper layer with KAS MAR dependency | Source of truth for MAR artifact layout, deterministic validation targets, and final-gate posture; `MAREV-002` implements source-side helper artifact/gate/schema support while KAS remains policy owner |
 | `docs/sot/policy-promotion-helper-evidence.md` | KAH-side POLPR planning SOT | KAH deterministic helper layer with KAS POLPR dependency | Planning authority for KAH companion docs, default phase-plan support, evidence fields, diagnostics, and tests needed by KAS POLPR without moving workflow/review policy ownership into KAH |
+| `docs/sot/strict-workflow-enforcement.md` | KAH-side STRICT companion SOT | KAH deterministic helper layer with KAS STRICT dependency | Planning authority for workflow-managed strict final-gate markers, node claim ledger/order verification, and workflow-to-phase projection consistency; KAH does not choose task class, workflow, agent, prompt, or backend |
 | `docs/release-notes-template.md` | Release note template | KAH release owner | Template only |
 | `docs/.omx/` if present | Tool/runtime/agent state | Tooling | Non-authoritative; never a KAH docs SOT |
 
@@ -55,6 +56,7 @@ This directory is the project archive for `kkachi-agent-helper` docs. It separat
 - Token-economy / English-output KAH evidence-gate planning lives in `docs/sot/token-economy-evidence-gates.md`; `token-001` and `token-002` deterministic evidence validation are implemented, reviewed, and accepted for commit-readiness pending separate 주군 commit/install approval.
 - Multi-Agent Review evidence-gate behavior lives in `docs/sot/multi-agent-review-evidence-gates.md`; `MAREV-001` recorded the planning SOT and `MAREV-002` implements source-side canonical `multi-agent-review/status.json`, `multi-agent-review` gate, schema validation/export, and final-gate integration when MAR is required.
 - POLPR helper companion planning lives in `docs/sot/policy-promotion-helper-evidence.md`; `POLPR-002` is KAH docs/SOT registration only under the shared cross-repo numbering, and later KAH slices remain limited to deterministic evidence/default phase-plan/docs/test support for KAS-owned policy.
+- STRICT helper companion planning lives in `docs/sot/strict-workflow-enforcement.md`; KAH-owned `STRICT-002`, `STRICT-004`, and `STRICT-006` are planned deterministic helper slices for workflow-managed final-gate markers, node claim ledger/order verification, and phase-plan projection consistency after KAS selects the workflow.
 
 ## Stale/conflict markers
 
@@ -65,9 +67,10 @@ This directory is the project archive for `kkachi-agent-helper` docs. It separat
 ## Open questions
 
 - The `.kkachi-workflow.yaml` schema is implemented for init/validation/explanation/diff/proposal/apply records and graph compatibility diagnostics with stable reason codes; export is implemented as non-authoritative generated artifacts only.
+- Strict workflow order enforcement is planned under `docs/sot/strict-workflow-enforcement.md`; the current SOT registers KAH companion tasks but does not by itself claim implemented strict runtime behavior beyond the existing DAGSM baseline.
 - The real command name is `kkachi-agent-helper graph`; alias policy for `kah graph` remains unimplemented and current binary evidence must be checked before use.
 - Generated graph exports are implemented as non-authoritative artifacts; future graph slices should not promote export output into graph authority.
 
 ## Next record action
 
-Use future `docs/roadmap.md` graph slices for separately scoped release or KHS consumption work. After `grsync-002`, remaining graph workflow sync expansions stay bounded by `docs/sot/graph-workflow-sync-diagnostics-and-repair.md`; do not widen graph export into generated-artifact authority, KAS compatibility registry behavior, automatic apply/update behavior, or alias behavior.
+Use future `docs/roadmap.md` graph and STRICT slices for separately scoped release or KHS/KAS consumption work. After `grsync-002`, remaining graph workflow sync expansions stay bounded by `docs/sot/graph-workflow-sync-diagnostics-and-repair.md`; STRICT work stays bounded by `docs/sot/strict-workflow-enforcement.md` and must not widen KAH into task classification, workflow selection, automatic rollback, or alias behavior.

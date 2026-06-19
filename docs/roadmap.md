@@ -28,6 +28,7 @@ Status values: `Planned`, `In Progress`, `Blocked`, `Completed`, `Deferred`.
 | 10 | `DAGSM` | KAH supplies deterministic task-DAG validation, workflow instance state, node FSM/order enforcement, ready-node calculation, multi-DAG catalog diagnostics, final gates, effective capability evidence, and run-local ephemeral workflow support boundaries for KAS WFLOW-triggered workflows. |
 | 11 | `marev` | KAH records and, if later implemented, validates deterministic evidence for KAS Multi-Agent Review without choosing reviewers or adjudicating findings. |
 | 12 | `POLPR` | KAH aligns deterministic helper evidence, default phase-plan support, and docs/test surfaces needed by KAS POLPR while leaving workflow policy ownership in KAS. |
+| 13 | `STRICT` | KAH hardens workflow-managed runs with strict final-gate markers, node claim ledger/order verification, and phase-plan projection consistency for KAS-selected workflows. |
 
 ## Active roadmap
 
@@ -170,6 +171,22 @@ GRSYNC deferrals unless separately approved: KAS compatibility registry, KAS doc
 | DAGSM-006 | Add workflow catalog proposal/apply substrate for explicit promotion | Completed | If WFLOW-009 needs approved project-local persistence, add KAH-owned workflow catalog proposal/apply mechanics with base checksum, drift check, backup/recovery, approval evidence, and audit events. | Completed under KAH run `run-20260616T161807Z-9e005169e954` with implementation, enhanced tests, docs, Red/Orange/Gray review, official KAB GLM Octo review, post-Octo triage, final verification, KAH final gate, and local commit `[DAGSM-006] Add workflow catalog promotion`. `workflow catalog propose` records no-write KAS WFLOW-009 proposal evidence with canonical proposal/source approval hash binding, target/base/candidate checksums, validation summaries, and audit event; `workflow catalog apply` requires `--approval` plus `--proposal-hash sha256:<64hex>`, fails closed before backup/write/audit on hash/base/candidate/path/schema/coherence problems, creates backups, writes project-local workflow catalog targets, and appends `workflow_catalog.applied`. KAH does not decide promotion policy or workflow semantic preference; KAS supplies candidate content and operator approval. Effective readiness requires a binary advertising `workflow_catalog_proposal_apply=true`; install/release/runtime activation remain evidence-gated. |
 
 DAGSM deferrals unless separately approved: KAS selector implementation, KAS task classification, KAS bundle routing, KAS custom trigger generation, KAB backend execution, Kanban assignment, automatic KAH/KAS update, automatic graph/catalog apply, automatic run-local-to-project-local persistence, dynamic node creation, retry/rollback automation, fallback agent selection, webhook daemons, and Hermes profile/provider/gateway/auth/token/model mutation.
+
+### EPIC: STRICT — strict workflow order enforcement helper support
+
+> Goal: provide the deterministic KAH enforcement layer for KAS-selected strict workflows: workflow-managed run markers, strict final-gate absence/mismatch failures, node claim/start/complete ledger verification, and workflow-instance-to-phase-plan consistency gates.
+>
+> Source of truth: `docs/sot/strict-workflow-enforcement.md`. Upstream KAS SOT: `kkachi-hermes-skills/docs/sot/strict-workflow-execution-contract.md`. Dependency baseline: KAH `DAGSM-001..006` and KAS `WFLOW-007..009`.
+>
+> Shared cross-repo order: `STRICT-001 -> STRICT-002 -> STRICT-003 -> STRICT-004 -> STRICT-005 -> STRICT-006 -> STRICT-007`. KAH owns `STRICT-002`, `STRICT-004`, and `STRICT-006`; KAS owns `STRICT-001`, `STRICT-003`, `STRICT-005`, and `STRICT-007`.
+
+| Task ID | Title | Status | Work guide | Notes |
+|---|---|---|---|---|
+| STRICT-002 | Workflow-managed run marker and strict final-gate mode | Planned | Add deterministic marker/run-metadata support for workflow-managed strict runs; final gate fails when workflow-managed runs lack a workflow instance, carry a selected workflow mismatch, or have incomplete/missing required node evidence. Non-workflow runs retain not-applicable behavior. | Depends on KAS `STRICT-001`; no KAS classification or workflow selection logic belongs in KAH. Requires focused final-gate/unit/e2e fixtures, docs/compatibility updates if behavior changes release-facing support, review gates, and commit approval. |
+| STRICT-004 | Node claim ledger and transition-order verification | Planned | Harden `workflow node start/complete/block` events so KAH can reconstruct strict order; start succeeds only for ready pending nodes at the expected revision, completion succeeds only for running nodes with required evidence, and final/diagnostics verify transitions against the selected DAG. | Depends on KAS `STRICT-003`; KAH rejects invalid transitions rather than appending then rolling back. Requires stale/non-ready/no-start/unknown-node fixtures and final verification. |
+| STRICT-006 | Phase-plan projection and workflow consistency gate | Planned | For workflow-managed runs, validate phase-plan/checklist evidence as projection from the workflow instance/transition ledger; fail when phases claim completion ahead of workflow state or when selected-workflow omissions lack not-applicable/skipped reasons. | Depends on KAS `STRICT-005`; docs-only/light workflows must not be forced through development-only phases. Requires projection fixtures, final-gate coverage, docs updates, review gates, and commit approval. |
+
+STRICT deferrals unless separately approved: KAH task classification, workflow selection, agent assignment, prompt/backend selection, review adjudication, realtime watcher alerts, automatic rollback/checkpoint behavior, provider/profile/auth/token/gateway/model mutation, install/release/push, or warning-only strict mode.
 
 ### EPIC: marev — Multi-Agent Review evidence gates
 
