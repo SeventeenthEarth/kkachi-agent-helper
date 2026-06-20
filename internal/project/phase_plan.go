@@ -265,7 +265,7 @@ func ValidatePhasePlan(root Root, options PhasePlanValidationOptions) (PhasePlan
 	}
 	policy := resolvePhasePlanFeedbackPolicy(root, plan.Path)
 	requiredPhaseIDs := phasePlanRequiredPhaseIDs(root)
-	checks := validatePhasePlanChecksWithApprovals(root, plan, options.Final, &policy, requiredPhaseIDs)
+	checks := validatePhasePlanChecksWithApprovals(root, metadata, plan, options.Final, &policy, requiredPhaseIDs)
 	status := PhasePlanStatusPass
 	for _, check := range checks {
 		if check.Status == PhasePlanStatusFail {
@@ -423,8 +423,9 @@ func validatePhasePlanChecks(plan PhasePlan, final bool, feedbackPolicy *phasePl
 	return checks
 }
 
-func validatePhasePlanChecksWithApprovals(root Root, plan PhasePlan, final bool, feedbackPolicy *phasePlanFeedbackPolicy, requiredPhaseIDs []string) []PhasePlanCheck {
+func validatePhasePlanChecksWithApprovals(root Root, metadata RunMetadata, plan PhasePlan, final bool, feedbackPolicy *phasePlanFeedbackPolicy, requiredPhaseIDs []string) []PhasePlanCheck {
 	checks := validatePhasePlanChecks(plan, final, feedbackPolicy, requiredPhaseIDs)
+	checks = append(checks, validateWorkflowPhaseProjection(root, metadata, plan)...)
 	if final {
 		checks = append(checks, validateFinalApprovalState(root, plan)...)
 	}

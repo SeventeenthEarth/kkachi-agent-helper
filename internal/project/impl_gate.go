@@ -100,6 +100,7 @@ func checkDocsUpdateArtifact(root Root, runID string) GateCheck {
 
 func checkFinalGate(root Root, metadata RunMetadata, _ string) (GateCheckResult, error) {
 	checks := []GateCheck{checkFinalReportArtifact(root, metadata.RunID), checkWorkflowInstanceCompletenessGate(root, metadata), checkWorkflowTransitionOrderGate(root, metadata)}
+	checks = append(checks, workflowPhaseProjectionGateChecks(root, metadata)...)
 
 	requiredGates := []string{GateIntake, GateSOT, GateRoadmap, GatePlan, GateImplementation, GateReview, GateVerification, GateDocs}
 	if backendGateRequired(metadata) {

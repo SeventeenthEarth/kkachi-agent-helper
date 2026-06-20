@@ -3,7 +3,7 @@
 Date: 2026-06-19
 Owner: KAH deterministic helper layer
 Confirming role: Responsible approver / KAS Blue command with Red, Orange, and project-Gray review evidence accepted for STRICT companion slices
-Status: accepted companion SOT for KAH-owned `STRICT` tasks; `STRICT-002` and `STRICT-004` source-side helper slices are implemented, while install/release/push/live activation remain separate approvals
+Status: accepted companion SOT for KAH-owned `STRICT` tasks; `STRICT-002`, `STRICT-004`, and `STRICT-006` source-side helper slices are implemented, while install/release/push/live activation remain separate approvals
 Authority level: KAH-side planning authority for strict workflow-managed run markers, node transition ledger/order verification, and workflow projection gates
 Scope: `kkachi-agent-helper` docs, schemas, command JSON contracts, deterministic state transitions, diagnostics, gates, and tests. No KAS task classification, workflow selection, node owner/prompt/backend policy, KAB runtime activation, profile/provider/gateway/auth/token/model mutation, install, release, push, or automatic rollback is authorized by this document.
 Upstream KAS SOT: `kkachi-hermes-skills/docs/sot/strict-workflow-execution-contract.md`
@@ -11,6 +11,7 @@ Related docs: `docs/sot/task-dag-state-machine.md`, `docs/compatibility.md`, `do
 Evidence/source paths:
 - 주군 direction in 17번째 지구 Discord `#kas` thread `1517399560626901034` on 2026-06-19: strict order should come from KAS/KAH task classification and selected workflow execution, not realtime warnings; KAH should supply/validate next node ids and reject out-of-order attempts.
 - Existing KAH DAGSM substrate: task-DAG validation, workflow instance state, node FSM, ready-node calculation, required evidence checks, audit events, catalog diagnostics, and final gate integration are already the baseline that `STRICT` hardens.
+- STRICT-006 source-side implementation evidence: KAH run `run-20260619T204719Z-278fa6caea04`, `impl-log.md`, `test-log.md`, `docs-update.md`, `feedback-1.md`, and capability evidence `workflow_phase_projection_validation=true` from `/tmp/kah-source-bin/kkachi-agent-helper capabilities --json`; install/release/push/effective-runtime activation remain separate evidence gates.
 Epic: `STRICT` — strict workflow execution and order enforcement
 
 ## Purpose
@@ -36,8 +37,8 @@ Epic: `STRICT` — strict workflow execution and order enforcement
 | `STRICT-002` | KAH | Workflow-managed run marker and strict final-gate mode | Completed | Completed in KAH commit `97acd29`; KAH supports optional deterministic run metadata markers and final-gate fail-closed behavior for missing/mismatched workflow-managed state. |
 | `STRICT-003` | KAS | Classification route/trigger mandatory orchestration | Completed | Completed in KAS commit `196d8d0`; KAH consumes the resulting selected workflow evidence only. |
 | `STRICT-004` | KAH | Node claim ledger and transition-order verification | Completed | Completed source-side in run `run-20260619T123948Z-2e44f34ec8d7`; KAH adds strict transition ledger payloads, transition-order verification, final-gate check `workflow_transition_order`, diagnostics evidence, capability flags, and fail-closed invalid/mismatched instance handling. |
-| `STRICT-005` | KAS | Dispatch packet expected-revision and node execution guard | Planned | Upstream KAS dispatch packet and runner policy; KAH validates expected revisions supplied to node transitions. |
-| `STRICT-006` | KAH | Phase-plan projection and workflow consistency gate | Planned | Validate workflow-managed phase-plan/checklist projection against KAH workflow instance and transition ledger. |
+| `STRICT-005` | KAS | Dispatch packet expected-revision and node execution guard | Completed source-side | Upstream KAS dispatch packet and runner policy is complete source-side in KAS commit `cb16cae`; installed/effective-runtime claims remain separate verification. KAH validates expected revisions supplied to node transitions. |
+| `STRICT-006` | KAH | Phase-plan projection and workflow consistency gate | Completed | Completed source-side in run `run-20260619T204719Z-278fa6caea04`; KAH validates workflow-managed phase-plan/checklist projection against KAH workflow instance and transition ledger through phase-plan validation plus final-gate check `workflow_phase_projection`; install/release/push/runtime activation remain separate approvals. |
 | `STRICT-007` | KAS | Strict orchestration skill/templates/e2e adoption | Planned | Upstream KAS skill/template adoption; KAH supplies deterministic test and gate surfaces only as implemented. |
 
 ## Planned KAH behavior by task
@@ -87,6 +88,8 @@ For workflow-managed runs, KAH should validate phase-plan/checklist consistency 
 - docs-only/light workflows should not fail because development-only phases are absent;
 - phase-plan completion must not override an incomplete KAH workflow instance.
 
+KAH advertises this source-side support with `workflow_phase_projection_validation=true` in `capabilities --json`. The validator fails closed when a completed phase maps to a missing, pending, running, blocked, or otherwise non-succeeded workflow node; when completed phase evidence is absent or not bound to the node's recorded evidence or required outputs; when required output/evidence files are missing; or when workflow-managed run identity/source metadata mismatches the workflow instance. Omitted phases are accepted only as `skipped`/`not_applicable` rows with reasons or as phases outside the selected workflow projection contract.
+
 ## Deferrals and non-goals
 
 - No KAH task classification, workflow selection, agent assignment, prompt authoring, backend selection, or review adjudication.
@@ -105,4 +108,4 @@ For workflow-managed runs, KAH should validate phase-plan/checklist consistency 
 
 ## Next action
 
-Keep STRICT-006 as the next KAH-owned projection slice. Do not mutate upstream KAS docs from this KAH lane.
+Keep STRICT-007 as the next upstream KAS-owned adoption slice after KAH STRICT-006 source-side evidence is reviewed and committed. Do not mutate upstream KAS docs from this KAH lane.

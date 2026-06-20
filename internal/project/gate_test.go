@@ -1323,6 +1323,9 @@ func TestFinalGateWorkflowManagedRunValidatesWorkflowIdentity(t *testing.T) {
 	if _, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(29)}); err != nil {
 		t.Fatalf("InitArtifacts() error = %v", err)
 	}
+	if _, err := InitPhasePlan(root, PhasePlanInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(29)}); err != nil {
+		t.Fatalf("InitPhasePlan() error = %v", err)
+	}
 	passAllPriorGates(t, root, repo, created.Metadata.RunID)
 	writeMarkdownArtifact(t, repo, created.Metadata.RunID, "final-report.md", "Status: complete\nVerdict: pass\n")
 	writeWorkflowFixture(t, repo, `schema_version: task-dag/v1

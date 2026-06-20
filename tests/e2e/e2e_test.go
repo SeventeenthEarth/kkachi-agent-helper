@@ -1242,6 +1242,7 @@ func TestReleasePackaging(t *testing.T) {
 	requireContains(t, string(out), `"workflow_graph_diagnostics":true`, "capabilities graph diagnostics flag")
 	requireContains(t, string(out), `"workflow_graph_no_direct_yaml_fallback":true`, "capabilities graph no fallback flag")
 	requireContains(t, string(out), `"workflow_graph_configurable_feedback_intake":true`, "capabilities configurable feedback intake flag")
+	requireContains(t, string(out), `"workflow_phase_projection_validation":true`, "capabilities workflow phase projection flag")
 	requireContains(t, string(out), `"name":"install"`, "capabilities omitted install")
 	help := exec.Command(artifact, "run", "create", "--help")
 	out, err = help.Output()
