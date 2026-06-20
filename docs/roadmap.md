@@ -29,6 +29,7 @@ Status values: `Planned`, `In Progress`, `Blocked`, `Completed`, `Deferred`.
 | 11 | `marev` | KAH records and, if later implemented, validates deterministic evidence for KAS Multi-Agent Review without choosing reviewers or adjudicating findings. |
 | 12 | `POLPR` | KAH aligns deterministic helper evidence, default phase-plan support, and docs/test surfaces needed by KAS POLPR while leaving workflow policy ownership in KAS. |
 | 13 | `STRICT` | KAH hardens workflow-managed runs with strict final-gate markers, node claim ledger/order verification, and phase-plan projection consistency for KAS-selected workflows. |
+| 14 | `TOLMR` | KAH exposes read-only project/helper facts so KAS can generate and validate `.kkachi/toolchain.yaml` local toolchain state without moving policy ownership into KAH. |
 
 ## Active roadmap
 
@@ -187,6 +188,23 @@ DAGSM deferrals unless separately approved: KAS selector implementation, KAS tas
 | STRICT-006 | Phase-plan projection and workflow consistency gate | Completed | For workflow-managed runs, validate phase-plan/checklist evidence as projection from the workflow instance/transition ledger; fail when phases claim completion ahead of workflow state or when selected-workflow omissions lack not-applicable/skipped reasons. | Completed source-side in run `run-20260619T204719Z-278fa6caea04`; adds `workflow_phase_projection` phase-plan/final-gate checks plus `workflow_phase_projection_validation=true`; covers fail-closed non-succeeded nodes, omitted phase semantics, evidence binding, required output/evidence file presence, workflow identity/source mismatch, transition-ledger validity, duplicate phase-to-node projection, and final-gate integration. Install/release/push/runtime activation and commit remain separate approvals. |
 
 STRICT deferrals unless separately approved: KAH task classification, workflow selection, agent assignment, prompt/backend selection, review adjudication, realtime watcher alerts, automatic rollback/checkpoint behavior, provider/profile/auth/token/gateway/model mutation, install/release/push, or warning-only strict mode.
+
+### EPIC: TOLMR — toolchain local metadata registry helper probe
+
+> Goal: provide the deterministic KAH fact-probe substrate that KAS TOLMR uses to generate and validate ignored project-local `.kkachi/toolchain.yaml`, while preserving KAS ownership of schema, generation, Stage/MAR policy, KAS baselines, and legacy migration.
+>
+> Source of truth: `docs/sot/toolchain-probe-contract.md`. Upstream KAS SOT: `kkachi-hermes-skills/docs/sot/toolchain-local-metadata-registry.md`.
+>
+> Cross-repo task rule: TOLMR uses one logical task, one acceptance/evidence package, and physical repo-specific commits/PRs. KAH still requires its own tests, enhance-test, AI-slop cleanup/optimize, docs-impact checks, and repo-local verification.
+
+| Task ID | Title | Status | Work guide | Notes |
+|---|---|---|---|---|
+| TOLMR-001 | Register KAH toolchain probe contract | Completed | Add KAH companion SOT, roadmap row, docs index/map registration, and explicit no-policy/no-write boundaries for the KAS-consumed `project probe-toolchain --json` surface. | Completed as docs-only registration after docs readback, docs-map YAML parse in both repos, `git diff --check`, both repo `make test` gates, Red `t_7d0ba8c6` ACCEPT, Orange `t_54007ea3` ACCEPT, Gray `t_41a4dfb4` ACCEPT, and Blue synthesis. No helper command behavior, schema export, write path, KAS stage interpretation, MAR provider decision, KAB activation, release, install, push, or provider/auth/gateway/model mutation is authorized. |
+| TOLMR-002 | Implement read-only project toolchain probe | Planned | Implement `project probe-toolchain --json` or approved equivalent. It reports helper version/path, project root, `.kkachi/` presence, project initialization state, workflow graph presence, compact doctor status/reason codes when available, and no-write evidence. It must not create or update `.kkachi/`, events, graphs, schemas, locks, runs, or toolchain files. | KAH unit/CLI/e2e tests for initialized/uninitialized projects, no-write proof, safe-path behavior, stable JSON/reason codes, docs/specs/compatibility updates, enhance-test, AI-slop cleanup/optimize, and cross-repo KAS consumption smoke. |
+| TOLMR-003 | Support KAS legacy migration integration only if needed | Planned | No KAH behavior by default. Add helper facts only if KAS TOLMR-003 proves that legacy import, Stage/MAR integration, or conflict handling needs deterministic KAH state not already exposed by TOLMR-002. | Any added KAH behavior must remain read-only and fact-only. KAH must not import profile-skill state, choose stage, decide MAR coverage, or write `.kkachi/toolchain.yaml`. |
+| TOLMR-004 | Complete cross-repo rollout evidence | Planned | Run KAH-local gates and cross-repo smoke with KAS source consuming the KAH probe to generate and validate `.kkachi/toolchain.yaml`; update compatibility/release docs only after implementation evidence exists. | KAH local gate PASS, KAS/KAH integration PASS, repo-tagged MAR/Red/Orange/Gray findings, Blue synthesis, and 주군 commit approval before commit. |
+
+TOLMR deferrals unless separately approved: KAH-owned toolchain writes, KAS policy/stage/MAR/provider decisions, automatic KAS/KAH installation, KAB runtime activation, provider/auth/gateway/model mutation, warning-only degraded facts, release, push, or installed-runtime claims.
 
 ### EPIC: marev — Multi-Agent Review evidence gates
 
