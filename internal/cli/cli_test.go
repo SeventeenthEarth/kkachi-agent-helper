@@ -205,8 +205,9 @@ func TestHelpCommandsExitZeroWithoutProjectState(t *testing.T) {
 	}{
 		{name: "help", args: []string{"help"}, want: []string{"kkachi-agent-helper", "Usage:", "JSON behavior:"}},
 		{name: "global help", args: []string{"--help"}, want: []string{"kkachi-agent-helper", "capabilities", "--json"}},
-		{name: "project group", args: []string{"project", "--help"}, want: []string{"kkachi-agent-helper project", "init", "status", "doctor"}},
+		{name: "project group", args: []string{"project", "--help"}, want: []string{"kkachi-agent-helper project", "init", "status", "doctor", "probe-toolchain"}},
 		{name: "project init", args: []string{"project", "init", "--help"}, want: []string{"kkachi-agent-helper project init", "--project-name <name> (required)", "--force"}},
+		{name: "project probe toolchain", args: []string{"project", "probe-toolchain", "--help"}, want: []string{"kkachi-agent-helper project probe-toolchain", "--project-root <path>", "no-write"}},
 		{name: "run group", args: []string{"run", "--help"}, want: []string{"kkachi-agent-helper run", "create", "activate <run_id>"}},
 		{name: "run create", args: []string{"run", "create", "--help"}, want: []string{"kkachi-agent-helper run create", "--title <title> (required)", "--backend-evidence <auto|required|not_applicable>"}},
 		{name: "artifact group", args: []string{"artifact", "--help"}, want: []string{"kkachi-agent-helper artifact", "validate <run_id> [--gate intake]", "--gate intake"}},
@@ -628,6 +629,181 @@ func TestProjectStatusAndDoctorJSONOutput(t *testing.T) {
 	}
 	if doctor.Health != "ok" || doctor.Summary.Failed != 0 || doctor.Summary.Warnings != 0 || len(doctor.Checks) == 0 {
 		t.Fatalf("doctor = %#v, want healthy checks", doctor)
+	}
+}
+
+func TestProjectProbeToolchainAppearsInCapabilities(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runWithOptions([]string{"capabilities", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: t.TempDir()})
+
+	if exitCode != ExitOK {
+		t.Fatalf("exitCode = %d, want %d stderr=%s", exitCode, ExitOK, stderr.String())
+	}
+	var payload capabilitiesOutput
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v\n%s", err, stdout.String())
+	}
+	var projectGroup *capabilityCommandGroup
+	for i := range payload.CommandGroups {
+		if payload.CommandGroups[i].Name == "project" {
+			projectGroup = &payload.CommandGroups[i]
+			break
+		}
+	}
+	if projectGroup == nil || !slices.Contains(projectGroup.Subcommands, "probe-toolchain") {
+		t.Fatalf("project group = %#v, want probe-toolchain subcommand", projectGroup)
+	}
+}
+
+func TestProjectProbeToolchainJSONInitializedProject(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	exitCode := runWithOptions([]string{"project", "probe-toolchain", "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: filepath.Join(repo, "nested")})
+	if exitCode != ExitOK {
+		t.Fatalf("project probe-toolchain exit = %d stderr=%s stdout=%s", exitCode, stderr.String(), stdout.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	assertProbeCommon(t, payload, repo)
+	if got := payload["schema_version"]; got != "kah.toolchain_probe.v1" {
+		t.Fatalf("schema_version = %q, want kah.toolchain_probe.v1", got)
+	}
+	kah := payload["kah"].(map[string]any)
+	if kah["helper_command"] != testBuildInfo().Name || kah["version"] != testBuildInfo().Version || kah["binary_path"] == "" || kah["binary_path"] == "unknown" {
+		t.Fatalf("kah = %#v, want version and binary path facts", kah)
+	}
+	projectPayload := payload["project"].(map[string]any)
+	if projectPayload["kkachi_dir_present"] != true || projectPayload["project_initialized"] != true {
+		t.Fatalf("project = %#v, want initialized project facts", projectPayload)
+	}
+	doctor := payload["doctor"].(map[string]any)
+	if doctor["status"] != "PASS" {
+		t.Fatalf("doctor = %#v, want PASS", doctor)
+	}
+	if reasonCodes := doctor["reason_codes"].([]any); len(reasonCodes) != 0 {
+		t.Fatalf("reason_codes = %#v, want empty", reasonCodes)
+	}
+}
+
+func TestProjectProbeToolchainJSONInitializedProjectWithDoctorWarningKeepsInitializedSignal(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	writeCLILock(t, repo, project.ActiveRunLockName, project.LockMetadata{Version: project.LockVersion, LockName: project.ActiveRunLockName, OwnerPID: 999999, Hostname: "other-host", Command: "stale writer", CreatedAt: time.Now().UTC().Add(-31 * time.Minute).Format(time.RFC3339)})
+	before := snapshotTree(t, repo)
+
+	stdout.Reset()
+	stderr.Reset()
+	exitCode := runWithOptions([]string{"project", "probe-toolchain", "--json", "--project-root", repo}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: t.TempDir()})
+
+	if exitCode != ExitOK {
+		t.Fatalf("project probe-toolchain exit = %d stderr=%s stdout=%s", exitCode, stderr.String(), stdout.String())
+	}
+	after := snapshotTree(t, repo)
+	if !slices.Equal(before, after) {
+		t.Fatalf("tree changed after probe: before=%#v after=%#v", before, after)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	assertProbeCommon(t, payload, repo)
+	assertProbeHasNoProviderAuthSettings(t, payload)
+	projectPayload := payload["project"].(map[string]any)
+	if projectPayload["project_initialized"] != true {
+		t.Fatalf("project = %#v, want initialized signal despite doctor warning", projectPayload)
+	}
+	doctor := payload["doctor"].(map[string]any)
+	if doctor["status"] != "WARN" || !containsReasonCode(doctor["reason_codes"].([]any), "locks_warn") {
+		t.Fatalf("doctor = %#v, want WARN locks_warn", doctor)
+	}
+}
+
+func TestProjectProbeToolchainJSONUninitializedProjectIsNoWrite(t *testing.T) {
+	repo := t.TempDir()
+	before := snapshotTree(t, repo)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runWithOptions([]string{"project", "probe-toolchain", "--project-root", repo, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: t.TempDir()})
+
+	if exitCode != ExitOK {
+		t.Fatalf("project probe-toolchain exit = %d stderr=%s stdout=%s", exitCode, stderr.String(), stdout.String())
+	}
+	after := snapshotTree(t, repo)
+	if !slices.Equal(before, after) {
+		t.Fatalf("tree changed after probe: before=%#v after=%#v", before, after)
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".kkachi")); !os.IsNotExist(err) {
+		t.Fatalf(".kkachi stat = %v, want absent", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	assertProbeCommon(t, payload, repo)
+	projectPayload := payload["project"].(map[string]any)
+	if projectPayload["kkachi_dir_present"] != false || projectPayload["project_initialized"] != false || projectPayload["workflow_graph_present"] != false {
+		t.Fatalf("project = %#v, want uninitialized project facts", projectPayload)
+	}
+	doctor := payload["doctor"].(map[string]any)
+	if doctor["status"] != "FAIL" {
+		t.Fatalf("doctor = %#v, want FAIL", doctor)
+	}
+	if !containsReasonCode(doctor["reason_codes"].([]any), "kkachi_dir_missing") {
+		t.Fatalf("doctor = %#v, want kkachi_dir_missing reason code", doctor)
+	}
+}
+
+func TestProjectProbeToolchainRejectsInvalidProjectRoot(t *testing.T) {
+	repo := tempGitRepo(t)
+	missing := filepath.Join(repo, "missing")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runWithOptions([]string{"project", "probe-toolchain", "--project-root", missing, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+
+	if exitCode != ExitUsage {
+		t.Fatalf("project probe-toolchain exit = %d, want %d stdout=%s stderr=%s", exitCode, ExitUsage, stdout.String(), stderr.String())
+	}
+	env := decodeErrorEnvelope(t, stderr.Bytes())
+	if env.Error.Code != "invalid_project_root" || env.Error.Field != "project_root" {
+		t.Fatalf("error = %#v, want invalid project root", env.Error)
+	}
+}
+
+func TestProjectProbeToolchainProjectRootOptionUsesTargetRoot(t *testing.T) {
+	repo := tempGitRepo(t)
+	target := t.TempDir()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runWithOptions([]string{"project", "probe-toolchain", "--project-root", target, "--json"}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo})
+
+	if exitCode != ExitOK {
+		t.Fatalf("project probe-toolchain exit = %d stderr=%s stdout=%s", exitCode, stderr.String(), stdout.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	projectPayload := payload["project"].(map[string]any)
+	if projectPayload["root"] != canonicalCLIPath(t, target) {
+		t.Fatalf("project root = %q, want target root %q", projectPayload["root"], canonicalCLIPath(t, target))
 	}
 }
 
@@ -1493,7 +1669,7 @@ func testBuildInfo() BuildInfo {
 func assertCapabilityCommandGroups(t *testing.T, groups []capabilityCommandGroup) {
 	t.Helper()
 	want := []capabilityCommandGroup{
-		{Name: "project", Status: capabilityStatusSupported, Subcommands: []string{"init", "status", "doctor"}},
+		{Name: "project", Status: capabilityStatusSupported, Subcommands: []string{"init", "status", "doctor", "probe-toolchain"}},
 		{Name: "run", Status: capabilityStatusSupported, Subcommands: []string{"create", "activate", "close", "abort", "list", "show"}},
 		{Name: "artifact", Status: capabilityStatusSupported, Subcommands: []string{"init", "list", "validate", "write", "append", "set-status"}},
 		{Name: "gate", Status: capabilityStatusSupported, Subcommands: []string{"check", "final"}},
@@ -1644,6 +1820,112 @@ func readCLIText(t *testing.T, path string) string {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return string(data)
+}
+
+func assertProbeCommon(t *testing.T, payload map[string]any, repo string) {
+	t.Helper()
+
+	wantKeys := []string{"diagnostics", "doctor", "kah", "no_write", "ok", "project", "schema_version"}
+	if len(payload) != len(wantKeys) {
+		t.Fatalf("payload keys = %#v, want exactly %#v", mapKeys(payload), wantKeys)
+	}
+	for _, key := range wantKeys {
+		if _, ok := payload[key]; !ok {
+			t.Fatalf("payload keys = %#v, missing %q", mapKeys(payload), key)
+		}
+	}
+	if payload["ok"] != true {
+		t.Fatalf("ok = %#v, want true", payload["ok"])
+	}
+	noWrite := payload["no_write"].(map[string]any)
+	if noWrite["guaranteed"] != true || noWrite["write_count"] != float64(0) {
+		t.Fatalf("no_write = %#v, want guaranteed zero writes", noWrite)
+	}
+	projectPayload := payload["project"].(map[string]any)
+	wantRoot := canonicalCLIPath(t, repo)
+	if projectPayload["root"] != wantRoot || projectPayload["kkachi_dir"] != filepath.Join(wantRoot, ".kkachi") {
+		t.Fatalf("project = %#v, want canonical root and .kkachi path", projectPayload)
+	}
+	if diagnostics := payload["diagnostics"].([]any); len(diagnostics) != 0 {
+		t.Fatalf("diagnostics = %#v, want empty diagnostics", diagnostics)
+	}
+}
+
+func assertProbeHasNoProviderAuthSettings(t *testing.T, value any) {
+	t.Helper()
+
+	forbidden := []string{"api_key", "apikey", "auth", "gateway", "model", "provider", "secret", "token"}
+	var walk func(any, string)
+	walk = func(current any, path string) {
+		switch typed := current.(type) {
+		case map[string]any:
+			for key, child := range typed {
+				lowerKey := strings.ToLower(key)
+				for _, denied := range forbidden {
+					if strings.Contains(lowerKey, denied) {
+						t.Fatalf("probe payload contains provider/auth setting key %q at %s", key, path)
+					}
+				}
+				walk(child, path+"."+key)
+			}
+		case []any:
+			for _, child := range typed {
+				walk(child, path+"[]")
+			}
+		}
+	}
+	walk(value, "$")
+}
+
+func mapKeys(payload map[string]any) []string {
+	keys := make([]string, 0, len(payload))
+	for key := range payload {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+func containsReasonCode(codes []any, want string) bool {
+	for _, code := range codes {
+		if code == want {
+			return true
+		}
+	}
+	return false
+}
+
+func snapshotTree(t *testing.T, root string) []string {
+	t.Helper()
+
+	var entries []string
+	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if path == root {
+			return nil
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		entries = append(entries, filepath.ToSlash(relative))
+		return nil
+	}); err != nil {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+	slices.Sort(entries)
+	return entries
+}
+
+func canonicalCLIPath(t *testing.T, path string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatalf("eval symlinks %s: %v", path, err)
+	}
+	return resolved
 }
 
 func TestArtifactInitListCLI(t *testing.T) {

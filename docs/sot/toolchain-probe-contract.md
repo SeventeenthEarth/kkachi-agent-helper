@@ -35,7 +35,7 @@ kkachi-agent-helper project probe-toolchain --json [--project-root <path>]
 The command must:
 
 1. resolve the target project root using existing KAH safe-path rules;
-2. report helper version and executable path facts;
+2. report helper command, version, and executable path facts;
 3. report whether `.kkachi/` and KAH project state exist;
 4. report whether the workflow graph and selected deterministic helper surfaces are present;
 5. optionally include a compact `project doctor` summary if it can be computed without writes;
@@ -56,6 +56,7 @@ The initial schema should be compact and intentionally fact-only:
     "write_count": 0
   },
   "kah": {
+    "helper_command": "kkachi-agent-helper",
     "version": "0.1.x",
     "binary_path": "/absolute/path/to/kkachi-agent-helper"
   },
@@ -105,7 +106,7 @@ This does not collapse quality gates. For every TOLMR task touching KAH, the KAH
 | Task ID | Title | KAH scope | Status |
 |---|---|---|---|
 | TOLMR-001 | Schema and KAH probe contract | Define the KAH probe JSON contract and no-write boundary; pair with KAS schema definition. | Completed |
-| TOLMR-002 | Generated toolchain init, doctor, and refresh | Implement the read-only `project probe-toolchain --json` substrate that KAS consumes. | Planned |
+| TOLMR-002 | Generated toolchain init, doctor, and refresh | Implement the read-only `project probe-toolchain --json` substrate that KAS consumes. | In Review |
 | TOLMR-003 | Legacy state migration plus Stage/MAR integration | No KAH behavior by default; provide verification support only if KAS proves a deterministic helper fact is missing. | Planned |
 | TOLMR-004 | Cross-repo rollout, evidence, and release readiness | Run KAH-local gates plus cross-repo KAS->KAH toolchain generation evidence; update release/compatibility docs only after implementation evidence. | Planned |
 

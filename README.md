@@ -108,7 +108,7 @@ kkachi-agent-helper --help
 kkachi-agent-helper [--json] <command>
 ```
 
-`capabilities --json` is the stable machine-readable command-surface report for KHS activation checks. It includes helper build info, the embedded project schema version, supported command groups, compatibility flags such as artifact mutation, phase-plan support, approval records, read-only workflow graph support, workflow graph init/apply/export/diagnostics support, explicit no-direct-YAML-fallback graph support, configurable feedback-intake graph support, task-DAG schema validation, workflow instance state, workflow catalog diagnostics, workflow catalog proposal/apply support, workflow final-gate integration, KAS node-contract registry evidence, strict workflow transition ledger/order verification, token-economy evidence gate support, and explicit omitted surfaces such as the removed `install` command.
+`capabilities --json` is the stable machine-readable command-surface report for KHS activation checks. It includes helper build info, the embedded project schema version, supported command groups including `project probe-toolchain`, compatibility flags such as artifact mutation, phase-plan support, approval records, read-only workflow graph support, workflow graph init/apply/export/diagnostics support, explicit no-direct-YAML-fallback graph support, configurable feedback-intake graph support, task-DAG schema validation, workflow instance state, workflow catalog diagnostics, workflow catalog proposal/apply support, workflow final-gate integration, KAS node-contract registry evidence, strict workflow transition ledger/order verification, token-economy evidence gate support, and explicit omitted surfaces such as the removed `install` command.
 
 Help is project-independent and exits `0`. Use `kkachi-agent-helper <command> --help`, supported subcommand topics such as `kkachi-agent-helper project init --help` and `kkachi-agent-helper run create --help`, or `kkachi-agent-helper help <command> [subcommand]` for required arguments, options, and JSON behavior. Implemented command groups have group help pages, including `schema`, `event`, `lock`, `phase-plan`, `approval`, and `graph`. `--json` with help emits structured help JSON; compatibility automation should still prefer `capabilities --json`.
 
@@ -133,7 +133,10 @@ kkachi-agent-helper project init \
   --sot-policy existing_sot_basis [--force] [--json]
 kkachi-agent-helper project status [--json]
 kkachi-agent-helper project doctor [--json]
+kkachi-agent-helper project probe-toolchain --json [--project-root <path>]
 ```
+
+`project probe-toolchain --json` emits stable `kah.toolchain_probe.v1` helper/project facts for KAS toolchain generation. It reports helper command/version/path, canonical project root, `.kkachi/` presence, initialized-state and workflow-graph presence facts, doctor status/reason codes, and `no_write.guaranteed=true` with `write_count=0`. It is read-only for initialized and uninitialized project directories and never creates `.kkachi/`, events, locks, graphs, schemas, runs, or `.kkachi/toolchain.yaml`.
 
 Events:
 
@@ -262,7 +265,7 @@ Capability records follow the same boundary. KAH owns project-local `.kkachi/` p
 - `.kkachi/config.yaml`, `.kkachi/project-overlay.yaml`, `docs/kkachi-docs-map.yaml`, `.kkachi/status.json`, `.kkachi/events.jsonl`, `.kkachi/schemas/*.schema.json`, `.kkachi/capabilities/...`, and `.kkachi/runs/<run_id>/...` are the local helper state and evidence surfaces.
 - Planned capability cache layout is `.kkachi/capabilities/current.json`, `snapshots/<id>.json`, `reports/<id>.json`, `fingerprints/<id>.json`, and `drift/<id>.json`, plus run-local `capability-snapshot.json` / `capability-check.md`. These are cache/evidence records, not backend-native inventory SOT.
 - Mutating commands fail closed when `status.last_event_id` and the event log tail diverge.
-- `project status`, `project doctor`, `artifact list`, and diagnostics stdout export are read-only.
+- `project status`, `project doctor`, `project probe-toolchain`, `artifact list`, and diagnostics stdout export are read-only.
 - `gate check` records deterministic pass/fail/blocked results in run metadata, project status, events, and run-local gate reports.
 - `artifact write`, `artifact append`, and markdown `artifact set-status` safely mutate canonical run artifacts with atomic writes and audit events; direct file reads remain compatible during migration. Schema-owned backend JSON artifacts reject generic lifecycle `set-status` and must be rewritten with valid JSON evidence.
 - `phase-plan` stores and validates KHS-declared `phase-plan.yaml` state only; KHS owns phase applicability and workflow policy. `--approval-required true` makes final phase-plan validation require an approved KAH approval record for that phase.

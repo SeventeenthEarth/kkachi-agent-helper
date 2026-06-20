@@ -398,6 +398,14 @@ func runWithOptions(args []string, stdout io.Writer, stderr io.Writer, info Buil
 	case "capabilities":
 		return runCapabilitiesCommand(opts.args[1:], stdout, stderr, info, opts.json)
 	default:
+		if command == "project" && len(opts.args) >= 2 && opts.args[1] == "probe-toolchain" {
+			root, cliErr := resolveProjectProbeRoot(opts.args[2:], options.workingDir)
+			if cliErr != nil {
+				writeError(stderr, opts.json, *cliErr)
+				return cliErr.ExitCode
+			}
+			return runProjectProbeToolchainCommand(root, stdout, stderr, info, opts.json)
+		}
 		if _, ok := commandGroups[command]; ok {
 			root, err := project.DiscoverRoot(options.workingDir)
 			if err != nil {
@@ -1762,6 +1770,50 @@ func runProjectCommand(args []string, root project.Root, stdout io.Writer, stder
 	return ExitUsage
 }
 
+func runProjectProbeToolchainCommand(root project.Root, stdout io.Writer, stderr io.Writer, info BuildInfo, jsonMode bool) int {
+	binaryPath := "unknown"
+	if executable, err := os.Executable(); err == nil && strings.TrimSpace(executable) != "" {
+		binaryPath = executable
+	}
+	result, err := project.ProbeToolchain(root, project.ToolchainProbeOptions{HelperCommand: info.Name, HelperVersion: info.Version, BinaryPath: binaryPath})
+	if err != nil {
+		cliErr := errorFromProjectProblem(err)
+		writeError(stderr, jsonMode, cliErr)
+		return cliErr.ExitCode
+	}
+	writeProjectProbeToolchainResult(stdout, result, jsonMode)
+	return ExitOK
+}
+
+func resolveProjectProbeRoot(args []string, workingDir string) (project.Root, *cliError) {
+	var projectRoot string
+	seenProjectRoot := false
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--project-root":
+			if seenProjectRoot {
+				return project.Root{}, &cliError{Code: "duplicate_option", Message: "duplicate project probe-toolchain option \"--project-root\"", Hint: projectProbeToolchainUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: "--project-root"}
+			}
+			if i+1 >= len(args) {
+				return project.Root{}, &cliError{Code: "missing_option_value", Message: "--project-root requires a value", Hint: projectProbeToolchainUsageHint(), ExitCode: ExitUsage, Field: "--project-root", Expected: "existing directory", Actual: "missing"}
+			}
+			seenProjectRoot = true
+			projectRoot = args[i+1]
+			i++
+		default:
+			return project.Root{}, &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown project probe-toolchain option %q", args[i]), Hint: projectProbeToolchainUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "--project-root <path> or global --json", Actual: args[i]}
+		}
+	}
+	if projectRoot != "" {
+		return project.Root{Path: projectRoot}, nil
+	}
+	root, err := project.DiscoverRoot(workingDir)
+	if err == nil {
+		return root, nil
+	}
+	return project.Root{Path: workingDir}, nil
+}
+
 func parseProjectInitArgs(args []string) (project.InitOptions, *cliError) {
 	options := project.InitOptions{}
 	seen := map[string]bool{}
@@ -2574,7 +2626,7 @@ func runLockCommand(args []string, root project.Root, stdout io.Writer, stderr i
 
 func isImplementedProjectSubcommand(command string) bool {
 	switch command {
-	case "init", "status", "doctor":
+	case "init", "status", "doctor", "probe-toolchain":
 		return true
 	default:
 		return false
@@ -2586,11 +2638,15 @@ func schemaUsageHint() string {
 }
 
 func projectUsageHint() string {
-	return "Use project init <bootstrap-options> [--force], project status, or project doctor with optional global --json."
+	return "Use project init <bootstrap-options> [--force], project status, project doctor, or project probe-toolchain [--project-root <path>] with optional global --json."
 }
 
 func projectInitUsageHint() string {
 	return "Use project init --project-name <name> --stack <stack> --repo-path <path> --commander <profile> --redteam <profile> --docs-map-roadmap <path> --docs-map-spec <path> --docs-map-architecture <path> --docs-map-adr-dir <path> --docs-map-todo-dir <path> --docs-map-spec-dir <path> --test-commands <comma-separated> --backend-policy <policy> --execution-mode <mode> --sot-policy <policy> [--force]."
+}
+
+func projectProbeToolchainUsageHint() string {
+	return "Use project probe-toolchain [--project-root <path>] --json for stable read-only helper/project facts."
 }
 
 func diagnosticsUsageHint() string {
@@ -2749,7 +2805,7 @@ func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
 		// implemented command dispatch switch above. Planned command surfaces
 		// are listed here only when KHS compatibility checks need to see them.
 		CommandGroups: []capabilityCommandGroup{
-			{Name: "project", Status: capabilityStatusSupported, Subcommands: []string{"init", "status", "doctor"}},
+			{Name: "project", Status: capabilityStatusSupported, Subcommands: []string{"init", "status", "doctor", "probe-toolchain"}},
 			{Name: "run", Status: capabilityStatusSupported, Subcommands: []string{"create", "activate", "close", "abort", "list", "show"}},
 			{Name: "artifact", Status: capabilityStatusSupported, Subcommands: []string{"init", "list", "validate", "write", "append", "set-status"}},
 			{Name: "gate", Status: capabilityStatusSupported, Subcommands: []string{"check", "final"}},
@@ -2828,9 +2884,9 @@ var helpPages = map[string]helpOutput{
 	"project": {
 		Command:      "kkachi-agent-helper project",
 		Status:       capabilityStatusSupported,
-		Usage:        "kkachi-agent-helper project <init|status|doctor> [options]",
+		Usage:        "kkachi-agent-helper project <init|status|doctor|probe-toolchain> [options]",
 		Summary:      "Manage helper project bootstrap and read-only project health inspection.",
-		Subcommands:  []helpItem{{Name: "init", Description: "Create or reconfigure local .kkachi helper state."}, {Name: "status", Description: "Inspect current project health and active run state."}, {Name: "doctor", Description: "Run deterministic project health checks."}},
+		Subcommands:  []helpItem{{Name: "init", Description: "Create or reconfigure local .kkachi helper state."}, {Name: "status", Description: "Inspect current project health and active run state."}, {Name: "doctor", Description: "Run deterministic project health checks."}, {Name: "probe-toolchain", Description: "Emit read-only helper/project facts for KAS toolchain generation."}},
 		Options:      []helpItem{{Name: "--json", Description: "Emit JSON for supported project subcommands."}, {Name: "--help", Description: "Show project help and exit 0."}},
 		JSONBehavior: "Project subcommands support global --json for structured output and structured errors. project --help --json emits structured help only.",
 	},
@@ -2841,6 +2897,15 @@ var helpPages = map[string]helpOutput{
 		Summary:      "Initialize helper-managed project state, local schema copies, event log, project overlay, and docs map.",
 		Options:      []helpItem{{Name: "--project-name <name>", Required: true, Description: "Project display name."}, {Name: "--stack <stack>", Required: true, Description: "Project stack label."}, {Name: "--repo-path <path>", Required: true, Description: "Repository path recorded in helper overlay."}, {Name: "--commander <profile>", Required: true, Description: "Commander profile name."}, {Name: "--redteam <profile>", Required: true, Description: "Red-team profile name."}, {Name: "--docs-map-roadmap <path>", Required: true, Description: "Roadmap document path."}, {Name: "--docs-map-spec <path>", Required: true, Description: "Main spec document path."}, {Name: "--docs-map-architecture <path>", Required: true, Description: "Architecture document path."}, {Name: "--docs-map-adr-dir <path>", Required: true, Description: "ADR directory path."}, {Name: "--docs-map-todo-dir <path>", Required: true, Description: "TODO directory path."}, {Name: "--docs-map-spec-dir <path>", Required: true, Description: "Supplemental specs directory path."}, {Name: "--test-commands <comma-separated>", Required: true, Description: "Configured verification commands."}, {Name: "--backend-policy <policy>", Required: true, Description: "Declared backend policy."}, {Name: "--execution-mode <mode>", Required: true, Description: "Declared execution mode."}, {Name: "--sot-policy <policy>", Required: true, Description: "Declared source-of-truth policy."}, {Name: "--force", Description: "Reconfigure bootstrap files while preserving runs, status, and events."}, {Name: "--json", Description: "Emit structured init result."}},
 		JSONBehavior: "With --json, successful init emits project paths, project id, created schema paths, event id, and force status. Errors are structured on stderr.",
+	},
+	"project probe-toolchain": {
+		Command:      "kkachi-agent-helper project probe-toolchain",
+		Status:       capabilityStatusSupported,
+		Usage:        "kkachi-agent-helper project probe-toolchain [--project-root <path>] --json",
+		Summary:      "Emit stable read-only KAH/helper facts for KAS toolchain generation.",
+		Options:      []helpItem{{Name: "--project-root <path>", Description: "Existing directory to probe; defaults to discovered project root or current working directory."}, {Name: "--json", Description: "Emit the stable kah.toolchain_probe.v1 JSON payload."}, {Name: "--help", Description: "Show probe help and exit 0."}},
+		JSONBehavior: "With --json, emits schema version, no-write proof, helper facts, project initialization facts, doctor status/reason codes, and diagnostics. The command never creates .kkachi or mutates project files.",
+		Notes:        []string{"This command is read-only and fact-only; KAS owns toolchain policy, stage selection, MAR/provider policy, and .kkachi/toolchain.yaml writes."},
 	},
 	"run": {
 		Command:      "kkachi-agent-helper run",
@@ -3027,6 +3092,24 @@ func writeProjectInitResult(w io.Writer, result project.InitResult, jsonMode boo
 	}
 	if payload.ReconfiguredEventID != "" {
 		fmt.Fprintf(w, "reconfigured_event_id: %s\n", payload.ReconfiguredEventID)
+	}
+}
+
+func writeProjectProbeToolchainResult(w io.Writer, result project.ToolchainProbeResult, jsonMode bool) {
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(result)
+		return
+	}
+
+	fmt.Fprintf(w, "project probe-toolchain: %s\n", strings.ToLower(result.Doctor.Status))
+	fmt.Fprintf(w, "schema_version: %s\n", result.SchemaVersion)
+	fmt.Fprintf(w, "root: %s\n", result.Project.Root)
+	fmt.Fprintf(w, "kkachi_dir_present: %t\n", result.Project.KkachiDirPresent)
+	fmt.Fprintf(w, "project_initialized: %t\n", result.Project.ProjectInitialized)
+	fmt.Fprintf(w, "workflow_graph_present: %t\n", result.Project.WorkflowGraphPresent)
+	fmt.Fprintf(w, "no_write: guaranteed=%t write_count=%d\n", result.NoWrite.Guaranteed, result.NoWrite.WriteCount)
+	if len(result.Doctor.ReasonCodes) > 0 {
+		fmt.Fprintf(w, "reason_codes: %s\n", strings.Join(result.Doctor.ReasonCodes, ","))
 	}
 }
 

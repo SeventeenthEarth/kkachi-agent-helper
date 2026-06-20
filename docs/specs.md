@@ -441,6 +441,7 @@ kkachi-agent-helper project init \
   --sot-policy existing_sot_basis [--force]
 kkachi-agent-helper project doctor
 kkachi-agent-helper project status [--json]
+kkachi-agent-helper project probe-toolchain --json [--project-root <path>]
 kkachi-agent-helper run create --title <title> --work-path <A_development_execution|B_discovery_shaping> --work-mode <standard|light> --urgency <normal|urgent|critical> --sot-policy <existing_sot_basis|minimal_sot_before_code|full_sot_before_code> --execution-mode <production_write|adapter_qa|readiness_hardening|research|verification|docs_only> --commander <profile> [--backend-evidence <auto|required|not_applicable>] [--task-id <id>] [--redteam <profile>]
 kkachi-agent-helper run list [--json]
 kkachi-agent-helper run show <run_id-or-prefix> [--json]
@@ -476,11 +477,11 @@ kkachi-agent-helper run create --help
 
 `align-003` introduces a project-independent capabilities report for KHS activation checks. The command exits `0` on a healthy binary and does not require `.kkachi/` project state. JSON output is the compatibility contract; human output is informational only.
 
-Stable JSON output includes helper build info, `capabilities_schema_version`, embedded `project_schema_version`, supported command groups/subcommands, compatibility booleans, deprecated surfaces, and omitted surfaces. Current compatibility flags report project init/status/doctor, run lifecycle, artifact init/list/validate/mutation, gates, declared backend evidence requirements, diagnostics export, phase-plan support, approval records, read-only workflow graph support, workflow graph init support, workflow graph apply support, workflow graph export support, workflow graph diagnostics support, workflow graph no-direct-YAML-fallback support, workflow graph configurable feedback-intake support, task-DAG schema validation support, workflow instance state support, workflow catalog diagnostics support, workflow catalog proposal/apply support, workflow final-gate integration support, KAS node-contract registry evidence support, token-economy evidence gate support, and MAR evidence gate/schema support as supported; the graph command inventory advertises implemented `init`, `validate`, `explain`, `diff`, `propose`, `apply`, and `export` subcommands, and the workflow command inventory advertises implemented `validate`, `explain`, `catalog`, `catalog propose`, `catalog apply`, `create`, `show`, `ready`, and `node` subcommands. The removed `install` command is reported as an omitted surface because Hermes/KHS skill installation belongs to Hermes native tooling. KHS `main` may use KAH `@latest` when the effective binary's report advertises all required surfaces; source-built checkout evidence must not be promoted into installed/effective runtime readiness when the installed binary lacks those surfaces. KHS release tags should publish tested/recommended KAH versions for reproducible historical runs.
+Stable JSON output includes helper build info, `capabilities_schema_version`, embedded `project_schema_version`, supported command groups/subcommands, compatibility booleans, deprecated surfaces, and omitted surfaces. Current compatibility flags report project init/status/doctor, run lifecycle, artifact init/list/validate/mutation, gates, declared backend evidence requirements, diagnostics export, phase-plan support, approval records, read-only workflow graph support, workflow graph init support, workflow graph apply support, workflow graph export support, workflow graph diagnostics support, workflow graph no-direct-YAML-fallback support, workflow graph configurable feedback-intake support, task-DAG schema validation support, workflow instance state support, workflow catalog diagnostics support, workflow catalog proposal/apply support, workflow final-gate integration support, KAS node-contract registry evidence support, token-economy evidence gate support, and MAR evidence gate/schema support as supported; the project command inventory advertises implemented `init`, `status`, `doctor`, and `probe-toolchain` subcommands, the graph command inventory advertises implemented `init`, `validate`, `explain`, `diff`, `propose`, `apply`, and `export` subcommands, and the workflow command inventory advertises implemented `validate`, `explain`, `catalog`, `catalog propose`, `catalog apply`, `create`, `show`, `ready`, and `node` subcommands. The removed `install` command is reported as an omitted surface because Hermes/KHS skill installation belongs to Hermes native tooling. KHS `main` may use KAH `@latest` when the effective binary's report advertises all required surfaces; source-built checkout evidence must not be promoted into installed/effective runtime readiness when the installed binary lacks those surfaces. KHS release tags should publish tested/recommended KAH versions for reproducible historical runs.
 
 ### Help UX
 
-`align-004` introduces project-independent help output for top-level discovery, implemented command groups, selected high-argument subcommands (`project init` and `run create` initially), and the `phase-plan` surface. `help`, `help help`, `--help`, supported `<command> --help`, and supported subcommand help topics exit `0`, write help to stdout, do not require `.kkachi/` state, and list usage, required arguments/options, subcommands, and JSON behavior. Implemented command groups have group help pages, including `schema`, `event`, `lock`, `phase-plan`, `approval`, and `graph`. `--json` with help emits structured help JSON. Machine compatibility checks should continue to use `capabilities --json`; help JSON is supplemental command documentation.
+`align-004` introduces project-independent help output for top-level discovery, implemented command groups, selected high-argument subcommands (`project init`, `project probe-toolchain`, and `run create`), and the `phase-plan` surface. `help`, `help help`, `--help`, supported `<command> --help`, and supported subcommand help topics exit `0`, write help to stdout, do not require `.kkachi/` state, and list usage, required arguments/options, subcommands, and JSON behavior. Implemented command groups have group help pages, including `schema`, `event`, `lock`, `phase-plan`, `approval`, and `graph`. `--json` with help emits structured help JSON. Machine compatibility checks should continue to use `capabilities --json`; help JSON is supplemental command documentation.
 
 ### `gate check`
 
@@ -819,6 +820,34 @@ JSON output has the following stable shape:
 ```
 
 Warnings return exit code `0`; failures return exit code `3`. `corex-005` introduced read-only lock diagnostics; `runwf-002` adds stale-lock interpretation and explicit recovery while keeping `project doctor` read-only.
+
+### `project probe-toolchain`
+
+`project probe-toolchain --json [--project-root <path>]` emits read-only KAH helper/project facts for KAS TOLMR toolchain generation. When `--project-root` is supplied, it must name an existing directory and is canonicalized through absolute/symlink resolution. Without `--project-root`, the helper uses normal repository root discovery when possible and otherwise probes the current working directory so uninitialized projects can still return stable JSON.
+
+The command never creates, updates, or repairs `.kkachi/`, events, graphs, schemas, locks, runs, project files, or `.kkachi/toolchain.yaml`. A successful probe exits `0` even when the project is uninitialized; missing helper state is reported through `doctor.status`, `doctor.reason_codes`, and project fact booleans. `project_initialized` reports presence of the core KAH project state, while `doctor.status` separately reports PASS/WARN/FAIL/UNKNOWN health.
+
+JSON output has the following stable shape:
+
+```json
+{
+  "ok": true,
+  "schema_version": "kah.toolchain_probe.v1",
+  "no_write": {"guaranteed": true, "write_count": 0},
+  "kah": {"helper_command": "kkachi-agent-helper", "version": "0.1.x", "binary_path": "/absolute/path/or/unknown"},
+  "project": {
+    "root": "/absolute/project/root",
+    "kkachi_dir": "/absolute/project/root/.kkachi",
+    "kkachi_dir_present": true,
+    "project_initialized": true,
+    "workflow_graph_present": false
+  },
+  "doctor": {"status": "PASS|WARN|FAIL|UNKNOWN", "reason_codes": []},
+  "diagnostics": []
+}
+```
+
+Reason codes are deterministic strings such as `kkachi_dir_missing`, `status_fail`, or `coherence_fail`. KAH reports facts only; KAS owns `.kkachi/toolchain.yaml` schema, stage selection, MAR/provider policy, legacy import, and interpretation.
 
 ## 11. Locking
 
