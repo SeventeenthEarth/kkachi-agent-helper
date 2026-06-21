@@ -107,7 +107,7 @@ This does not collapse quality gates. For every TOLMR task touching KAH, the KAH
 |---|---|---|---|
 | TOLMR-001 | Schema and KAH probe contract | Define the KAH probe JSON contract and no-write boundary; pair with KAS schema definition. | Completed |
 | TOLMR-002 | Generated toolchain init, doctor, and refresh | Implement the read-only `project probe-toolchain --json` substrate that KAS consumes. | In Review |
-| TOLMR-003 | Legacy state migration plus Stage/MAR integration | No KAH behavior by default; provide verification support only if KAS proves a deterministic helper fact is missing. | Planned |
+| TOLMR-003 | Legacy state migration plus Stage/MAR integration | No KAH behavior by default; provide verification support only if KAS proves a deterministic helper fact is missing. | In Review (KAH support: no source change required) |
 | TOLMR-004 | Cross-repo rollout, evidence, and release readiness | Run KAH-local gates plus cross-repo KAS->KAH toolchain generation evidence; update release/compatibility docs only after implementation evidence. | Planned |
 
 ## 7. Verification requirements
