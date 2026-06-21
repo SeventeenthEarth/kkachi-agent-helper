@@ -1,6 +1,6 @@
 # kkachi-agent-helper Roadmap
 
-This roadmap tracks delivery of `kkachi-agent-helper`. Each epic uses a five-letter English slug, and task ids follow `{slug}-001`, `{slug}-002`, and so on.
+This roadmap tracks delivery of `kkachi-agent-helper`. Each epic usually uses a short English slug, and task ids follow `{slug}-001`, `{slug}-002`, and so on. Explicitly approved shared epics may use longer fixed names such as `DESIGN`.
 
 Status values: `Planned`, `In Progress`, `Blocked`, `Completed`, `Deferred`.
 
@@ -30,6 +30,7 @@ Status values: `Planned`, `In Progress`, `Blocked`, `Completed`, `Deferred`.
 | 12 | `POLPR` | KAH aligns deterministic helper evidence, default phase-plan support, and docs/test surfaces needed by KAS POLPR while leaving workflow policy ownership in KAS. |
 | 13 | `STRICT` | KAH hardens workflow-managed runs with strict final-gate markers, node claim ledger/order verification, and phase-plan projection consistency for KAS-selected workflows. |
 | 14 | `TOLMR` | KAH exposes read-only project/helper facts so KAS can generate and validate `.kkachi/toolchain.yaml` local toolchain state without moving policy ownership into KAH. |
+| 15 | `DESIGN` | KAH supplies deterministic Teal/UI evidence schema, artifact, gate, and diagnostics support for KAS-selected UI-bearing workflows without judging design or activating Teal for non-UI Kkachi source work. |
 
 ## Active roadmap
 
@@ -245,6 +246,26 @@ POLPR deferrals unless separately approved: provider execution, reviewer choice,
 |---|---|---|---|---|
 | token-001 | Token-economy and English-output evidence gate contract | Completed | Add a deterministic KAH evidence surface for KAS-managed token-economy work: compact English output evidence, artifact-first detail references, repo-local `AGENTS.md` / `CLAUDE.md` evidence, project KAS lifecycle dry-run/apply/manifest/doctor evidence, and explicit mutation-approval evidence when such claims are in scope. Results must be only `pass`, `fail`, or `not_applicable`. | Implemented as the `token-economy` built-in gate plus canonical `token-economy-evidence.json` / `token-economy-evidence` schema (`token001.v1`). The gate is active only for `task_id=token-001`, fails closed for missing/malformed/unsafe/checksum-mismatched or token-002-only evidence, and keeps KAS policy/lifecycle decisions, KAB activation, Hermes runtime/profile/provider/auth/token/gateway/model mutation, prose quality judgment, and warning-only advisory states out of KAH. |
 | token-002 | Verification, evidence-summary, review-bundle, and change-aware gate support | Completed | Add deterministic KAH evidence support for KAS-selected verification profiles, no-agent runner artifacts, reversible evidence summaries and phase packets, compact review bundles, no-agent fan-in watcher terminal reports, and change-aware verification matrix evidence. Results must be only `pass`, `fail`, or `not_applicable`. | Implemented in the TOKEN-002 working tree as a `token-economy` gate extension for `task_id=token-002` / `schema_version=token002.v1`; implementation, docs, verification, first color review, feedback handling, GLM Octo review, and post-Octo color re-review accepted for commit-readiness. Commit, push, install, global binary rebuild, release tagging, KAS lifecycle activation, KAB product activation, and Hermes runtime/profile/provider/auth/token/gateway/model mutation remain unapproved until separate 주군 approval. KAH must not choose verification profiles, decide test skip policy, summarize logs, judge review quality, operate watcher policy, replace Kanban/color review evidence, activate KAB, mutate Hermes runtime/profile/provider/auth/token/gateway/model config, or introduce warning-only advisory states. |
+
+### EPIC: DESIGN — Teal UI evidence support for UI-bearing KAS/KAH projects
+
+> Goal: provide the deterministic KAH companion substrate for KAS-selected Teal UI workflow support on UI-bearing projects. KAH records and validates evidence shape only; KAS owns workflow policy, classification, and Teal routing.
+>
+> Source of truth: `docs/sot/teal-ui-evidence-gates.md`. Upstream KAS SOT: `kkachi-hermes-skills/docs/sot/teal-ui-workflow-policy.md`. Candidate-source evidence: `/Users/draccoon/Workspace/Hermes/17thHermes/40_outputs/projects/kkachi/2026-06-21-kas-kah-teal-ui-workflow-sot.md`.
+>
+> Sequential execution rule: 주군 explicitly selected no parallel development. Execute `DESIGN-001 -> DESIGN-002 -> DESIGN-003 -> DESIGN-004 -> DESIGN-005 -> DESIGN-006 -> DESIGN-007` in task-id order. KAH implementation starts only after the KAS-owned DESIGN-001..003 policy/contract sequence is accepted.
+
+| Task ID | Owner | Title | Status | Work guide | Notes |
+|---|---|---|---|---|---|
+| DESIGN-001 | KAS-led docs/SOT | Register Teal UI workflow policy and shared roadmap sequence | Completed | KAS registers the shared DESIGN epic and KAH registers this companion SOT plus roadmap/docs-map references. | No helper behavior, schema, command, gate, diagnostics, install, release, runtime, or profile mutation is authorized by this registration task. |
+| DESIGN-002 | KAS | Define Teal applicability and node contract semantics | Planned | KAS freezes source field names, derived `teal_required`, skip/waiver/no-substitution policy, and design gate vocabulary before KAH schema work. | KAH waits for accepted KAS field/contract evidence; small KAH fixture-name alignment only if needed. |
+| DESIGN-003 | KAS | Add workflow selector/materializer and skill guidance | Planned | KAS implements conditional Teal workflow injection/skip guidance for UI-bearing projects only. | KAH still does not implement behavior in this step. |
+| DESIGN-004 | KAH | Add design evidence schema and artifact bootstrap | Planned | Implement deterministic artifact/schema/bootstrap support for declared Teal/UI fields. | KAH does not select Teal owners, classify UI, judge design, or waive gates. |
+| DESIGN-005 | KAH | Add fail-closed Teal gate and diagnostics support | Planned | Implement gate/diagnostic/final-gate checks for missing/malformed required Teal evidence and skip/waiver evidence. | Required evidence gaps fail closed; no warning-only or substitution behavior. |
+| DESIGN-006 | KAS+KAH | Add cross-repo compatibility examples and proof fixtures | Planned | Prove KAS declarations and KAH validation agree for Kkachi non-UI skip, Sudal UI required, and Doksuri UI required examples. | Both repos require tests/readback and docs parity. |
+| DESIGN-007 | KAS+KAH review/closeout | Complete verification, docs maps, color/Teal review, and Blue closeout | Planned | Run final KAS/KAH verification, docs impact checks, Red/Orange/Gray plus applicable Teal Lead review, and Blue synthesis. | Completion requires official review evidence and explicit deferral list. |
+
+DESIGN deferrals unless separately approved: KAH task classification, Teal owner selection, design judgment, waiver approval, screenshot subjective scoring, automatic reviewer routing, applying Teal to non-UI Kkachi source work, KAB activation, profile/provider/auth/token/gateway/model mutation, release/install/push, or warning-only behavior when required Teal evidence is missing.
 
 ## Backlog and review points
 

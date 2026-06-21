@@ -10,6 +10,7 @@ sot_docs:
   - "docs/sot/policy-promotion-helper-evidence.md"
   - "docs/sot/strict-workflow-enforcement.md"
   - "docs/sot/toolchain-probe-contract.md"
+  - "docs/sot/teal-ui-evidence-gates.md"
 adr_dir: "docs/sot"
 todo_dir: "docs"
 spec_dir: "docs"
