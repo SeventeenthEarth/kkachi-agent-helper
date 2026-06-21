@@ -68,7 +68,7 @@ All examples are local and secret-free. Do not place tokens, bearer headers, API
 ```sh
 go install github.com/SeventeenthEarth/kkachi-agent-helper@latest
 make build
-make PREFIX="$HOME/.local" install-local
+make install
 make VERSION=0.1.0 release
 make test-prepare
 make test-unit
@@ -80,7 +80,7 @@ make check
 
 - `go install github.com/SeventeenthEarth/kkachi-agent-helper@latest` installs the tagged helper to Go's binary directory (`GOBIN`, or `$(go env GOPATH)/bin`).
 - `make build` writes `bin/kkachi-agent-helper` from the root installable package.
-- `make PREFIX="$HOME/.local" install-local` installs the built helper to `$PREFIX/bin/kkachi-agent-helper`.
+- `make install` installs the local checkout to Go's binary directory (`GOBIN`, or `$(go env GOPATH)/bin`) with the Makefile version metadata.
 - `make VERSION=0.1.13 release` writes release artifacts to `dist/`:
   - `dist/kkachi-agent-helper_0.1.13_<goos>_<goarch>`
   - `dist/kkachi-agent-helper_0.1.13_<goos>_<goarch>.tar.gz`

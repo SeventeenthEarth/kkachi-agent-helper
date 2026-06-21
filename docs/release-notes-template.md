@@ -36,7 +36,7 @@ Paste the relevant `dist/SHA256SUMS` entries here.
 ```sh
 go install github.com/SeventeenthEarth/kkachi-agent-helper@v<version>
 make VERSION=<version> build
-make PREFIX="$HOME/.local" install-local
+make VERSION=<version> install
 kkachi-agent-helper version --json
 ```
 
@@ -49,7 +49,7 @@ make test-int
 make test-e2e
 make VERSION=<version> release
 go install github.com/SeventeenthEarth/kkachi-agent-helper@v<version>
-make VERSION=<version> PREFIX="$HOME/.local" install-local
+make VERSION=<version> install
 kkachi-agent-helper version --json
 ```
 

@@ -1272,8 +1272,9 @@ func TestReleasePackaging(t *testing.T) {
 	}
 	requireContains(t, string(out), `"command":"kkachi-agent-helper graph"`, "release artifact graph help")
 	requireContains(t, string(out), `"status":"supported"`, "release artifact graph help")
-	runMake(t, "VERSION=0.1.0", "COMMIT=e2e", "BUILD_DATE=2026-01-01T00:00:00Z", "PREFIX="+prefix, "install-local")
-	installed := filepath.Join(prefix, "bin/kkachi-agent-helper")
+	gobin := filepath.Join(prefix, "bin")
+	runMake(t, "VERSION=0.1.0", "COMMIT=e2e", "BUILD_DATE=2026-01-01T00:00:00Z", "GOBIN="+gobin, "install")
+	installed := filepath.Join(gobin, "kkachi-agent-helper")
 	out, err = exec.Command(installed, "version", "--json").Output()
 	if err != nil {
 		t.Fatalf("installed version: %v", err)

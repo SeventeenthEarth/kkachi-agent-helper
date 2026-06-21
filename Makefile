@@ -3,7 +3,6 @@ BIN_DIR := bin
 VERSION ?= 0.1.13
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
-PREFIX ?= $(HOME)/.local
 DIST_DIR ?= dist
 GOOS ?= $(shell go env GOOS)
 GOARCH ?= $(shell go env GOARCH)
@@ -12,15 +11,14 @@ TOOLCHAIN_COMPONENT := kah
 TOOLCHAIN_VERSION ?= $(shell git describe --tags --exact-match 2>/dev/null | sed 's/^v//' || true)
 LDFLAGS := -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.buildDate=$(BUILD_DATE)
 
-.PHONY: build install-local install-toolchain release format vet lint test-prepare test-unit test-int test-e2e test check clean
+.PHONY: build install install-toolchain release format vet lint test-prepare test-unit test-int test-e2e test check clean
 
 build:
 	mkdir -p $(BIN_DIR)
 	go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(BINARY) .
 
-install-local: build
-	mkdir -p $(PREFIX)/bin
-	install -m 0755 $(BIN_DIR)/$(BINARY) $(PREFIX)/bin/$(BINARY)
+install:
+	env -u GOPATH go install -ldflags "$(LDFLAGS)" .
 
 install-toolchain:
 	@set -e; \
