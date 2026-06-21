@@ -2727,14 +2727,7 @@ func writeVersion(w io.Writer, info BuildInfo, jsonMode bool) {
 		return
 	}
 
-	parts := []string{info.Name, info.Version}
-	if hasValue(info.Commit) {
-		parts = append(parts, "commit "+info.Commit)
-	}
-	if hasValue(info.BuildDate) {
-		parts = append(parts, "built "+info.BuildDate)
-	}
-	fmt.Fprintln(w, strings.Join(parts, " "))
+	fmt.Fprintf(w, "%s %s\n", info.Name, info.Version)
 }
 
 func writeCapabilities(w io.Writer, info BuildInfo, jsonMode bool) {
