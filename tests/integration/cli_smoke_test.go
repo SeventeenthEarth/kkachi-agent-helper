@@ -19,7 +19,7 @@ func TestBinaryEntrypointSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("go run failed: %v\n%s", err, string(output))
 	}
-	if !strings.HasPrefix(string(output), "kkachi-agent-helper 0.1.12") {
+	if !strings.HasPrefix(string(output), "kkachi-agent-helper 0.1.13") {
 		t.Fatalf("output = %q, want version prefix", string(output))
 	}
 }
