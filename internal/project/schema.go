@@ -23,6 +23,7 @@ const (
 	SchemaTokenEconomyEvidence     = "token-economy-evidence"
 	SchemaMultiAgentReviewEvidence = "multi-agent-review-evidence"
 	SchemaPolicyPromotionEvidence  = "policy-promotion-evidence"
+	SchemaDesignEvidence           = "design-evidence"
 
 	schemaExportedEventType = "schema.exported"
 
@@ -41,6 +42,7 @@ var canonicalSchemaNames = []string{
 	SchemaTokenEconomyEvidence,
 	SchemaMultiAgentReviewEvidence,
 	SchemaPolicyPromotionEvidence,
+	SchemaDesignEvidence,
 }
 
 type SchemaCheck struct {
@@ -334,6 +336,8 @@ func validateContentAgainstSchema(schemaName, relative string, content []byte) [
 		return validateMultiAgentReviewEvidenceSchema(relative, content)
 	case SchemaPolicyPromotionEvidence:
 		return validatePolicyPromotionEvidenceSchema(relative, content)
+	case SchemaDesignEvidence:
+		return validateDesignEvidenceSchema(relative, content)
 	default:
 		return []SchemaCheck{schemaPass("schema", relative, "schema is registered")}
 	}
@@ -853,6 +857,59 @@ func schemaObject(name string) map[string]any {
 			"final_stale_status_check":     sectionProperty,
 			"boundary_evidence":            sectionProperty,
 			"mutation_approval_evidence":   sectionProperty,
+		}
+	case SchemaDesignEvidence:
+		object["description"] = "DESIGN-004 Teal/UI design evidence bootstrap artifact; KAH validates deterministic shape only and does not classify UI, route Teal, judge design quality, or waive gates."
+		object["required"] = designEvidenceRequiredFields
+		statusProperty := map[string]any{"enum": []string{GateStatusPass, GateStatusFail, GateStatusNotApplicable, "pending"}}
+		stringArrayProperty := map[string]any{"type": "array", "items": map[string]any{"type": "string", "minLength": 1}}
+		nullableStringProperty := map[string]any{"type": []string{"string", "null"}}
+		refProperty := map[string]any{"type": "object", "required": []string{"path"}, "properties": map[string]any{"path": map[string]any{"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*\\\\)(?!.*(^|/)\\.\\.(/|$)).+$"}, "checksum": map[string]any{"type": "string", "pattern": "^sha256:[0-9a-fA-F]{64}$"}, "markers": stringArrayProperty}, "additionalProperties": true}
+		sectionProperty := map[string]any{"type": "object", "required": []string{"status"}, "properties": map[string]any{"status": statusProperty, "reason": map[string]any{"type": "string"}, "evidence_refs": map[string]any{"type": "array", "items": refProperty}, "detail_ref": refProperty}, "additionalProperties": true}
+		tealApplicabilityProperty := map[string]any{
+			"type":     "object",
+			"required": []string{"project_has_teal_lane", "ui_ux_change", "teal_required", "derivation", "ui_ux_classification_owner", "teal_skip_reason", "teal_owner", "teal_waiver_approved", "teal_waiver_approval_ref", "teal_waiver_scope", "teal_waiver_expires_at", "required_when_teal_required", "missing_required_status"},
+			"properties": map[string]any{
+				"project_has_teal_lane":       map[string]any{"type": "boolean"},
+				"ui_ux_change":                map[string]any{"type": "boolean"},
+				"teal_required":               map[string]any{"type": "boolean"},
+				"derivation":                  map[string]any{"const": "project_has_teal_lane && ui_ux_change"},
+				"ui_ux_classification_owner":  nullableStringProperty,
+				"teal_skip_reason":            nullableStringProperty,
+				"teal_owner":                  nullableStringProperty,
+				"teal_waiver_approved":        map[string]any{"type": "boolean"},
+				"teal_waiver_approval_ref":    map[string]any{"type": "string"},
+				"teal_waiver_scope":           map[string]any{"type": "string"},
+				"teal_waiver_expires_at":      map[string]any{"type": "string"},
+				"required_when_teal_required": stringArrayProperty,
+				"missing_required_status":     map[string]any{"type": "string"},
+			},
+			"additionalProperties": true,
+		}
+		boundaryProperty := map[string]any{
+			"type":     "object",
+			"required": []string{"status", "policy_owner", "kah_validation_role"},
+			"properties": map[string]any{
+				"status":                  statusProperty,
+				"reason":                  map[string]any{"type": "string"},
+				"policy_owner":            map[string]any{"const": designBoundaryPolicyOwner},
+				"kah_validation_role":     map[string]any{"const": designKAHValidationRole},
+				"kah_forbidden_decisions": stringArrayProperty,
+				"evidence_refs":           map[string]any{"type": "array", "items": refProperty},
+				"detail_ref":              refProperty,
+			},
+			"additionalProperties": true,
+		}
+		object["properties"] = map[string]any{
+			"schema_version":           map[string]any{"const": designEvidenceSchemaVersion},
+			"run_id":                   map[string]any{"type": "string", "pattern": "^run-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$"},
+			"task_id":                  map[string]any{"type": "string", "minLength": 1},
+			"task_class":               map[string]any{"type": "string", "minLength": 1},
+			"teal_applicability":       tealApplicabilityProperty,
+			"design_plan_evidence":     sectionProperty,
+			"design_fidelity_evidence": sectionProperty,
+			"color_review_evidence":    sectionProperty,
+			"boundary_evidence":        boundaryProperty,
 		}
 	}
 	if _, ok := object["properties"]; !ok {

@@ -2,7 +2,7 @@
 
 Date: 2026-04-30
 Owner: KAH maintainers
-Status: source of truth for implemented helper behavior; graph init, validation/explanation, semantic diff, proposal records, approval-gated apply, non-authoritative graph export, compatibility diagnostics, configurable feedback-intake activation evidence, and graph-policy-driven phase-plan feedback validation are implemented; graph workflow sync diagnostics now also expose stable reason codes; DAGSM-001 task-DAG schema validation/explain, DAGSM-002 run-local workflow instance state, DAGSM-003 multi-DAG catalog diagnostics/final-gate integration, and DAGSM-006 explicit workflow catalog proposal/apply substrate are implemented source-side; token-001/token-002 token-economy evidence gating and MAREV-002 multi-agent-review evidence gate/schema support are implemented
+Status: source of truth for implemented helper behavior; graph init, validation/explanation, semantic diff, proposal records, approval-gated apply, non-authoritative graph export, compatibility diagnostics, configurable feedback-intake activation evidence, and graph-policy-driven phase-plan feedback validation are implemented; graph workflow sync diagnostics now also expose stable reason codes; DAGSM-001 task-DAG schema validation/explain, DAGSM-002 run-local workflow instance state, DAGSM-003 multi-DAG catalog diagnostics/final-gate integration, and DAGSM-006 explicit workflow catalog proposal/apply substrate are implemented source-side; token-001/token-002 token-economy evidence gating, MAREV-002 multi-agent-review evidence gate/schema support, and DESIGN-004 design evidence schema/artifact bootstrap are implemented
 Planning graph update date: 2026-05-24
 Planning graph evidence: governance evidence record in kanban task `t_2fb00394`
 
@@ -72,6 +72,7 @@ Default target-project layout:
     token-economy-evidence.schema.json
     multi-agent-review-evidence.schema.json
     policy-promotion-evidence.schema.json
+    design-evidence.schema.json
   capabilities/               # planned capability cache/evidence, not native inventory SOT
     current.json
     snapshots/<snapshot_id>.json
@@ -104,6 +105,7 @@ Default target-project layout:
       multi-agent-review/
         status.json
       policy-promotion-evidence.json
+      design-evidence.json
       review.md
       docs-update.md
       sot-update.md
@@ -156,6 +158,8 @@ Graph source and evidence precedence is explicit. Applied `.kkachi-workflow.yaml
 KAH fails closed when graph-managed workflow support is required but `.kkachi-workflow.yaml` is missing, invalid, ambiguous, duplicated, or conflicts with KHS phase policy or run-local `phase-plan.yaml`; when direct manual edits lack validation/proposal/apply/audit evidence; when candidate graph changes affect gates, approvals, review policy, or dependencies without approval/audit evidence; or when KHS asks KAH to use imperative workflow-policy commands.
 
 The built-in `policy-promotion` gate validates POLPR-007 helper evidence for `task_id=POLPR-007` using canonical `.kkachi/runs/<run_id>/policy-promotion-evidence.json` and embedded/exported `policy-promotion-evidence` schema version `polpr007.v1`. KAH checks deterministic presence and shape only: document impact map refs, project-Gray coverage refs, test-layer labels, failed-test repair ownership fields, final stale-status surfaces, KAS ownership boundary evidence, mutation approval evidence, repository-confined refs, checksums, markers, and required `not_applicable` reasons. KAH does not judge policy quality or review sufficiency.
+
+DESIGN-004 adds canonical `.kkachi/runs/<run_id>/design-evidence.json` bootstrap plus embedded/exported `design-evidence` schema version `design004.v1`. KAH validates deterministic shape only: required top-level sections, KAS-derived `teal_applicability` booleans, `teal_required = project_has_teal_lane && ui_ux_change`, explicit `teal_skip_reason` when Teal is not required, KAS waiver metadata field shapes (`teal_waiver_approved`, `teal_waiver_approval_ref`, `teal_waiver_scope`, `teal_waiver_expires_at`), evidence ref path shape, optional `sha256:<64hex>` checksums, and required `not_applicable` reasons. KAH does not classify UI, select Teal owners, judge design quality, score screenshots, approve waivers, waive gates, register a design gate, update diagnostics, or integrate this evidence into `gate final`; DESIGN-005 owns fail-closed gate and diagnostic behavior.
 
 Workflow graph gates are additive to built-in gates. Built-in gate names are evaluated first; otherwise `gate check <run_id> <gate_id>` falls back to a graph-declared gate with deterministic `checks`. Existing gates that declare only `id` and `requires` remain valid graph rows. A graph gate may set `final_required: true`, causing `gate final` to require that graph gate's current pass report and freshness. Supported check types are fixed: `artifact.exists`, `markdown.field`, `text.contains`, `text.contains_all`, `gitignore.contains_all`, `codegraph.evidence`, and `phase.status`; no regex, expression language, command execution, or fallback policy is supported. Optional check `name`, `message`, and `hint` fields only shape the emitted gate report and do not change evaluation semantics.
 
@@ -329,7 +333,7 @@ Run lifecycle commands in `runwf-001` use these state transitions. In `runwf-002
 - `artifact init` is a mutating helper-state command and is serialized by `.kkachi/project_write.lock`.
 - Before writing artifacts, `artifact init` verifies status/event-log coherence and refuses to mutate when `status.last_event_id` does not match the event tail.
 - `artifact init` only accepts runs in `created` or `active` state. Closed and aborted runs are preserved read-only.
-- The command derives `required_artifacts` from `work_path`, `work_mode`, `execution_mode`, resolved `backend_evidence`, and `redteam`, ordered by the canonical artifact list in [Canonical project layout](#5-canonical-project-layout).
+- The command derives `required_artifacts` from `work_path`, `work_mode`, `execution_mode`, resolved `backend_evidence`, `redteam`, and task-scoped evidence requirements such as DESIGN tasks, ordered by the canonical artifact list in [Canonical project layout](#5-canonical-project-layout).
 - The command creates baseline non-empty files for every canonical run artifact listed in the layout, including nested `redteam/` and `discovery/` artifacts.
 - Existing non-empty artifact files are preserved exactly. Existing empty artifact files are reinitialized with baseline content.
 - On success, the command updates `run-metadata.json.required_artifacts`, appends one `artifact.written` event, and advances `status.last_event_id`.
@@ -337,7 +341,7 @@ Run lifecycle commands in `runwf-001` use these state transitions. In `runwf-002
 - `artifact list <run_id> [--json]` is read-only. It does not append events, create files, repair files, create locks, remove locks, or rewrite metadata. It reports every canonical artifact path with required/present/empty/byte status.
 - `artifact write <run_id> <artifact_path> --from <repo-relative-file> [--json]` atomically replaces or creates one canonical run artifact from exact source bytes.
 - `artifact append <run_id> <artifact_path> --from <repo-relative-file> [--json]` atomically appends exact source bytes to one canonical run artifact, creating it if absent.
-- `artifact set-status <run_id> <artifact_path> --status <pending|complete|not_applicable> [--reason <text>] [--json]` atomically updates markdown `Status:` fields; `not_applicable` requires a non-empty reason. Patch artifacts do not support status mutation. Schema-owned backend JSON artifacts such as `selected-cli.json` and `bridge-session-snapshot.json` reject generic lifecycle status updates with `artifact_status_not_applicable`; use `artifact write` with valid backend JSON schema fields and rely on `gate check backend` for completion validation.
+- `artifact set-status <run_id> <artifact_path> --status <pending|complete|not_applicable> [--reason <text>] [--json]` atomically updates markdown `Status:` fields; `not_applicable` requires a non-empty reason. Patch artifacts do not support status mutation. Schema-owned JSON artifacts such as `selected-cli.json`, `bridge-session-snapshot.json`, `token-economy-evidence.json`, `multi-agent-review/status.json`, `policy-promotion-evidence.json`, and `design-evidence.json` reject generic lifecycle status updates with `artifact_status_not_applicable`; use `artifact write` with valid JSON schema fields and rely on the matching validation surface for completion validation.
 - Artifact mutation commands are serialized by `.kkachi/project_write.lock`, refuse closed/aborted runs, verify status/event-log coherence before mutation, reject unsafe source paths, and only target canonical artifact paths. Unmanaged KHS supplemental paths are rejected in this release while direct-file compatibility remains available during migration.
 - Each artifact mutation records an `artifact.written` event with `operation`, `path`, `artifact_kind: "canonical"`, byte count, and source/status metadata as applicable.
 
@@ -367,6 +371,7 @@ Initial required-artifact derivation:
 | `redteam` assigned | `redteam/plan-review.md`, `redteam/shaping-review.md`, `redteam/final-gate-review.md` |
 | `task_id=token-001` or `task_id=token-002` | `token-economy-evidence.json` |
 | `task_id` with `mar-` prefix | `multi-agent-review/status.json` |
+| `task_id` with `DESIGN-` prefix | `design-evidence.json` |
 
 ## 8. Work paths and gates
 
@@ -562,7 +567,7 @@ Behavior in `gates-001` through `gates-005`:
 }
 ```
 
-The schema selector accepts canonical embedded names (`config`, `status`, `event`, `run-metadata`, `selected-cli`, `bridge-session-snapshot`, `token-economy-evidence`, `multi-agent-review-evidence`) or canonical project-local schema paths under `.kkachi/schemas/`. Project-local schema paths are identity-checked, but validation remains embedded-registry-backed so a relaxed local schema cannot make invalid helper state pass.
+The schema selector accepts canonical embedded names (`config`, `status`, `event`, `run-metadata`, `selected-cli`, `bridge-session-snapshot`, `token-economy-evidence`, `multi-agent-review-evidence`, `policy-promotion-evidence`, `design-evidence`) or canonical project-local schema paths under `.kkachi/schemas/`. Project-local schema paths are identity-checked, but validation remains embedded-registry-backed so a relaxed local schema cannot make invalid helper state pass.
 
 `schema export [--schema <schema>|--all] [--dry-run]` JSON output has the following stable shape:
 
@@ -794,7 +799,7 @@ Token-like values are redacted in both diagnostics bundles and CLI errors. Redac
 - `.kkachi/events.jsonl` is readable, non-empty JSONL with no blank lines, valid event ids, and sequential `evt-000001`-style ids;
 - status/event coherence, requiring `status.last_event_id` to match the event-log tail id;
 - canonical `.kkachi/*` state, schema, and lock paths stay within the repository and do not symlink-escape;
-- the seven canonical schema files exist, are readable JSON objects, and declare their own `version`;
+- the canonical schema files exist, are readable JSON objects, and declare their own `version`;
 - lock files are absent, present, unreadable, or path-unsafe.
 
 JSON output has the following stable shape:
@@ -876,7 +881,7 @@ Lock requirements:
 ## 12. Schema and migration policy
 
 - Schemas live embedded in the binary and may also be copied under `.kkachi/schemas/` for transparency.
-- `project init` writes project-local JSON Schema draft 2020-12 copies from the embedded canonical registry for config, status, event, run metadata, selected CLI, and bridge session snapshot. These copies are transparency artifacts; validation uses the embedded registry so a relaxed local schema cannot make invalid helper state pass.
+- `project init` writes project-local JSON Schema draft 2020-12 copies from the embedded canonical registry for config, status, event, run metadata, selected CLI, bridge session snapshot, token-economy evidence, multi-agent-review evidence, policy-promotion evidence, and design evidence. These copies are transparency artifacts; validation uses the embedded registry so a relaxed local schema cannot make invalid helper state pass.
 - `schema validate <file> --schema <schema>` accepts embedded schema names, canonical schema filenames, or repository-confined `.kkachi/schemas/*.schema.json` references. It validates config YAML through the deterministic helper config parser, validates event JSONL line-by-line for `events.jsonl`, and validates JSON state/evidence objects for the other schemas. Passing validation exits `0`; schema failures exit `3`; usage errors exit `2`.
 - `schema export [--schema <schema>|--all] [--dry-run]` copies embedded schemas into `.kkachi/schemas/`. Dry runs are read-only previews. Real exports are serialized by `project_write.lock`, refuse status/event incoherence before mutation, write only canonical schema paths, append one `schema.exported` event when files change, and leave unchanged files untouched.
 - `schema migrate --from <version> --to <version> [--dry-run]` runs registered state migrations. The initial registered path is `0.1 -> 0.1` no-op. Dry runs are read-only summaries. Real migrations are serialized by `project_write.lock`, refuse unknown source versions and incoherent status/event state, write a backup under `.kkachi/backups/schema-migrations/`, and append `schema.migrated`.

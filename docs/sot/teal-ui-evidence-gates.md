@@ -1,6 +1,6 @@
 # DESIGN Teal UI evidence gates for KAH
 
-Status: planning SOT for the KAH companion side of the `DESIGN` shared KAS/KAH epic; not implementation evidence
+Status: DESIGN-004 implementation SOT for KAH design evidence schema/artifact bootstrap; DESIGN-005 gate/diagnostic behavior remains deferred
 Owner: KAH deterministic helper layer
 Source evidence: `/Users/draccoon/Workspace/Hermes/17thHermes/40_outputs/projects/kkachi/2026-06-21-kas-kah-teal-ui-workflow-sot.md`
 Upstream KAS SOT: `kkachi-hermes-skills/docs/sot/teal-ui-workflow-policy.md`
@@ -10,6 +10,8 @@ Upstream KAS SOT: `kkachi-hermes-skills/docs/sot/teal-ui-workflow-policy.md`
 This document registers KAH's deterministic helper responsibilities for the `DESIGN` epic. KAS owns Teal workflow policy and role contracts. KAH owns only evidence shape, artifact bootstrap, schemas, gate checks, diagnostics, and final-gate integration where declared.
 
 KAH must not decide whether a design is good, select Teal owners, waive Teal, judge screenshots subjectively, choose workflows, run reviewers, or replace KAS/Blue/Teal authority. KAH records deterministic facts and fails closed when required declared evidence is missing or malformed.
+
+DESIGN-004 implements only the canonical `design-evidence.json` artifact bootstrap and embedded/exportable `design-evidence` schema (`design004.v1`). KAH validates deterministic JSON shape only in this task; DESIGN-005 remains responsible for any fail-closed Teal gate, diagnostic, or final-gate behavior.
 
 ## KAH evidence fields
 
@@ -22,11 +24,12 @@ ui_ux_classification_owner: string|null
 teal_required: true|false
 teal_skip_reason: string|null
 teal_owner: string|null
-teal_waiver_ref: string|null
-teal_waiver_approvers: []
-teal_waiver_reason: string|null
+teal_waiver_approved: true|false
+teal_waiver_approval_ref: string
 teal_waiver_scope: string|null
-teal_waiver_residual_risk: string|null
+teal_waiver_expires_at: string
+required_when_teal_required: []
+missing_required_status: string
 teal_design_discussion_ref: string|null
 plan_design_spec_ref: string|null
 plan_reference_image_refs: []
@@ -46,6 +49,8 @@ teal_color_review_evidence_ref: string|null
 If `teal_required=true`, KAH must fail closed when declared required design-plan verdicts, design spec refs, fidelity criteria, final screenshot refs, design-verification verdicts, or authorized waiver evidence are missing or malformed.
 
 If `teal_required=false`, KAH should validate that a concrete `teal_skip_reason` or authorized waiver evidence exists and report not-applicable/pass only through deterministic shape checks.
+
+DESIGN-004 schema validation rejects malformed `design-evidence.json` shape as ordinary schema validation. It does not register a `design` gate, update diagnostics, or integrate with `gate final`; those fail-closed checks are deferred to DESIGN-005 and must not be replaced with warning-only behavior.
 
 ## Sequential task order
 

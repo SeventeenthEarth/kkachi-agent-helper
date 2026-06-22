@@ -40,6 +40,7 @@ var schemaPaths = []string{
 	".kkachi/schemas/token-economy-evidence.schema.json",
 	".kkachi/schemas/multi-agent-review-evidence.schema.json",
 	".kkachi/schemas/policy-promotion-evidence.schema.json",
+	".kkachi/schemas/design-evidence.schema.json",
 }
 
 // InitOptions controls project initialization. Tests may inject deterministic

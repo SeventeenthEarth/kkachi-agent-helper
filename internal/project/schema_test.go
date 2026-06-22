@@ -77,15 +77,15 @@ func TestSchemaValidateInitializedProjectFiles(t *testing.T) {
 			}
 		})
 	}
-	if len(result.SchemaPaths) != len(canonicalSchemaNames) || !containsString(result.SchemaPaths, ".kkachi/schemas/config.schema.json") || !containsString(result.SchemaPaths, ".kkachi/schemas/bridge-session-snapshot.schema.json") || !containsString(result.SchemaPaths, ".kkachi/schemas/token-economy-evidence.schema.json") || !containsString(result.SchemaPaths, ".kkachi/schemas/multi-agent-review-evidence.schema.json") || !containsString(result.SchemaPaths, ".kkachi/schemas/policy-promotion-evidence.schema.json") {
-		t.Fatalf("schema paths = %#v, want canonical schema paths including config, bridge-session-snapshot, token-economy-evidence, multi-agent-review-evidence, and policy-promotion-evidence", result.SchemaPaths)
+	if len(result.SchemaPaths) != len(canonicalSchemaNames) || !containsString(result.SchemaPaths, ".kkachi/schemas/config.schema.json") || !containsString(result.SchemaPaths, ".kkachi/schemas/bridge-session-snapshot.schema.json") || !containsString(result.SchemaPaths, ".kkachi/schemas/token-economy-evidence.schema.json") || !containsString(result.SchemaPaths, ".kkachi/schemas/multi-agent-review-evidence.schema.json") || !containsString(result.SchemaPaths, ".kkachi/schemas/policy-promotion-evidence.schema.json") || !containsString(result.SchemaPaths, ".kkachi/schemas/design-evidence.schema.json") {
+		t.Fatalf("schema paths = %#v, want canonical schema paths including config, bridge-session-snapshot, token-economy-evidence, multi-agent-review-evidence, policy-promotion-evidence, and design-evidence", result.SchemaPaths)
 	}
 }
 
 func TestSchemaRegistryContracts(t *testing.T) {
 	names := CanonicalSchemaNames()
-	if len(names) != 9 {
-		t.Fatalf("CanonicalSchemaNames() = %#v, want nine schemas", names)
+	if len(names) != 10 {
+		t.Fatalf("CanonicalSchemaNames() = %#v, want ten schemas", names)
 	}
 	names[0] = "mutated"
 	if CanonicalSchemaNames()[0] == "mutated" {
@@ -108,7 +108,7 @@ func TestSchemaRegistryContracts(t *testing.T) {
 				t.Fatalf("type = %#v, want object", object["type"])
 			}
 			requiredVersionField := "version"
-			if name == SchemaTokenEconomyEvidence || name == SchemaMultiAgentReviewEvidence || name == SchemaPolicyPromotionEvidence {
+			if name == SchemaTokenEconomyEvidence || name == SchemaMultiAgentReviewEvidence || name == SchemaPolicyPromotionEvidence || name == SchemaDesignEvidence {
 				requiredVersionField = "schema_version"
 			}
 			if !schemaRequiresField(object, requiredVersionField) {
@@ -170,6 +170,206 @@ func TestPolicyPromotionSchemaObjectDeclaresRequiredSurface(t *testing.T) {
 		if _, ok := properties[field]; !ok {
 			t.Fatalf("policy promotion schema properties missing %s: %#v", field, properties)
 		}
+	}
+}
+
+func TestDesignEvidenceSchemaObjectDeclaresRequiredSurface(t *testing.T) {
+	object := schemaObject(SchemaDesignEvidence)
+	for _, field := range designEvidenceRequiredFields {
+		if !schemaRequiresField(object, field) {
+			t.Fatalf("design evidence schema required = %#v, missing %s", object["required"], field)
+		}
+	}
+	properties, ok := object["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties = %#v, want object", object["properties"])
+	}
+	for _, field := range []string{"schema_version", "teal_applicability", "design_plan_evidence", "design_fidelity_evidence", "color_review_evidence", "boundary_evidence"} {
+		if _, ok := properties[field]; !ok {
+			t.Fatalf("design evidence schema properties missing %s: %#v", field, properties)
+		}
+	}
+	tealApplicability, ok := properties["teal_applicability"].(map[string]any)
+	if !ok {
+		t.Fatalf("teal_applicability property = %#v, want object schema", properties["teal_applicability"])
+	}
+	for _, field := range []string{"project_has_teal_lane", "ui_ux_change", "teal_required", "derivation", "ui_ux_classification_owner", "teal_skip_reason", "teal_owner", "teal_waiver_approved", "teal_waiver_approval_ref", "teal_waiver_scope", "teal_waiver_expires_at", "required_when_teal_required", "missing_required_status"} {
+		if !schemaRequiresField(tealApplicability, field) {
+			t.Fatalf("teal_applicability required = %#v, missing %s", tealApplicability["required"], field)
+		}
+	}
+	tealProperties, ok := tealApplicability["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("teal_applicability properties = %#v, want object", tealApplicability["properties"])
+	}
+	for _, field := range []string{"project_has_teal_lane", "ui_ux_change", "teal_required", "teal_waiver_approved"} {
+		property, ok := tealProperties[field].(map[string]any)
+		if !ok || property["type"] != "boolean" {
+			t.Fatalf("teal_applicability.%s property = %#v, want boolean", field, tealProperties[field])
+		}
+	}
+	derivation, ok := tealProperties["derivation"].(map[string]any)
+	if !ok || derivation["const"] != "project_has_teal_lane && ui_ux_change" {
+		t.Fatalf("teal_applicability.derivation property = %#v, want derivation const", tealProperties["derivation"])
+	}
+	for _, field := range []string{"required_when_teal_required"} {
+		property, ok := tealProperties[field].(map[string]any)
+		if !ok || property["type"] != "array" {
+			t.Fatalf("teal_applicability.%s property = %#v, want string array", field, tealProperties[field])
+		}
+	}
+	boundary, ok := properties["boundary_evidence"].(map[string]any)
+	if !ok {
+		t.Fatalf("boundary_evidence property = %#v, want object schema", properties["boundary_evidence"])
+	}
+	for _, field := range []string{"status", "policy_owner", "kah_validation_role"} {
+		if !schemaRequiresField(boundary, field) {
+			t.Fatalf("boundary_evidence required = %#v, missing %s", boundary["required"], field)
+		}
+	}
+	boundaryProperties, ok := boundary["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("boundary_evidence properties = %#v, want object", boundary["properties"])
+	}
+	policyOwner, ok := boundaryProperties["policy_owner"].(map[string]any)
+	if !ok || policyOwner["const"] != "KAS" {
+		t.Fatalf("boundary_evidence.policy_owner property = %#v, want KAS const", boundaryProperties["policy_owner"])
+	}
+	validationRole, ok := boundaryProperties["kah_validation_role"].(map[string]any)
+	if !ok || validationRole["const"] != "deterministic_shape_only" {
+		t.Fatalf("boundary_evidence.kah_validation_role property = %#v, want deterministic role const", boundaryProperties["kah_validation_role"])
+	}
+}
+
+func TestSchemaValidateDesignEvidenceRelativePathShapeRejectsUnsafeBranches(t *testing.T) {
+	rejected := map[string]string{
+		"empty":               "",
+		"whitespace":          "   ",
+		"absolute":            "/tmp/evidence.md",
+		"dot":                 ".",
+		"dotdot":              "..",
+		"dotdot prefix":       "../escape.md",
+		"dotdot infix":        "safe/../escape.md",
+		"backslash traversal": `foo\..\..\bar`,
+	}
+	for name, value := range rejected {
+		t.Run(name, func(t *testing.T) {
+			if designRelativePathShape(value) {
+				t.Fatalf("designRelativePathShape(%q) = true, want false", value)
+			}
+		})
+	}
+
+	accepted := []string{
+		".kkachi/runs/run-20260622T082204Z-8aa46fa42bff/plan.md",
+		"docs/sot/teal-ui-evidence-gates.md",
+	}
+	for _, value := range accepted {
+		t.Run("accept "+value, func(t *testing.T) {
+			if !designRelativePathShape(value) {
+				t.Fatalf("designRelativePathShape(%q) = false, want true", value)
+			}
+		})
+	}
+}
+
+func TestSchemaValidateDesignEvidence(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	runID := "run-20260622T082204Z-8aa46fa42bff"
+	path := filepath.Join(repo, ".kkachi", "runs", runID, designEvidenceArtifact)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("mkdir design evidence dir: %v", err)
+	}
+
+	writeDesignEvidence(t, path, validDesignEvidence(runID, true))
+	validated, err := ValidateSchemaFile(root, SchemaValidateOptions{File: tokenRunPath(runID, designEvidenceArtifact), Schema: SchemaDesignEvidence})
+	if err != nil {
+		t.Fatalf("ValidateSchemaFile(design-evidence teal-required) error = %v", err)
+	}
+	if validated.Status != "pass" || !schemaTestCheck(validated.Checks, "teal_applicability.teal_required", "pass") || !schemaTestCheck(validated.Checks, "design_plan_evidence.status", "pass") {
+		t.Fatalf("validated = %#v, want Teal-required design evidence schema pass", validated)
+	}
+
+	writeDesignEvidence(t, path, validDesignEvidence(runID, false))
+	skipped, err := ValidateSchemaFile(root, SchemaValidateOptions{File: tokenRunPath(runID, designEvidenceArtifact), Schema: ".kkachi/schemas/design-evidence.schema.json"})
+	if err != nil {
+		t.Fatalf("ValidateSchemaFile(design-evidence non-UI skip) error = %v", err)
+	}
+	if skipped.Status != "pass" || !schemaTestCheck(skipped.Checks, "teal_applicability.teal_required", "pass") || !schemaTestCheck(skipped.Checks, "design_plan_evidence.status", "pass") {
+		t.Fatalf("skipped = %#v, want non-UI skip design evidence schema pass", skipped)
+	}
+
+	tests := []struct {
+		name  string
+		setup func(map[string]any)
+		want  string
+	}{
+		{
+			name: "missing skip reason",
+			setup: func(payload map[string]any) {
+				payload["teal_applicability"].(map[string]any)["teal_skip_reason"] = ""
+			},
+			want: "teal_applicability.teal_skip_reason",
+		},
+		{
+			name: "invalid derivation",
+			setup: func(payload map[string]any) {
+				payload["teal_applicability"].(map[string]any)["project_has_teal_lane"] = true
+				payload["teal_applicability"].(map[string]any)["ui_ux_change"] = true
+				payload["teal_applicability"].(map[string]any)["teal_required"] = false
+			},
+			want: "teal_applicability.teal_required",
+		},
+		{
+			name: "malformed ref",
+			setup: func(payload map[string]any) {
+				payload["design_plan_evidence"].(map[string]any)["detail_ref"] = map[string]any{"path": "../escape.md", "checksum": "sha256:bad"}
+			},
+			want: "design_plan_evidence.detail_ref.path",
+		},
+		{
+			name: "backslash traversal ref",
+			setup: func(payload map[string]any) {
+				payload["design_plan_evidence"].(map[string]any)["detail_ref"] = map[string]any{"path": `foo\..\..\bar`}
+			},
+			want: "design_plan_evidence.detail_ref.path",
+		},
+		{
+			name: "invalid boundary policy owner",
+			setup: func(payload map[string]any) {
+				payload["boundary_evidence"].(map[string]any)["policy_owner"] = "KAH"
+			},
+			want: "boundary_evidence.policy_owner",
+		},
+		{
+			name: "invalid boundary validation role",
+			setup: func(payload map[string]any) {
+				payload["boundary_evidence"].(map[string]any)["kah_validation_role"] = "ui_classification"
+			},
+			want: "boundary_evidence.kah_validation_role",
+		},
+		{
+			name: "missing required section",
+			setup: func(payload map[string]any) {
+				delete(payload, "design_plan_evidence")
+			},
+			want: "design_plan_evidence",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := validDesignEvidence(runID, false)
+			tt.setup(payload)
+			writeDesignEvidence(t, path, payload)
+			failed, err := ValidateSchemaFile(root, SchemaValidateOptions{File: tokenRunPath(runID, designEvidenceArtifact), Schema: SchemaDesignEvidence})
+			if err != nil {
+				t.Fatalf("ValidateSchemaFile(design-evidence negative) error = %v", err)
+			}
+			if failed.Status != "fail" || !schemaTestCheck(failed.Checks, tt.want, "fail") {
+				t.Fatalf("failed = %#v, want fail check %s", failed, tt.want)
+			}
+		})
 	}
 }
 
@@ -381,6 +581,80 @@ func schemaRequiresField(object map[string]any, field string) bool {
 		}
 	}
 	return false
+}
+
+func writeDesignEvidence(t *testing.T, path string, payload map[string]any) {
+	t.Helper()
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal design evidence: %v", err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		t.Fatalf("write design evidence: %v", err)
+	}
+}
+
+func validDesignEvidence(runID string, tealRequired bool) map[string]any {
+	applicability := map[string]any{
+		"project_has_teal_lane":       tealRequired,
+		"ui_ux_change":                tealRequired,
+		"teal_required":               tealRequired,
+		"derivation":                  "project_has_teal_lane && ui_ux_change",
+		"ui_ux_classification_owner":  "KAS workflow-route",
+		"teal_skip_reason":            nil,
+		"teal_owner":                  "teal_reviewer",
+		"teal_waiver_approved":        false,
+		"teal_waiver_approval_ref":    "",
+		"teal_waiver_scope":           "",
+		"teal_waiver_expires_at":      "",
+		"required_when_teal_required": []string{"DESIGN_PLAN_GATE", "DESIGN_FIDELITY_REVIEW"},
+		"missing_required_status":     "required_teal_verdict_missing",
+	}
+	sectionStatus := GateStatusPass
+	sectionReason := ""
+	if !tealRequired {
+		applicability["project_has_teal_lane"] = false
+		applicability["ui_ux_change"] = false
+		applicability["teal_required"] = false
+		applicability["teal_skip_reason"] = "No UI/UX surface in this project/task."
+		applicability["teal_owner"] = nil
+		sectionStatus = GateStatusNotApplicable
+		sectionReason = "No UI/UX surface in this project/task."
+	}
+	return map[string]any{
+		"schema_version":     designEvidenceSchemaVersion,
+		"run_id":             runID,
+		"task_id":            "DESIGN-004",
+		"task_class":         "design-evidence-schema-bootstrap",
+		"teal_applicability": applicability,
+		"design_plan_evidence": map[string]any{
+			"status": sectionStatus,
+			"reason": sectionReason,
+			"detail_ref": map[string]any{
+				"path":     tokenRunPath(runID, "plan.md"),
+				"checksum": "sha256:" + strings.Repeat("a", 64),
+				"markers":  []string{"DESIGN_PLAN_GATE"},
+			},
+		},
+		"design_fidelity_evidence": map[string]any{
+			"status": sectionStatus,
+			"reason": sectionReason,
+			"evidence_refs": []map[string]any{{
+				"path":     tokenRunPath(runID, "verification.md"),
+				"checksum": "sha256:" + strings.Repeat("b", 64),
+			}},
+		},
+		"color_review_evidence": map[string]any{
+			"status": sectionStatus,
+			"reason": sectionReason,
+		},
+		"boundary_evidence": map[string]any{
+			"status":                  GateStatusPass,
+			"policy_owner":            "KAS",
+			"kah_validation_role":     "deterministic_shape_only",
+			"kah_forbidden_decisions": []string{"classify UI", "select Teal owner", "judge design quality", "score screenshots", "approve waiver", "waive gates"},
+		},
+	}
 }
 
 func TestSchemaMigrationDryRunIsReadOnlyAndUnknownSourceFails(t *testing.T) {

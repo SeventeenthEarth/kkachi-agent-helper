@@ -2,7 +2,7 @@
 
 `kkachi-agent-helper` is the deterministic local CLI helper for Kkachi project state, run artifacts, locks, schemas, events, diagnostics, and project bootstrap scaffolding. It stays local-first and scriptable: it does not choose a backend, plan work, review code, call network services, or store secrets.
 
-The current implementation covers `corex-001` through `corex-005`, `runwf-001` through `runwf-004`, `gates-001` through `gates-005`, `packg-001` through `packg-004`, `pilot-001` through `pilot-005`, `align-001` through `align-008`, `graph-001` through `graph-012`, and `token-001`.
+The current implementation covers `corex-001` through `corex-005`, `runwf-001` through `runwf-004`, `gates-001` through `gates-005`, `packg-001` through `packg-004`, `pilot-001` through `pilot-005`, `align-001` through `align-008`, `graph-001` through `graph-012`, `token-001`/`token-002`, MAR evidence, policy-promotion evidence, and DESIGN-004 design-evidence schema/artifact bootstrap.
 
 ## Source of truth
 
@@ -170,9 +170,11 @@ kkachi-agent-helper gate check <run_id> <intake|sot|roadmap|plan|backend|impleme
 kkachi-agent-helper gate final <run_id> [--json]
 ```
 
-Backend JSON evidence is schema-owned. Write `selected-cli.json` and `bridge-session-snapshot.json` with `artifact write`; do not run generic `artifact set-status ... --status complete` on those files. KAH rejects that with `artifact_status_not_applicable` so fields such as `selected-cli.json.status=supported|degraded` are not overwritten. Use `gate check backend` to validate backend evidence completion.
+Schema-owned JSON evidence must be written with `artifact write`; do not run generic `artifact set-status ... --status complete` on `selected-cli.json`, `bridge-session-snapshot.json`, `token-economy-evidence.json`, `multi-agent-review/status.json`, `policy-promotion-evidence.json`, or `design-evidence.json`. KAH rejects that with `artifact_status_not_applicable` so semantic JSON fields are not overwritten.
 
 `gate check <run_id> token-economy` is the deterministic token-001 evidence gate. It is active only for `task_id=token-001`; other tasks emit `not_applicable`. For token-001 runs, it validates the canonical `token-economy-evidence.json` artifact with schema version `token001.v1`, repository-confined evidence refs, optional `sha256:<64hex>` checksums, and marker checks. The gate emits only `pass`, `fail`, or `not_applicable`; invalid or missing evidence fails closed with exit code `3`.
+
+DESIGN-004 provides canonical `design-evidence.json` bootstrap for `DESIGN-*` runs and an embedded/exported `design-evidence` schema (`design004.v1`). KAH validates deterministic shape only: Teal applicability booleans, KAS waiver metadata fields, explicit non-UI skip reasons, evidence ref path shape, optional `sha256:<64hex>` checksums, and required `not_applicable` reasons. KAH does not add a design gate, diagnostics, final-gate enforcement, UI classification, Teal owner selection, design judgment, screenshot scoring, or waiver approval in DESIGN-004.
 
 Phase plans:
 
@@ -224,7 +226,7 @@ kkachi-agent-helper workflow catalog apply --proposal <proposal-id> --approval <
 Schemas and migrations:
 
 ```sh
-kkachi-agent-helper schema validate <file> --schema <config|status|event|run-metadata|selected-cli|bridge-session-snapshot|token-economy-evidence> [--json]
+kkachi-agent-helper schema validate <file> --schema <config|status|event|run-metadata|selected-cli|bridge-session-snapshot|token-economy-evidence|multi-agent-review-evidence|policy-promotion-evidence|design-evidence> [--json]
 kkachi-agent-helper schema export [--schema <name>|--all] [--dry-run] [--json]
 kkachi-agent-helper schema migrate --from <version> --to <version> [--dry-run] [--json]
 ```

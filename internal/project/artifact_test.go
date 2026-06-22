@@ -1,6 +1,7 @@
 package project
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -109,6 +110,34 @@ func TestListArtifactsUsesManifestBeforeAndAfterInit(t *testing.T) {
 	}
 	if !after.Artifacts[0].Exists || after.Artifacts[0].Empty {
 		t.Fatalf("after.Artifacts[0] = %#v, want initialized artifact", after.Artifacts[0])
+	}
+}
+
+func TestInitArtifactsBootstrapsDesignEvidenceTemplate(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.TaskID = "DESIGN-004"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	result, err := InitArtifacts(root, ArtifactInitOptions{RunID: created.Metadata.RunID, Now: testRunNow(4)})
+	if err != nil {
+		t.Fatalf("InitArtifacts() error = %v", err)
+	}
+	if !containsString(result.RequiredArtifacts, designEvidenceArtifact) {
+		t.Fatalf("required artifacts = %#v, missing %s", result.RequiredArtifacts, designEvidenceArtifact)
+	}
+	designPath := filepath.Join(repo, ".kkachi", "runs", created.Metadata.RunID, designEvidenceArtifact)
+	var payload map[string]any
+	readJSONFile(t, designPath, &payload)
+	if payload["schema_version"] != designEvidenceSchemaVersion || payload["run_id"] != created.Metadata.RunID || !strings.Contains(fmt.Sprint(payload["template_note"]), "bootstrap template") {
+		t.Fatalf("design baseline = %#v, want non-factual bootstrap template", payload)
+	}
+	applicability, ok := payload["teal_applicability"].(map[string]any)
+	if !ok || applicability["project_has_teal_lane"] != nil || applicability["ui_ux_change"] != nil || applicability["teal_required"] != nil {
+		t.Fatalf("teal_applicability = %#v, want null placeholder facts", payload["teal_applicability"])
 	}
 }
 
@@ -245,6 +274,25 @@ func TestArtifactManifestTokenEconomyArtifactRequiredForSupportedTokenTasks(t *t
 	}
 }
 
+func TestArtifactManifestDesignEvidenceArtifactRequiredForDesignTasks(t *testing.T) {
+	designTask := "DESIGN-004"
+	otherTask := "PACKG-001"
+	base := RunMetadata{
+		WorkPath:        "A_development_execution",
+		WorkMode:        "standard",
+		ExecutionMode:   "adapter_qa",
+		BackendEvidence: BackendEvidenceNotApplicable,
+	}
+	base.TaskID = &designTask
+	if got := ArtifactManifest(base); !containsString(got, designEvidenceArtifact) {
+		t.Fatalf("ArtifactManifest(DESIGN-004) = %#v, missing %s", got, designEvidenceArtifact)
+	}
+	base.TaskID = &otherTask
+	if got := ArtifactManifest(base); containsString(got, designEvidenceArtifact) {
+		t.Fatalf("ArtifactManifest(non-DESIGN) = %#v, want no design evidence artifact required", got)
+	}
+}
+
 func containsString(values []string, target string) bool {
 	for _, value := range values {
 		if value == target {
@@ -377,6 +425,11 @@ func TestArtifactSetStatusRejectsSchemaOwnedBackendJSON(t *testing.T) {
 	if err := os.WriteFile(policyPromotionPath, policyPromotionContent, 0o600); err != nil {
 		t.Fatalf("write policy-promotion evidence: %v", err)
 	}
+	designPath := filepath.Join(runDir, designEvidenceArtifact)
+	designContent := []byte(`{"schema_version":"` + designEvidenceSchemaVersion + `","run_id":"` + created.Metadata.RunID + `","task_id":"DESIGN-004","task_class":"design-evidence-schema-bootstrap"}` + "\n")
+	if err := os.WriteFile(designPath, designContent, 0o600); err != nil {
+		t.Fatalf("write design evidence: %v", err)
+	}
 
 	beforeEvents := runEventLines(t, repo)
 	_, err = SetArtifactStatus(root, ArtifactMutateOptions{RunID: created.Metadata.RunID, Artifact: "selected-cli.json", Status: "complete", Now: testRunNow(5)})
@@ -413,6 +466,15 @@ func TestArtifactSetStatusRejectsSchemaOwnedBackendJSON(t *testing.T) {
 	}
 	if afterEvents := runEventLines(t, repo); len(afterEvents) != len(beforeEvents) {
 		t.Fatalf("events changed after policy-promotion evidence rejection: before=%d after=%d", len(beforeEvents), len(afterEvents))
+	}
+
+	_, err = SetArtifactStatus(root, ArtifactMutateOptions{RunID: created.Metadata.RunID, Artifact: designEvidenceArtifact, Status: "complete", Now: testRunNow(9)})
+	assertProblemCode(t, err, "artifact_status_not_applicable")
+	if got := readText(t, designPath); got != string(designContent) {
+		t.Fatalf("design-evidence.json after rejected set-status = %q, want unchanged", got)
+	}
+	if afterEvents := runEventLines(t, repo); len(afterEvents) != len(beforeEvents) {
+		t.Fatalf("events changed after design evidence rejection: before=%d after=%d", len(beforeEvents), len(afterEvents))
 	}
 }
 

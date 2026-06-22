@@ -37,6 +37,7 @@ var canonicalArtifactPaths = []string{
 	"token-economy-evidence.json",
 	"multi-agent-review/status.json",
 	policyPromotionArtifact,
+	designEvidenceArtifact,
 	"prompt.md",
 	"context-pack.md",
 	"cli-output.md",
@@ -336,6 +337,9 @@ func ArtifactManifest(metadata RunMetadata) []string {
 	if metadata.TaskID != nil && strings.TrimSpace(*metadata.TaskID) == policyPromotionTaskID {
 		required = append(required, policyPromotionArtifact)
 	}
+	if metadata.TaskID != nil && strings.HasPrefix(strings.TrimSpace(*metadata.TaskID), "DESIGN-") {
+		required = append(required, designEvidenceArtifact)
+	}
 	if metadata.WorkPath == "A_development_execution" {
 		required = append(required, "sot-basis.md", "roadmap-update.md", "plan.md", "checklist.md")
 	} else if metadata.WorkPath == "B_discovery_shaping" {
@@ -555,7 +559,8 @@ func schemaOwnedJSONArtifact(relative string) bool {
 		strings.HasSuffix(relative, "/bridge-session-snapshot.json") ||
 		strings.HasSuffix(relative, "/token-economy-evidence.json") ||
 		strings.HasSuffix(relative, "/multi-agent-review/status.json") ||
-		strings.HasSuffix(relative, "/policy-promotion-evidence.json")
+		strings.HasSuffix(relative, "/policy-promotion-evidence.json") ||
+		strings.HasSuffix(relative, "/design-evidence.json")
 }
 
 func readArtifactForStatus(path SafePath) ([]byte, error) {
@@ -627,6 +632,9 @@ func jsonArtifactContentWithStatus(path SafePath, content []byte, status string,
 }
 
 func artifactBaselineContent(metadata RunMetadata, artifact string) ([]byte, error) {
+	if artifact == designEvidenceArtifact {
+		return designEvidenceBaseline(metadata)
+	}
 	if strings.HasSuffix(artifact, ".json") {
 		payload := map[string]any{
 			"version":  "0.1",
