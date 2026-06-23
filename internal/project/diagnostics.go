@@ -26,6 +26,7 @@ var diagnosticArtifactPaths = []string{
 	"verification.md",
 	"docs-update.md",
 	"final-report.md",
+	designEvidenceArtifact,
 }
 
 type DiagnosticsExportOptions struct {
@@ -44,6 +45,7 @@ type DiagnosticsBundle struct {
 	GraphCompatibility      DiagnosticsGraphCompatibility       `json:"graph_compatibility"`
 	WorkflowCatalog         WorkflowCatalogResult               `json:"workflow_catalog"`
 	RunID                   string                              `json:"run_id,omitempty"`
+	DesignEvidence          *DesignEvidenceDiagnostics          `json:"design_evidence,omitempty"`
 	WorkflowInstance        *WorkflowInstanceCompletenessResult `json:"workflow_instance,omitempty"`
 	WorkflowTransitionOrder *WorkflowTransitionOrderResult      `json:"workflow_transition_order,omitempty"`
 	GateReports             []DiagnosticsFile                   `json:"gate_reports"`
@@ -152,6 +154,12 @@ func ExportDiagnostics(root Root, options DiagnosticsExportOptions) (Diagnostics
 		bundle.WorkflowTransitionOrder = &workflowTransitionOrder
 		bundle.GateReports = diagnosticGateReports(root, runID)
 		bundle.SelectedArtifacts = diagnosticSelectedArtifacts(root, runID)
+		metadata, _, err := ReadRunMetadata(root, runID)
+		if err != nil {
+			return DiagnosticsBundle{}, err
+		}
+		designEvidence := designEvidenceDiagnostics(root, metadata)
+		bundle.DesignEvidence = &designEvidence
 		records, err := ApprovalRecords(root, runID)
 		if err != nil {
 			return DiagnosticsBundle{}, err

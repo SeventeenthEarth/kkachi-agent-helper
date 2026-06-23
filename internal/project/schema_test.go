@@ -647,6 +647,10 @@ func validDesignEvidence(runID string, tealRequired bool) map[string]any {
 		"color_review_evidence": map[string]any{
 			"status": sectionStatus,
 			"reason": sectionReason,
+			"evidence_refs": []map[string]any{{
+				"path":     tokenRunPath(runID, "review.md"),
+				"checksum": "sha256:" + strings.Repeat("c", 64),
+			}},
 		},
 		"boundary_evidence": map[string]any{
 			"status":                  GateStatusPass,

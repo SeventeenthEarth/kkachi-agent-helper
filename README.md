@@ -2,7 +2,7 @@
 
 `kkachi-agent-helper` is the deterministic local CLI helper for Kkachi project state, run artifacts, locks, schemas, events, diagnostics, and project bootstrap scaffolding. It stays local-first and scriptable: it does not choose a backend, plan work, review code, call network services, or store secrets.
 
-The current implementation covers `corex-001` through `corex-005`, `runwf-001` through `runwf-004`, `gates-001` through `gates-005`, `packg-001` through `packg-004`, `pilot-001` through `pilot-005`, `align-001` through `align-008`, `graph-001` through `graph-012`, `token-001`/`token-002`, MAR evidence, policy-promotion evidence, and DESIGN-004 design-evidence schema/artifact bootstrap.
+The current implementation covers `corex-001` through `corex-005`, `runwf-001` through `runwf-004`, `gates-001` through `gates-005`, `packg-001` through `packg-004`, `pilot-001` through `pilot-005`, `align-001` through `align-008`, `graph-001` through `graph-012`, `token-001`/`token-002`, MAR evidence, policy-promotion evidence, and DESIGN-004/DESIGN-005 design-evidence schema/artifact/gate support.
 
 ## Source of truth
 
@@ -174,7 +174,7 @@ Schema-owned JSON evidence must be written with `artifact write`; do not run gen
 
 `gate check <run_id> token-economy` is the deterministic token-001 evidence gate. It is active only for `task_id=token-001`; other tasks emit `not_applicable`. For token-001 runs, it validates the canonical `token-economy-evidence.json` artifact with schema version `token001.v1`, repository-confined evidence refs, optional `sha256:<64hex>` checksums, and marker checks. The gate emits only `pass`, `fail`, or `not_applicable`; invalid or missing evidence fails closed with exit code `3`.
 
-DESIGN-004 provides canonical `design-evidence.json` bootstrap for `DESIGN-*` runs and an embedded/exported `design-evidence` schema (`design004.v1`). KAH validates deterministic shape only: Teal applicability booleans, KAS waiver metadata fields, explicit non-UI skip reasons, evidence ref path shape, optional `sha256:<64hex>` checksums, and required `not_applicable` reasons. KAH does not add a design gate, diagnostics, final-gate enforcement, UI classification, Teal owner selection, design judgment, screenshot scoring, or waiver approval in DESIGN-004.
+DESIGN-004 provides canonical `design-evidence.json` bootstrap for `DESIGN-*` runs and an embedded/exported `design-evidence` schema (`design004.v1`). DESIGN-005 adds `gate check <run_id> design-evidence`, diagnostics `design_evidence` readback, and `gate final` integration when `design-evidence.json` is declared in the run manifest. KAH validates deterministic shape and evidence presence only: Teal applicability booleans, KAS waiver metadata fields, explicit non-UI skip reasons, required Teal plan/spec/fidelity/screenshot/verification evidence, evidence ref path shape, optional `sha256:<64hex>` checksums, and required `not_applicable` reasons. KAH does not classify UI, select Teal owners, judge design quality, score screenshots, approve waivers, activate KAB, or mutate runtime/provider/auth/profile/model settings.
 
 Phase plans:
 

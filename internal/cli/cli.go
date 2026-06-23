@@ -107,6 +107,9 @@ type compatibilityFlagsOutput struct {
 	MultiAgentReviewEvidenceSchema          bool `json:"multi_agent_review_evidence_schema"`
 	PolicyPromotionEvidenceGate             bool `json:"policy_promotion_evidence_gate"`
 	PolicyPromotionEvidenceSchema           bool `json:"policy_promotion_evidence_schema"`
+	DesignEvidenceGate                      bool `json:"design_evidence_gate"`
+	DesignEvidenceDiagnostics               bool `json:"design_evidence_diagnostics"`
+	DesignEvidenceFinalGate                 bool `json:"design_evidence_final_gate"`
 	InstallCommand                          bool `json:"install_command"`
 }
 
@@ -2847,6 +2850,9 @@ func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
 			MultiAgentReviewEvidenceSchema:          true,
 			PolicyPromotionEvidenceGate:             true,
 			PolicyPromotionEvidenceSchema:           true,
+			DesignEvidenceGate:                      true,
+			DesignEvidenceDiagnostics:               true,
+			DesignEvidenceFinalGate:                 true,
 			InstallCommand:                          false,
 		},
 		DeprecatedSurfaces: []capabilitySurfaceOutput{},

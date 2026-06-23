@@ -109,6 +109,9 @@ func checkFinalGate(root Root, metadata RunMetadata, _ string) (GateCheckResult,
 	if multiAgentReviewGateRequired(root, metadata) {
 		requiredGates = append(requiredGates, GateMultiAgentReview)
 	}
+	if designEvidenceGateRequired(metadata) {
+		requiredGates = append(requiredGates, GateDesignEvidence)
+	}
 	workflowRequiredGates, workflowBlocked := workflowFinalRequiredGateIDs(root)
 	if workflowBlocked != nil {
 		checks = append(checks, *workflowBlocked)

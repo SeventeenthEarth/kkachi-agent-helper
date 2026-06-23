@@ -1,6 +1,6 @@
 # DESIGN Teal UI evidence gates for KAH
 
-Status: DESIGN-004 implementation SOT for KAH design evidence schema/artifact bootstrap; DESIGN-005 gate/diagnostic behavior remains deferred
+Status: DESIGN-005 source-side implementation SOT for KAH design evidence schema/artifact bootstrap, fail-closed gate checks, diagnostics readback, and final-gate integration
 Owner: KAH deterministic helper layer
 Source evidence: `/Users/draccoon/Workspace/Hermes/17thHermes/40_outputs/projects/kkachi/2026-06-21-kas-kah-teal-ui-workflow-sot.md`
 Upstream KAS SOT: `kkachi-hermes-skills/docs/sot/teal-ui-workflow-policy.md`
@@ -11,7 +11,7 @@ This document registers KAH's deterministic helper responsibilities for the `DES
 
 KAH must not decide whether a design is good, select Teal owners, waive Teal, judge screenshots subjectively, choose workflows, run reviewers, or replace KAS/Blue/Teal authority. KAH records deterministic facts and fails closed when required declared evidence is missing or malformed.
 
-DESIGN-004 implements only the canonical `design-evidence.json` artifact bootstrap and embedded/exportable `design-evidence` schema (`design004.v1`). KAH validates deterministic JSON shape only in this task; DESIGN-005 remains responsible for any fail-closed Teal gate, diagnostic, or final-gate behavior.
+DESIGN-004 implemented the canonical `design-evidence.json` artifact bootstrap and embedded/exportable `design-evidence` schema (`design004.v1`). DESIGN-005 adds the source-side `design-evidence` gate, diagnostics readback, and final-gate integration. KAH still validates deterministic shape and declared evidence presence only.
 
 ## KAH evidence fields
 
@@ -50,7 +50,9 @@ If `teal_required=true`, KAH must fail closed when declared required design-plan
 
 If `teal_required=false`, KAH should validate that a concrete `teal_skip_reason` or authorized waiver evidence exists and report not-applicable/pass only through deterministic shape checks.
 
-DESIGN-004 schema validation rejects malformed `design-evidence.json` shape as ordinary schema validation. It does not register a `design` gate, update diagnostics, or integrate with `gate final`; those fail-closed checks are deferred to DESIGN-005 and must not be replaced with warning-only behavior.
+DESIGN-004 schema validation rejects malformed `design-evidence.json` shape as ordinary schema validation. DESIGN-005 registers the built-in `design-evidence` gate, adds diagnostics `design_evidence` readback, and makes `gate final` require a passing/fresh `design-evidence` gate when `design-evidence.json` is declared in the run manifest. Required evidence gaps, unsafe refs, invalid skip/waiver evidence, and warning-only downgrade attempts fail closed.
+
+Stable DESIGN-005 reason codes include `design_evidence_missing`, `design_evidence_schema_invalid`, `design_evidence_ref_unsafe`, `design_evidence_boundary_invalid`, `teal_required_evidence_missing`, `teal_required_plan_verdict_missing`, `teal_required_design_spec_missing`, `teal_required_fidelity_refs_missing`, `teal_required_screenshot_refs_missing`, `teal_required_verification_verdict_missing`, `teal_required_waiver_invalid`, `teal_skip_evidence_missing`, `teal_skip_reason_missing`, `teal_waiver_evidence_invalid`, and `warning_only_fallback_forbidden`.
 
 ## Sequential task order
 
@@ -68,4 +70,4 @@ Small cross-edits are allowed only for field-name alignment, docs links, fixture
 
 ## Boundaries
 
-This planning SOT does not authorize helper code behavior, schema export claims, installed binary readiness, profile skill updates, runtime/provider/auth/token/gateway/model mutation, KAB activation, release, push, or applying Teal to non-UI Kkachi repository work. Implementation status requires task-specific code/docs/tests, KAS compatibility evidence, and official review gates.
+This SOT does not authorize installed binary readiness, profile skill updates, runtime/provider/auth/token/gateway/model mutation, KAB activation, release, push, KAS policy mutation, or applying Teal to non-UI Kkachi repository work. Final closure still requires task-specific implementation evidence, KAS compatibility evidence, and official review gates.
