@@ -176,6 +176,8 @@ Schema-owned JSON evidence must be written with `artifact write`; do not run gen
 
 DESIGN-004 provides canonical `design-evidence.json` bootstrap for `DESIGN-*` runs and an embedded/exported `design-evidence` schema (`design004.v1`). DESIGN-005 adds `gate check <run_id> design-evidence`, diagnostics `design_evidence` readback, and `gate final` integration when `design-evidence.json` is declared in the run manifest. KAH validates deterministic shape and evidence presence only: Teal applicability booleans, KAS waiver metadata fields, explicit non-UI skip reasons, required Teal plan/spec/fidelity/screenshot/verification evidence, evidence ref path shape, optional `sha256:<64hex>` checksums, and required `not_applicable` reasons. KAH does not classify UI, select Teal owners, judge design quality, score screenshots, approve waivers, activate KAB, or mutate runtime/provider/auth/profile/model settings.
 
+DESIGN-006 cross-repo compatibility fixtures read KAS declarations for `kkachi_non_ui_skip`, `kkachi_teal_lane_non_ui_skip`, `sudal_ui_required`, and `doksuri_ui_required` and map them into KAH `design-evidence` schema/gate expectations when the KAS fixture is available through `KAS_DESIGN006_SCENARIOS` or a sibling checkout. These fixtures prove deterministic agreement only; they do not authorize installed binary readiness, downstream Sudal/Doksuri UI implementation, Teal owner assignment, or substitution of color review, MAR, backend evidence, or helper notes for required Teal verdicts.
+
 Phase plans:
 
 ```sh

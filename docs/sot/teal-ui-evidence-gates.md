@@ -13,6 +13,8 @@ KAH must not decide whether a design is good, select Teal owners, waive Teal, ju
 
 DESIGN-004 implemented the canonical `design-evidence.json` artifact bootstrap and embedded/exportable `design-evidence` schema (`design004.v1`). DESIGN-005 adds the source-side `design-evidence` gate, diagnostics readback, and final-gate integration. KAH still validates deterministic shape and declared evidence presence only.
 
+DESIGN-006 adds cross-repo readback fixtures for KAS-declared scenarios: `kkachi_non_ui_skip`, `kkachi_teal_lane_non_ui_skip`, `sudal_ui_required`, and `doksuri_ui_required`. KAS owns the canonical declarations in `kkachi-hermes-skills/docs/examples/design006-teal-compatibility-scenarios.json`; KAH tests consume those declarations from `KAS_DESIGN006_SCENARIOS` or the sibling KAS checkout when present and prove they map to deterministic `design-evidence` schema/gate expectations without KAH classifying UI or judging design quality.
+
 ## KAH evidence fields
 
 KAH companion work should support deterministic fields such as:
