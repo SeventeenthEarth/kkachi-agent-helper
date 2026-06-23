@@ -81,11 +81,11 @@ make check
 - `go install github.com/SeventeenthEarth/kkachi-agent-helper@latest` installs the tagged helper to Go's binary directory (`GOBIN`, or `$(go env GOPATH)/bin`).
 - `make build` writes `bin/kkachi-agent-helper` from the root installable package.
 - `make install` installs the local checkout to Go's binary directory (`GOBIN`, or `$(go env GOPATH)/bin`) with the Makefile version metadata.
-- `make VERSION=0.1.13 release` writes release artifacts to `dist/`:
-  - `dist/kkachi-agent-helper_0.1.13_<goos>_<goarch>`
-  - `dist/kkachi-agent-helper_0.1.13_<goos>_<goarch>.tar.gz`
+- `make VERSION=0.1.14 release` writes release artifacts to `dist/`:
+  - `dist/kkachi-agent-helper_0.1.14_<goos>_<goarch>`
+  - `dist/kkachi-agent-helper_0.1.14_<goos>_<goarch>.tar.gz`
   - `dist/SHA256SUMS`
-- Tagged `go install ...@v0.1.13` builds derive the helper version from Go module build info; local `make build` defaults to `0.1.13` for this release and can still be overridden with `VERSION=<version>`.
+- Tagged `go install ...@v0.1.14` builds derive the helper version from Go module build info; local `make build` defaults to `0.1.14` for this release and can still be overridden with `VERSION=<version>`.
 
 Test lanes are intentionally split:
 

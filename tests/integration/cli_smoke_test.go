@@ -19,7 +19,7 @@ func TestBinaryEntrypointSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("go run failed: %v\n%s", err, string(output))
 	}
-	if got, want := string(output), "kkachi-agent-helper 0.1.13\n"; got != want {
+	if got, want := string(output), "kkachi-agent-helper 0.1.14\n"; got != want {
 		t.Fatalf("output = %q, want %q", got, want)
 	}
 }
@@ -682,8 +682,8 @@ func TestProjectInitCreatesStateAndRefusesOverwrite(t *testing.T) {
 		t.Fatalf("payload = %#v, want project identity and initial event", payload)
 	}
 	schemaPathList := strings.Join(payload.SchemaPaths, ",")
-	if len(payload.CreatedPaths) != 5 || len(payload.SchemaPaths) != 9 || !strings.Contains(schemaPathList, ".kkachi/schemas/multi-agent-review-evidence.schema.json") || !strings.Contains(schemaPathList, ".kkachi/schemas/policy-promotion-evidence.schema.json") {
-		t.Fatalf("paths = %#v/%#v, want state and canonical schema paths including MAR and policy-promotion evidence", payload.CreatedPaths, payload.SchemaPaths)
+	if len(payload.CreatedPaths) != 5 || len(payload.SchemaPaths) != 10 || !strings.Contains(schemaPathList, ".kkachi/schemas/multi-agent-review-evidence.schema.json") || !strings.Contains(schemaPathList, ".kkachi/schemas/policy-promotion-evidence.schema.json") || !strings.Contains(schemaPathList, ".kkachi/schemas/design-evidence.schema.json") {
+		t.Fatalf("paths = %#v/%#v, want state and canonical schema paths including MAR, policy-promotion, and design evidence", payload.CreatedPaths, payload.SchemaPaths)
 	}
 
 	statusCmd := exec.Command(binary, "project", "status", "--json")
