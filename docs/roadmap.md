@@ -31,6 +31,7 @@ Status values: `Planned`, `In Progress`, `Blocked`, `Completed`, `Deferred`.
 | 13 | `STRICT` | KAH hardens workflow-managed runs with strict final-gate markers, node claim ledger/order verification, and phase-plan projection consistency for KAS-selected workflows. |
 | 14 | `TOLMR` | KAH exposes read-only project/helper facts so KAS can generate and validate `.kkachi/toolchain.yaml` local toolchain state without moving policy ownership into KAH. |
 | 15 | `DESIGN` | KAH supplies deterministic Teal/UI evidence schema, artifact, gate, and diagnostics support for KAS-selected UI-bearing workflows without judging design or activating Teal for non-UI Kkachi source work. |
+| 16 | `GAJAE` | KAH supplies the deterministic GJC wrapper, GJC/KAT artifact ledger, async status, and Kanban/watcher callback evidence for KAS-owned GAJAE delegated execution. |
 
 ## Active roadmap
 
@@ -266,6 +267,25 @@ POLPR deferrals unless separately approved: provider execution, reviewer choice,
 | DESIGN-007 | KAS+KAH review/closeout | Complete verification, docs maps, color/Teal review, and Blue closeout | Completed | Run final KAS/KAH verification, docs impact checks, Red/Orange/Gray plus applicable Teal Lead review, and Blue synthesis. | Completed in run `run-20260623T085445Z-8ca2ed114b7c`: classification `collaboration_review/review_light`, KAS/KAH docs-map parse, roadmap readback, KAS/KAH aggregate tests, Red/Orange/Gray PASS_WITH_FINDINGS, Goong/Teal applicability PASS_WITH_FINDINGS with `teal_required=false`, and Blue closeout. KAS includes a gofmt drift repair found by the aggregate gate. Push/install/release/runtime/profile/provider/auth/token/gateway/model mutation remain separate approvals. |
 
 DESIGN deferrals unless separately approved: KAH task classification, Teal owner selection, design judgment, waiver approval, screenshot subjective scoring, automatic reviewer routing, applying Teal to non-UI Kkachi source work, KAB activation, profile/provider/auth/token/gateway/model mutation, release/install/push, or warning-only behavior when required Teal evidence is missing.
+
+### EPIC: GAJAE — GJC wrapper and delegated-execution evidence
+
+> Goal: provide the deterministic KAH wrapper/evidence substrate for KAS-owned GAJAE delegated execution through GJC (`deep-interview`, `ralplan`, `ultragoal`) and KAT, without moving policy, plan acceptance, review, MAR, or final authority into KAH.
+>
+> Source of truth: `docs/sot/gajae-gjc-wrapper-evidence.md`. Upstream KAS SOT: `kkachi-hermes-skills/docs/sot/gajae-delegated-execution-contract.md`. Source/pilot evidence: `/Users/draccoon/Workspace/Hermes/17thHermes/40_outputs/team/hwangchung/kkachi/2026-06-23-kas-kah-kat-gjc-execution-sot.md` and `/Users/draccoon/Workspace/Hermes/17thHermes/50_health/team/hwangchung/backups/gjc-delegated-execution-pilot-20260625/report.md`.
+>
+> Shared execution rule: GAJAE uses one logical task sequence with separate KAS and KAH repo-local gates, evidence, and commits. KAH validates and records deterministic evidence only; KAS/Blue/color gates decide acceptance. Execute `GAJAE-001 -> GAJAE-002 -> GAJAE-003 -> GAJAE-004 -> GAJAE-005 -> GAJAE-006`.
+
+| Task ID | Owner | Title | Status | Work guide | Notes |
+|---|---|---|---|---|---|
+| GAJAE-001 | KAS-led docs/SOT | Register GAJAE wrapper/evidence SOT and roadmap sequence | Completed | Add KAH companion SOT, KAS SOT cross-link, both roadmaps, docs indexes, and docs maps. | Completed as docs-only planning registration after docs/readback verification and color closure: Red `t_4cbf4624`, Orange `t_18dccb4c`, Gray initial `t_bbb1af05`, Gray focused re-review `t_c6ba0567`, and Blue synthesis `t_6be5b0e5` accepted the docs-only planning registration after traceability fixes; synthesis artifact: `/Users/draccoon/Workspace/Hermes/17thHermes/50_health/team/hwangchung/backups/gajae-001-color-review-20260626/blue-synthesis.md`. No helper command behavior, schema, gate, installed binary, release, profile mutation, KAB activation, or provider/auth/gateway/model mutation is authorized. |
+| GAJAE-002 | KAH | Implement GJC wrapper MVP | Planned | Add `kkachi-agent-helper gjc` command group or approved equivalent for start/status with real-user HOME normalization, `GJC_SESSION_ID` persistence, process evidence, and compact JSON. | Must fail closed on missing GJC, missing session id, unsafe paths, unsupported status, or missing artifact refs. |
+| GAJAE-003 | KAS+KAH (KAS-led) | Add GJC packet/template and artifact-reference contract | Planned | Shared logical task: KAS physical scope owns packet templates and gate language; KAH physical scope accepts KAS packet refs, stores GJC ralplan/ultragoal artifact refs and hashes, and exposes status without interpreting KAS policy. | KAH does not decide plan acceptance, GJC scope, review verdicts, or final completion; repo-local tests/gates remain separate. |
+| GAJAE-004 | KAH | Support async ralplan callback evidence | Planned | Start ralplan asynchronously, capture receipt/status/hash, and record Kanban callback/idempotency evidence for KAS plan review. | Callback reports plan-ready only; it must not lock or approve the plan. |
+| GAJAE-005 | KAH | Attach async ultragoal and KAT evidence | Planned | Capture ultragoal ledger/status plus KAT run-id artifacts under `.kkachi/runs/<run_id>/artifacts/test/`, including status hash and extractor status. | Use `kkachi-agent-tester --run-id <run_id> run ...`; command exit code remains factual evidence. |
+| GAJAE-006 | KAH+KAS closeout | Productize watcher/callback closeout | Planned | Add idempotent callback/watcher status surfaces, notification metadata evidence, docs/specs/compatibility updates, and cross-repo pilot closeout. | Same-thread Discord wake claims require explicit metadata/watcher evidence. |
+
+GAJAE deferrals unless separately approved: KAH policy ownership, GJC self-approval, automatic fallback backend selection, KAB runtime/session control, profile/provider/auth/token/gateway/model mutation, release/install/push, warning-only final gates, and same-thread Discord wake claims before evidence exists.
 
 ## Backlog and review points
 

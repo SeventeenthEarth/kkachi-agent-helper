@@ -11,6 +11,7 @@ sot_docs:
   - "docs/sot/strict-workflow-enforcement.md"
   - "docs/sot/toolchain-probe-contract.md"
   - "docs/sot/teal-ui-evidence-gates.md"
+  - "docs/sot/gajae-gjc-wrapper-evidence.md"
 adr_dir: "docs/sot"
 todo_dir: "docs"
 spec_dir: "docs"
