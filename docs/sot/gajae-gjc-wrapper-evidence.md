@@ -53,7 +53,9 @@ The exact CLI may change during implementation, but the wrapper must preserve th
 - callback idempotency;
 - watcher-compatible compact JSON.
 
-For the GAJAE-002 MVP receipt, `artifact_refs` is the canonical GJC JSON field. KAH may accept `artifacts` as a bounded compatibility alias when `artifact_refs` is absent, but KAH-persisted status evidence must continue to write `artifact_refs`.
+For the GAJAE-003 packet-reference contract, `packet_ref` is the canonical KAS input packet evidence stored in KAH status: the selected run-local packet path plus SHA-256. KAH validates `packet_ref` mechanically as repository-confined, run-local, readable, regular-file evidence with a matching hash before status is consumed. Missing, cross-run, unsafe, non-regular, unreadable, or hash-drifted `packet_ref` evidence fails closed with recovery guidance to regenerate or repair the KAS packet before consuming GJC status.
+
+For GJC candidate output, `artifact_refs` remains the canonical GJC JSON field. KAH may accept `artifacts` as a bounded compatibility alias when `artifact_refs` is absent, but KAH-persisted status evidence must continue to write `artifact_refs`.
 
 ## 4. GJC delegation ledger intent
 
@@ -74,6 +76,9 @@ gjc:
   process_id: <local-process-id-or-null>
   last_status_path: .kkachi/runs/<run_id>/artifacts/gjc/status.json
   last_status_hash: sha256:<hash>
+packet_ref:
+  path: .kkachi/runs/<run_id>/artifacts/gjc/<packet>.yaml
+  sha256: sha256:<hash>
 plan:
   artifact: .kkachi/runs/<run_id>/artifacts/plan/gjc-plan.md
   artifact_hash: sha256:<hash>
@@ -132,7 +137,7 @@ GAJAE uses shared logical task ids across KAS and KAH. KAH tasks require KAH-loc
 |---|---|---|---|
 | GAJAE-001 | Register GAJAE SOTs and roadmap sequence | Add this SOT, KAS companion cross-link, roadmap/docs index/docs-map entries. | Completed |
 | GAJAE-002 | Implement KAH GJC wrapper MVP | Add `gjc` command group with environment/session normalization and read-only/status-safe start/status behavior. | Completed |
-| GAJAE-003 | Add GJC packet/template and artifact-reference contract | Shared logical task with KAS physical packet-template scope and KAH physical packet-ref/artifact-ref preservation scope. KAH validates packet path/ref shape and preserves GJC artifact refs without interpreting policy. | Planned |
+| GAJAE-003 | Add GJC packet/template and artifact-reference contract | Shared logical task with KAS physical packet-template scope and KAH physical packet-ref/artifact-ref preservation scope. KAH validates `packet_ref` as KAS input packet evidence and preserves GJC `artifact_refs` as candidate output evidence without interpreting policy. | Completed |
 | GAJAE-004 | Async ralplan callback pilot | Start ralplan async, capture plan receipt/status, and record Kanban callback evidence for plan review. | Planned |
 | GAJAE-005 | Async ultragoal + KAT evidence pilot | Start ultragoal async, attach KAT run-id evidence, and expose review-ready status. | Planned |
 | GAJAE-006 | Watcher/callback closeout | Productize idempotent callback/watcher status surfaces and docs/compatibility notes. | Planned |

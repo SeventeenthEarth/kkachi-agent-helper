@@ -687,6 +687,9 @@ JSON
 	if jsonFieldString(t, []byte(start.stdout), "status.real_user_home") != "/Users/draccoon" {
 		t.Fatalf("start did not normalize HOME: %s", start.stdout)
 	}
+	if jsonFieldString(t, []byte(start.stdout), "status.packet_ref.path") != packetRel {
+		t.Fatalf("start did not record packet_ref: %s", start.stdout)
+	}
 	if jsonFieldString(t, []byte(start.stdout), "status.artifact_refs") == "[]" {
 		t.Fatalf("start did not record artifact refs: %s", start.stdout)
 	}
@@ -699,6 +702,9 @@ JSON
 	status := requireCLI(t, dir, "--json", "gjc", "status", "--run", runID)
 	if jsonFieldString(t, []byte(status.stdout), "status.gjc_session_id") != "gjc-"+runID {
 		t.Fatalf("status stdout = %s", status.stdout)
+	}
+	if jsonFieldString(t, []byte(status.stdout), "status.packet_ref.path") != packetRel {
+		t.Fatalf("status did not return packet_ref: %s", status.stdout)
 	}
 	if jsonFieldString(t, []byte(status.stdout), "status.artifact_refs") == "[]" {
 		t.Fatalf("status did not return artifact refs: %s", status.stdout)

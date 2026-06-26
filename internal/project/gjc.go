@@ -74,6 +74,7 @@ type GJCStatus struct {
 	RealUserHome         string           `json:"real_user_home"`
 	GJCSessionID         string           `json:"gjc_session_id"`
 	Process              GJCProcessStatus `json:"process"`
+	Packet               GJCArtifactRef   `json:"packet_ref"`
 	Artifacts            []GJCArtifactRef `json:"artifact_refs"`
 	CurrentRequiredActor string           `json:"current_required_actor"`
 	CurrentWaitReason    *string          `json:"current_wait_reason"`
@@ -193,6 +194,11 @@ func startGJCUnlocked(root Root, options GJCStartOptions) (GJCStartResult, error
 	if err != nil {
 		return GJCStartResult{}, err
 	}
+	packetData, err := os.ReadFile(packet.Absolute)
+	if err != nil {
+		return GJCStartResult{}, &Problem{Code: "gjc_artifact_read_failed", Message: "cannot read GJC packet_ref", Hint: "Regenerate or repair the run-local KAS packet before starting GJC.", Path: packet.Relative, Field: "packet_ref.path", Expected: "readable packet file", Actual: err.Error()}
+	}
+	packetRef := GJCArtifactRef{Path: packet.Relative, SHA256: sha256String(packetData)}
 	session, err := loadOrCreateGJCSession(root, metadata.RunID, options.Now)
 	if err != nil {
 		return GJCStartResult{}, err
@@ -219,6 +225,7 @@ func startGJCUnlocked(root Root, options GJCStartOptions) (GJCStartResult, error
 		RealUserHome:         realHome,
 		GJCSessionID:         session.SessionID,
 		Process:              GJCProcessStatus{Status: GJCStatusRunning, PID: runnerResult.PID, ExitCode: runnerResult.ExitCode},
+		Packet:               packetRef,
 		CurrentRequiredActor: GJCActorGJC,
 		StatusPath:           mustGJCStatusRelative(metadata.RunID),
 		UpdatedAt:            occurredAt,
@@ -391,6 +398,9 @@ func validatePersistedGJCStatus(root Root, metadata RunMetadata, status GJCStatu
 	if !validGJCActor(status.CurrentRequiredActor) {
 		return &Problem{Code: "gjc_required_actor_unsupported", Message: "GJC status ledger contains unsupported required actor", Hint: "Use gjc, kas, color, mar, user, kat, or none.", Path: relative, Field: "current_required_actor", Expected: "supported GAJAE actor", Actual: status.CurrentRequiredActor}
 	}
+	if err := validateGJCPacketRef(root, metadata.RunID, status.Packet); err != nil {
+		return err
+	}
 	for i, ref := range status.Artifacts {
 		if err := validateGJCArtifactRef(root, metadata.RunID, ref, fmt.Sprintf("artifact_refs[%d]", i)); err != nil {
 			return err
@@ -430,6 +440,25 @@ func validateGJCSession(runID string, session gjcSession, relative string) error
 	}
 	if !gjcSessionIDPattern.MatchString(session.SessionID) {
 		return &Problem{Code: "gjc_session_invalid", Message: "GJC session id is malformed", Hint: "Regenerate session evidence through the KAH GJC wrapper.", Path: relative, Field: "gjc_session_id", Expected: "gjc-run-YYYYMMDDTHHMMSSZ-<12hex>", Actual: session.SessionID}
+	}
+	return nil
+}
+
+func validateGJCPacketRef(root Root, runID string, ref GJCArtifactRef) error {
+	path, err := validateGJCRunRef(root, runID, ref.Path, "packet_ref.path")
+	if err != nil {
+		return err
+	}
+	if !gjcChecksumPattern.MatchString(ref.SHA256) {
+		return &Problem{Code: "gjc_checksum_malformed", Message: "GJC packet checksum is malformed", Hint: "Use sha256:<64 lowercase hex characters> for the KAS packet_ref.", Path: path.Relative, Field: "packet_ref.sha256", Expected: "sha256:<64hex>", Actual: ref.SHA256}
+	}
+	data, err := os.ReadFile(path.Absolute)
+	if err != nil {
+		return &Problem{Code: "gjc_artifact_read_failed", Message: "cannot read GJC packet_ref", Hint: "Regenerate or repair the run-local KAS packet before consuming GJC status.", Path: path.Relative, Field: "packet_ref.path", Expected: "readable packet file", Actual: err.Error()}
+	}
+	actual := sha256String(data)
+	if actual != ref.SHA256 {
+		return &Problem{Code: "gjc_checksum_mismatch", Message: "GJC packet_ref checksum does not match file content", Hint: "Regenerate the KAS packet_ref and rerun GJC before consuming status.", Path: path.Relative, Field: "packet_ref.sha256", Expected: actual, Actual: ref.SHA256}
 	}
 	return nil
 }
@@ -618,6 +647,7 @@ func gjcEventPayload(status GJCStatus) map[string]any {
 		"real_user_home":         status.RealUserHome,
 		"gjc_session_id":         status.GJCSessionID,
 		"process":                status.Process,
+		"packet_ref":             status.Packet,
 		"artifact_refs":          status.Artifacts,
 		"current_required_actor": status.CurrentRequiredActor,
 		"current_wait_reason":    status.CurrentWaitReason,

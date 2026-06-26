@@ -3192,8 +3192,8 @@ var helpPages = map[string]helpOutput{
 		Summary:      "Start bounded GJC candidate work and read KAH-owned run-local GJC evidence status.",
 		Subcommands:  []helpItem{{Name: "start-deep-interview", Description: "Run gjc deep-interview for a KAS-supplied run-local packet and record candidate evidence."}, {Name: "start-ralplan", Description: "Run gjc ralplan --write for a KAS-supplied run-local packet and record candidate evidence."}, {Name: "start-ultragoal", Description: "Run gjc ultragoal create-goals for a KAS-supplied run-local packet and record candidate evidence."}, {Name: "status", Description: "Read persisted run-local GJC status evidence without running GJC."}},
 		Options:      []helpItem{{Name: "--run <run_id>", Required: true, Description: "KAH run id or unique prefix."}, {Name: "--task <task_id>", Required: true, Description: "Kkachi task id supplied by KAS."}, {Name: "--packet <run-local-packet>", Required: true, Description: "Repository-relative packet path under .kkachi/runs/<run_id>/."}, {Name: "--json", Description: "Emit structured GJC status output."}, {Name: "--help", Description: "Show gjc help and exit 0."}},
-		JSONBehavior: "Start commands emit schema_version, run_id, task_id, command_kind, real_user_home, gjc_session_id, process/status, artifact refs/hashes, current_required_actor/current_wait_reason, status_path, status_hash, and recovery_hint/error when applicable. Missing GJC, unsafe HOME/path, missing or malformed session/status/artifacts, unsupported statuses, checksum mismatch, cross-run refs, and malformed GJC JSON fail closed with structured errors.",
-		Notes:        []string{"KAH records deterministic GJC evidence only; KAS/Blue/color/MAR/final gates decide acceptance.", "GJC output remains candidate evidence and must not mark plan, review, MAR, or final Kkachi acceptance.", "attach-kat-evidence, callback-kanban, watcher wake, same-thread Discord wake, and GAJAE-004/005/006 async behavior are not implemented by this GAJAE-002 MVP."},
+		JSONBehavior: "Start commands emit schema_version, run_id, task_id, command_kind, real_user_home, gjc_session_id, process/status, packet_ref, artifact refs/hashes, current_required_actor/current_wait_reason, status_path, status_hash, and recovery_hint/error when applicable. Missing GJC, unsafe HOME/path, missing or malformed session/status/packet/artifacts, unsupported statuses, checksum mismatch, cross-run refs, and malformed GJC JSON fail closed with structured errors.",
+		Notes:        []string{"KAH records deterministic GJC evidence only; KAS/Blue/color/MAR/final gates decide acceptance.", "`packet_ref` is KAS input packet evidence; `artifact_refs` are GJC candidate output evidence.", "GJC output remains candidate evidence and must not mark plan, review, MAR, or final Kkachi acceptance.", "attach-kat-evidence, callback-kanban, watcher wake, same-thread Discord wake, and GAJAE-004/005/006 async behavior are not implemented by this GAJAE-002 MVP."},
 	},
 }
 
@@ -3859,6 +3859,8 @@ func writeGJCStatusHuman(w io.Writer, status project.GJCStatus) {
 	fmt.Fprintf(w, "task_id: %s\n", status.TaskID)
 	fmt.Fprintf(w, "real_user_home: %s\n", status.RealUserHome)
 	fmt.Fprintf(w, "gjc_session_id: %s\n", status.GJCSessionID)
+	fmt.Fprintf(w, "packet_ref.path: %s\n", status.Packet.Path)
+	fmt.Fprintf(w, "packet_ref.sha256: %s\n", status.Packet.SHA256)
 	fmt.Fprintf(w, "current_required_actor: %s\n", status.CurrentRequiredActor)
 	if status.CurrentWaitReason != nil {
 		fmt.Fprintf(w, "current_wait_reason: %s\n", *status.CurrentWaitReason)

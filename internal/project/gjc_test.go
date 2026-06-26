@@ -76,6 +76,87 @@ func TestStartGJCRecordsRunLocalStatusAndReusesSession(t *testing.T) {
 	}
 }
 
+func TestStartGJCPreservesPacketRefAndShowStatusValidatesIt(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.TaskID = "GAJAE-003"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+	packetRel := packetRelative(runID, "artifacts/gjc/gjc-ralplan-packet.yaml")
+	packetAbs := writeGJCTestFile(t, repo, runID, "artifacts/gjc/gjc-ralplan-packet.yaml", []byte("packet_kind: ralplan\n"))
+	packetHash := sha256String(mustReadBytes(t, packetAbs))
+	artifact := writeGJCTestFile(t, repo, runID, "artifacts/plan/gjc-plan.md", []byte("# Candidate plan\n"))
+	artifactRef := GJCArtifactRef{Path: packetRelative(runID, "artifacts/plan/gjc-plan.md"), SHA256: sha256String(mustReadBytes(t, artifact))}
+
+	oldRunner := gjcRunCommand
+	gjcRunCommand = func(invocation gjcRunnerInvocation) (gjcRunnerResult, error) {
+		receipt := map[string]any{
+			"status":        "ralplan_ready",
+			"artifact_refs": []GJCArtifactRef{artifactRef},
+		}
+		data, _ := json.Marshal(receipt)
+		return gjcRunnerResult{PID: 1234, ExitCode: 0, Stdout: data}, nil
+	}
+	defer func() { gjcRunCommand = oldRunner }()
+
+	result, err := StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-003", Packet: packetRel, CommandKind: "start-ralplan", Now: testRunNow(4)})
+	if err != nil {
+		t.Fatalf("StartGJC() error = %v", err)
+	}
+	if result.Status.Packet.Path != packetRel || result.Status.Packet.SHA256 != packetHash {
+		t.Fatalf("packet_ref = %#v, want path %q hash %q", result.Status.Packet, packetRel, packetHash)
+	}
+
+	shown, err := ShowGJCStatus(root, GJCStatusOptions{RunID: runID})
+	if err != nil {
+		t.Fatalf("ShowGJCStatus() error = %v", err)
+	}
+	if shown.Status.Packet != result.Status.Packet {
+		t.Fatalf("shown packet_ref = %#v, want %#v", shown.Status.Packet, result.Status.Packet)
+	}
+}
+
+func TestShowGJCStatusRejectsPacketRefHashDrift(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.TaskID = "GAJAE-003"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+	packetRel := packetRelative(runID, "artifacts/gjc/gjc-ralplan-packet.yaml")
+	writeGJCTestFile(t, repo, runID, "artifacts/gjc/gjc-ralplan-packet.yaml", []byte("packet_kind: ralplan\n"))
+	artifact := writeGJCTestFile(t, repo, runID, "artifacts/plan/gjc-plan.md", []byte("# Candidate plan\n"))
+	artifactRef := GJCArtifactRef{Path: packetRelative(runID, "artifacts/plan/gjc-plan.md"), SHA256: sha256String(mustReadBytes(t, artifact))}
+
+	oldRunner := gjcRunCommand
+	gjcRunCommand = func(invocation gjcRunnerInvocation) (gjcRunnerResult, error) {
+		receipt := map[string]any{
+			"status":        "ralplan_ready",
+			"artifact_refs": []GJCArtifactRef{artifactRef},
+		}
+		data, _ := json.Marshal(receipt)
+		return gjcRunnerResult{PID: 1234, ExitCode: 0, Stdout: data}, nil
+	}
+	defer func() { gjcRunCommand = oldRunner }()
+
+	if _, err := StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-003", Packet: packetRel, CommandKind: "start-ralplan", Now: testRunNow(4)}); err != nil {
+		t.Fatalf("StartGJC() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, filepath.FromSlash(packetRel)), []byte("packet_kind: ralplan\nchanged: true\n"), 0o600); err != nil {
+		t.Fatalf("tamper packet: %v", err)
+	}
+
+	_, err = ShowGJCStatus(root, GJCStatusOptions{RunID: runID})
+	assertProblemCode(t, err, "gjc_checksum_mismatch")
+}
+
 func TestStartGJCRejectsChecksumMismatchAndRecordsFailureStatus(t *testing.T) {
 	repo := initializedRepo(t)
 	root, _ := DiscoverRoot(repo)
@@ -203,6 +284,126 @@ func TestStartGJCRejectsCrossRunPacketBeforeRunner(t *testing.T) {
 
 	_, err = StartGJC(root, GJCStartOptions{RunID: first.Metadata.RunID, TaskID: "GAJAE-002", Packet: packetRelative(second.Metadata.RunID, "artifacts/gjc/packet.json"), CommandKind: "start-ralplan", Now: testRunNow(5)})
 	assertProblemCode(t, err, "gjc_ref_cross_run")
+}
+
+func TestStartGJCRejectsMissingPacketBeforeRunner(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.TaskID = "GAJAE-003"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+
+	oldRunner := gjcRunCommand
+	gjcRunCommand = func(invocation gjcRunnerInvocation) (gjcRunnerResult, error) {
+		t.Fatalf("runner should not be called for missing packet")
+		return gjcRunnerResult{}, nil
+	}
+	defer func() { gjcRunCommand = oldRunner }()
+
+	_, err = StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-003", Packet: packetRelative(runID, "artifacts/gjc/missing-packet.json"), CommandKind: "start-ralplan", Now: testRunNow(5)})
+	assertProblemCode(t, err, "gjc_ref_missing")
+}
+
+func TestStartGJCRejectsNonRegularPacketBeforeRunner(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.TaskID = "GAJAE-003"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+	packetRel := packetRelative(runID, "artifacts/gjc/packet-dir")
+	if err := os.MkdirAll(filepath.Join(repo, filepath.FromSlash(packetRel)), 0o755); err != nil {
+		t.Fatalf("mkdir packet dir: %v", err)
+	}
+
+	oldRunner := gjcRunCommand
+	gjcRunCommand = func(invocation gjcRunnerInvocation) (gjcRunnerResult, error) {
+		t.Fatalf("runner should not be called for non-regular packet")
+		return gjcRunnerResult{}, nil
+	}
+	defer func() { gjcRunCommand = oldRunner }()
+
+	_, err = StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-003", Packet: packetRel, CommandKind: "start-ralplan", Now: testRunNow(5)})
+	assertProblemCode(t, err, "gjc_ref_invalid")
+}
+
+func TestStartGJCRejectsEscapingPacketBeforeRunner(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.TaskID = "GAJAE-003"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+
+	oldRunner := gjcRunCommand
+	gjcRunCommand = func(invocation gjcRunnerInvocation) (gjcRunnerResult, error) {
+		t.Fatalf("runner should not be called for escaping packet")
+		return gjcRunnerResult{}, nil
+	}
+	defer func() { gjcRunCommand = oldRunner }()
+
+	_, err = StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-003", Packet: "../escape.json", CommandKind: "start-ralplan", Now: testRunNow(5)})
+	assertProblemCode(t, err, "path_escape")
+}
+
+func TestShowGJCStatusRejectsUnsupportedStatus(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.TaskID = "GAJAE-003"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+	packetRel := packetRelative(runID, "artifacts/gjc/gjc-ralplan-packet.yaml")
+	writeGJCTestFile(t, repo, runID, "artifacts/gjc/gjc-ralplan-packet.yaml", []byte("packet_kind: ralplan\n"))
+	artifact := writeGJCTestFile(t, repo, runID, "artifacts/plan/gjc-plan.md", []byte("# Candidate plan\n"))
+	artifactRef := GJCArtifactRef{Path: packetRelative(runID, "artifacts/plan/gjc-plan.md"), SHA256: sha256String(mustReadBytes(t, artifact))}
+
+	oldRunner := gjcRunCommand
+	gjcRunCommand = func(invocation gjcRunnerInvocation) (gjcRunnerResult, error) {
+		receipt := map[string]any{
+			"status":        "ralplan_ready",
+			"artifact_refs": []GJCArtifactRef{artifactRef},
+		}
+		data, _ := json.Marshal(receipt)
+		return gjcRunnerResult{PID: 1234, ExitCode: 0, Stdout: data}, nil
+	}
+	defer func() { gjcRunCommand = oldRunner }()
+
+	result, err := StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-003", Packet: packetRel, CommandKind: "start-ralplan", Now: testRunNow(4)})
+	if err != nil {
+		t.Fatalf("StartGJC() error = %v", err)
+	}
+	status := result.Status
+	status.Process.Status = "accepted"
+	hash, err := computeGJCStatusHash(status)
+	if err != nil {
+		t.Fatalf("compute status hash: %v", err)
+	}
+	status.StatusHash = hash
+	data, err := json.MarshalIndent(status, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal status: %v", err)
+	}
+	statusPath := filepath.Join(repo, filepath.FromSlash(status.StatusPath))
+	if err := os.WriteFile(statusPath, append(data, '\n'), 0o600); err != nil {
+		t.Fatalf("write unsupported status: %v", err)
+	}
+
+	_, err = ShowGJCStatus(root, GJCStatusOptions{RunID: runID})
+	assertProblemCode(t, err, "gjc_status_unsupported")
 }
 
 func writeGJCTestFile(t *testing.T, repo string, runID string, relative string, content []byte) string {

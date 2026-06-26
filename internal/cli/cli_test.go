@@ -329,6 +329,9 @@ func TestGJCStartAndStatusUseFakeBinaryAndPersistEvidence(t *testing.T) {
 	if start.Status.RealUserHome != "/Users/draccoon" || start.Status.GJCSessionID == "" || start.Status.Process.Status != "ralplan_ready" {
 		t.Fatalf("start status = %#v, want normalized HOME, session, and ralplan candidate", start.Status)
 	}
+	if start.Status.Packet.Path != packetRel || start.Status.Packet.SHA256 == "" {
+		t.Fatalf("packet_ref = %#v, want input packet path and hash", start.Status.Packet)
+	}
 	if start.Status.StatusPath != filepath.ToSlash(filepath.Join(project.RunRootPath, runID, "artifacts/gjc/status.json")) || start.Status.StatusHash == "" {
 		t.Fatalf("start status path/hash = %#v, want persisted run-local status", start.Status)
 	}
@@ -342,7 +345,7 @@ func TestGJCStartAndStatusUseFakeBinaryAndPersistEvidence(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &shown); err != nil {
 		t.Fatalf("gjc status JSON: %v\n%s", err, stdout.String())
 	}
-	if shown.Status.GJCSessionID != start.Status.GJCSessionID || shown.Status.Artifacts[0].SHA256 != artifactHash {
+	if shown.Status.GJCSessionID != start.Status.GJCSessionID || shown.Status.Packet != start.Status.Packet || shown.Status.Artifacts[0].SHA256 != artifactHash {
 		t.Fatalf("shown status = %#v, want persisted session and artifact hash", shown.Status)
 	}
 }
