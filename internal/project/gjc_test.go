@@ -2,6 +2,7 @@ package project
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -404,6 +405,168 @@ func TestShowGJCStatusRejectsUnsupportedStatus(t *testing.T) {
 
 	_, err = ShowGJCStatus(root, GJCStatusOptions{RunID: runID})
 	assertProblemCode(t, err, "gjc_status_unsupported")
+}
+
+func TestStartGJCRejectsRalplanReadyWithoutPlanArtifact(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.TaskID = "GAJAE-004"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+	packetRel := packetRelative(runID, "artifacts/gjc/gjc-ralplan-packet.yaml")
+	writeGJCTestFile(t, repo, runID, "artifacts/gjc/gjc-ralplan-packet.yaml", []byte("packet_kind: ralplan\n"))
+	nonPlanArtifact := writeGJCTestFile(t, repo, runID, "artifacts/gjc/receipt.json", []byte(`{"stage":"plan"}`+"\n"))
+	artifactRef := GJCArtifactRef{Path: packetRelative(runID, "artifacts/gjc/receipt.json"), SHA256: sha256String(mustReadBytes(t, nonPlanArtifact))}
+
+	oldRunner := gjcRunCommand
+	gjcRunCommand = func(invocation gjcRunnerInvocation) (gjcRunnerResult, error) {
+		receipt := map[string]any{
+			"status":        "ralplan_ready",
+			"artifact_refs": []GJCArtifactRef{artifactRef},
+		}
+		data, _ := json.Marshal(receipt)
+		return gjcRunnerResult{PID: 1234, ExitCode: 0, Stdout: data}, nil
+	}
+	defer func() { gjcRunCommand = oldRunner }()
+
+	_, err = StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-004", Packet: packetRel, CommandKind: "start-ralplan", Now: testRunNow(4)})
+	assertProblemCode(t, err, "gjc_plan_artifact_missing")
+}
+
+func TestGJCCallbackRecordsIdempotentEvidenceAndRejectsConflicts(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.TaskID = "GAJAE-004"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+	packetRel := packetRelative(runID, "artifacts/gjc/gjc-ralplan-packet.yaml")
+	writeGJCTestFile(t, repo, runID, "artifacts/gjc/gjc-ralplan-packet.yaml", []byte("packet_kind: ralplan\n"))
+	planArtifact := writeGJCTestFile(t, repo, runID, "artifacts/plan/gjc-plan.md", []byte("# Candidate plan\n"))
+	artifactRef := GJCArtifactRef{Path: packetRelative(runID, "artifacts/plan/gjc-plan.md"), SHA256: sha256String(mustReadBytes(t, planArtifact))}
+
+	oldRunner := gjcRunCommand
+	gjcRunCommand = func(invocation gjcRunnerInvocation) (gjcRunnerResult, error) {
+		receipt := map[string]any{
+			"status":        "ralplan_ready",
+			"artifact_refs": []GJCArtifactRef{artifactRef},
+		}
+		data, _ := json.Marshal(receipt)
+		return gjcRunnerResult{PID: 1234, ExitCode: 0, Stdout: data}, nil
+	}
+	defer func() { gjcRunCommand = oldRunner }()
+
+	start, err := StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-004", Packet: packetRel, CommandKind: "start-ralplan", Now: testRunNow(4)})
+	if err != nil {
+		t.Fatalf("StartGJC() error = %v", err)
+	}
+
+	callback := GJCCallbackOptions{
+		RunID:            runID,
+		TaskID:           "GAJAE-004",
+		Status:           "callback_delivered",
+		Result:           "delivered",
+		IdempotencyKey:   "gajae004-plan-ready",
+		SourceStatusHash: start.Status.StatusHash,
+		NotificationRef:  "no-wake-claim",
+		Now:              testRunNow(5),
+	}
+	first, err := RecordGJCCallback(root, callback)
+	if err != nil {
+		t.Fatalf("RecordGJCCallback(first) error = %v", err)
+	}
+	if first.Status.Callback == nil || first.Status.Callback.IdempotencyKey != callback.IdempotencyKey || first.Status.Callback.NotificationRef != "no-wake-claim" || first.Status.Callback.SameThreadWakeClaim {
+		t.Fatalf("callback evidence = %#v, want idempotency, no-wake-claim metadata, and no same-thread wake claim", first.Status.Callback)
+	}
+
+	notificationCallback := callback
+	notificationCallback.IdempotencyKey = "gajae004-plan-ready-notification"
+	notificationCallback.SourceStatusHash = first.Status.StatusHash
+	notificationCallback.NotificationRef = "discord:origin-thread"
+	notified, err := RecordGJCCallback(root, notificationCallback)
+	if err != nil {
+		t.Fatalf("RecordGJCCallback(notification) error = %v", err)
+	}
+	if notified.Status.Callback == nil || notified.Status.Callback.NotificationRef != "discord:origin-thread" || notified.Status.Callback.SameThreadWakeClaim {
+		t.Fatalf("notification callback evidence = %#v, want metadata preserved without wake claim", notified.Status.Callback)
+	}
+
+	second, err := RecordGJCCallback(root, notificationCallback)
+	if err != nil {
+		t.Fatalf("RecordGJCCallback(second) error = %v", err)
+	}
+	if second.Status.Callback == nil || second.Status.Callback.LastCallbackStatus != "delivered" {
+		t.Fatalf("second callback evidence = %#v, want idempotent delivered evidence", second.Status.Callback)
+	}
+
+	conflict := notificationCallback
+	conflict.SourceStatusHash = "sha256:" + strings.Repeat("1", 64)
+	_, err = RecordGJCCallback(root, conflict)
+	assertProblemCode(t, err, "gjc_callback_idempotency_conflict")
+}
+
+func TestGJCPlanLockBindsAcceptedHashAndRejectsDrift(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.TaskID = "GAJAE-004"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+	packetRel := packetRelative(runID, "artifacts/gjc/gjc-ralplan-packet.yaml")
+	writeGJCTestFile(t, repo, runID, "artifacts/gjc/gjc-ralplan-packet.yaml", []byte("packet_kind: ralplan\n"))
+	planArtifact := writeGJCTestFile(t, repo, runID, "artifacts/plan/gjc-plan.md", []byte("# Candidate plan\n"))
+	artifactRef := GJCArtifactRef{Path: packetRelative(runID, "artifacts/plan/gjc-plan.md"), SHA256: sha256String(mustReadBytes(t, planArtifact))}
+
+	oldRunner := gjcRunCommand
+	gjcRunCommand = func(invocation gjcRunnerInvocation) (gjcRunnerResult, error) {
+		receipt := map[string]any{
+			"status":        "ralplan_ready",
+			"artifact_refs": []GJCArtifactRef{artifactRef},
+		}
+		data, _ := json.Marshal(receipt)
+		return gjcRunnerResult{PID: 1234, ExitCode: 0, Stdout: data}, nil
+	}
+	defer func() { gjcRunCommand = oldRunner }()
+
+	start, err := StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-004", Packet: packetRel, CommandKind: "start-ralplan", Now: testRunNow(4)})
+	if err != nil {
+		t.Fatalf("StartGJC() error = %v", err)
+	}
+	locked, err := LockGJCPlan(root, GJCPlanLockOptions{RunID: runID, AcceptedPlanHash: start.Status.Plan.ArtifactHash, ApprovalRef: "blue-plan-vet:t_48ebdfef", Now: testRunNow(5)})
+	if err != nil {
+		t.Fatalf("LockGJCPlan() error = %v", err)
+	}
+	if locked.Status.Plan.LockStatus != "locked" || locked.Status.Plan.AcceptedPlanHash != start.Status.Plan.ArtifactHash {
+		t.Fatalf("plan evidence = %#v, want locked accepted hash", locked.Status.Plan)
+	}
+
+	if err := os.WriteFile(planArtifact, []byte("# Candidate plan\nchanged\n"), 0o600); err != nil {
+		t.Fatalf("tamper plan artifact: %v", err)
+	}
+	_, err = ShowGJCStatus(root, GJCStatusOptions{RunID: runID})
+	assertProblemCode(t, err, "gjc_plan_lock_conflict")
+	var problem *Problem
+	if !errors.As(err, &problem) || problem.Path != packetRelative(runID, "artifacts/gjc/plan-conflict.json") {
+		t.Fatalf("problem = %#v, want plan-conflict report path", err)
+	}
+	conflictPath := filepath.Join(repo, filepath.FromSlash(packetRelative(runID, "artifacts/gjc/plan-conflict.json")))
+	var report map[string]string
+	if err := json.Unmarshal(mustReadBytes(t, conflictPath), &report); err != nil {
+		t.Fatalf("decode conflict report: %v", err)
+	}
+	if report["accepted_plan_hash"] != start.Status.Plan.ArtifactHash || report["current_artifact_hash"] == "" || report["status"] != "plan_conflict_reported" {
+		t.Fatalf("conflict report = %#v, want accepted/current hashes", report)
+	}
 }
 
 func writeGJCTestFile(t *testing.T, repo string, runID string, relative string, content []byte) string {

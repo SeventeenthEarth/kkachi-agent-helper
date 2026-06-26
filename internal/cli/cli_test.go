@@ -221,7 +221,7 @@ func TestHelpCommandsExitZeroWithoutProjectState(t *testing.T) {
 		{name: "graph group", args: []string{"graph", "--help"}, want: []string{"kkachi-agent-helper graph", "diff", "propose", "apply", "export", "--candidate-file <repo-relative-candidate-graph>", "--patch <repo-relative-candidate-graph>", "--approval <evidence-ref>", "audit evidence reference", "--format mermaid|plantuml"}},
 		{name: "workflow group", args: []string{"workflow", "--help"}, want: []string{"workflow catalog validate", "workflow catalog propose", "--proposal-hash sha256:<64hex>", "KAH does not select workflows"}},
 		{name: "workflow catalog apply help alias", args: []string{"workflow", "catalog", "apply", "--help"}, want: []string{"workflow catalog apply", "--proposal-hash sha256:<64hex>", "hash-bound approval"}},
-		{name: "gjc group", args: []string{"gjc", "--help"}, want: []string{"kkachi-agent-helper gjc", "start-ralplan", "--packet <run-local-packet> (required)", "candidate evidence", "not implemented by this GAJAE-002 MVP"}},
+		{name: "gjc group", args: []string{"gjc", "--help"}, want: []string{"kkachi-agent-helper gjc", "start-ralplan", "--packet <run-local-packet> (required)", "candidate evidence", "callback-kanban records callback_delivered evidence only"}},
 		{name: "help alias", args: []string{"help", "run", "create"}, want: []string{"kkachi-agent-helper run create", "--execution-mode"}},
 		{name: "help help", args: []string{"help", "help"}, want: []string{"kkachi-agent-helper help", "[command] [subcommand]", "JSON behavior:"}},
 	}

@@ -365,46 +365,50 @@ func TestGAJAE002DocsCompatibilityContract(t *testing.T) {
 			wants: []string{
 				"GAJAE-002 source-side GJC evidence wrapper MVP",
 				"kkachi-agent-helper gjc start-ralplan --run <run_id> --task <task_id> --packet <run-local-packet> [--json]",
+				"kkachi-agent-helper gjc callback-kanban",
+				"kkachi-agent-helper gjc lock-plan",
 				"HOME=/Users/draccoon",
 				"`.kkachi/runs/<run_id>/artifacts/gjc/session.json`",
-				"GJC output is candidate evidence only",
-				"GAJAE-004/005/006 async callback behavior are not implemented",
+				"GJC output, callbacks, and plan locks are candidate/mechanical evidence only",
+				"GAJAE-005/006 behavior remain deferred",
 			},
 		},
 		{
 			rel: "docs/specs.md",
 			wants: []string{
-				"GAJAE-002 GJC evidence wrapper MVP are implemented source-side",
+				"`GAJAE-004` source-side GJC ralplan/callback pilot evidence is implemented",
 				"### GJC wrapper note",
 				"schema `kah.gajae_gjc_delegation.v1`",
 				"`status_hash` is the checksum of the status payload before the hash field is populated",
 				"KAH fails closed for missing `gjc`",
-				"GAJAE-004/005/006 async callback behavior remain planned/unsupported",
+				"callback idempotency conflicts",
+				"GAJAE-005/006 remain deferred",
 			},
 		},
 		{
 			rel: "docs/compatibility.md",
 			wants: []string{
-				"GAJAE-002 GJC evidence wrapper MVP are implemented source-side",
 				"`gjc_evidence_wrapper=true`",
 				"KAH normalizes GJC execution to `HOME=/Users/draccoon`",
-				"treats GJC output as candidate evidence only",
-				"unsupported statuses/actors, and malformed GJC JSON fail closed",
+				"callback idempotency/no-wake-claim metadata",
+				"KAH treats GJC output, callbacks, and plan locks as candidate/mechanical evidence only",
+				"locked plan drift fail closed",
 			},
 		},
 		{
 			rel: "docs/roadmap.md",
 			wants: []string{
 				"| GAJAE-002 | KAH | Implement GJC wrapper MVP | Completed |",
-				"Completed after KAH-local tests, first color review remediation, MAR refresh, post-MAR Red/Orange/Gray review, Blue synthesis, final gate, and commit approval",
-				"GAJAE-004/005/006 async/KAT/callback/watcher behavior remains planned",
+				"| GAJAE-004 | KAH | Support async ralplan callback evidence | Completed | Source-side support records ralplan receipt/status/hash, requires plan artifact hashes for `ralplan_ready`, records callback/idempotency/no-wake-claim metadata, and records KAS-supplied plan-lock hashes for KAS plan review. |",
+				"GAJAE-005 | KAH | Attach async ultragoal and KAT evidence",
 			},
 		},
 		{
 			rel: "docs/sot/gajae-gjc-wrapper-evidence.md",
 			wants: []string{
 				"Status: GAJAE-002 Completed for the KAH source-side GJC evidence wrapper MVP",
-				"the KAH source tree contains the completed source-side MVP `gjc` start/status wrapper",
+				"As of GAJAE-004 source-side work",
+				"lock-plan --run <run_id> --accepted-plan-hash",
 				"does not by itself authorize live runtime activation",
 				"| GAJAE-002 | Implement KAH GJC wrapper MVP | Add `gjc` command group with environment/session normalization and read-only/status-safe start/status behavior. | Completed |",
 			},
@@ -635,10 +639,10 @@ func createRun(t *testing.T, repo, taskID, executionMode string) string {
 func TestE2E_GJCFakeBinaryPersistsRunLocalEvidence(t *testing.T) {
 	dir := repo(t, "gjc-e2e")
 	requireCLI(t, dir, "project", "init", "--json")
-	runID := createRun(t, dir, "GAJAE-002", "production_write")
+	runID := createRun(t, dir, "GAJAE-004", "production_write")
 	packetRel := filepath.ToSlash(filepath.Join(".kkachi", "runs", runID, "artifacts", "gjc", "packet.json"))
 	artifactRel := filepath.ToSlash(filepath.Join(".kkachi", "runs", runID, "artifacts", "plan", "gjc-result.md"))
-	writeFile(t, filepath.Join(dir, filepath.FromSlash(packetRel)), `{"task_id":"GAJAE-002"}`)
+	writeFile(t, filepath.Join(dir, filepath.FromSlash(packetRel)), `{"task_id":"GAJAE-004"}`)
 	artifactBody := "Status: complete\nGJC candidate evidence only.\n"
 	writeFile(t, filepath.Join(dir, filepath.FromSlash(artifactRel)), artifactBody)
 	sum := sha256.Sum256([]byte(artifactBody))
@@ -680,7 +684,7 @@ JSON
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	start := requireCLI(t, dir, "--json", "gjc", "start-ralplan", "--run", runID, "--task", "GAJAE-002", "--packet", packetRel)
+	start := requireCLI(t, dir, "--json", "gjc", "start-ralplan", "--run", runID, "--task", "GAJAE-004", "--packet", packetRel)
 	if jsonFieldString(t, []byte(start.stdout), "status.process.status") != "ralplan_ready" {
 		t.Fatalf("start stdout = %s", start.stdout)
 	}
@@ -693,11 +697,19 @@ JSON
 	if jsonFieldString(t, []byte(start.stdout), "status.artifact_refs") == "[]" {
 		t.Fatalf("start did not record artifact refs: %s", start.stdout)
 	}
+	if jsonFieldString(t, []byte(start.stdout), "status.receipt_ref.path") == "" {
+		t.Fatalf("start did not record receipt_ref: %s", start.stdout)
+	}
+	if jsonFieldString(t, []byte(start.stdout), "status.plan.artifact_hash") != artifactHash {
+		t.Fatalf("start did not record plan hash: %s", start.stdout)
+	}
 
 	statusPath := filepath.Join(dir, ".kkachi", "runs", runID, "artifacts", "gjc", "status.json")
 	sessionPath := filepath.Join(dir, ".kkachi", "runs", runID, "artifacts", "gjc", "session.json")
+	receiptPath := filepath.Join(dir, ".kkachi", "runs", runID, "artifacts", "gjc", "receipt.json")
 	requireFileContains(t, statusPath, `"status_hash": "sha256:`, "gjc status")
 	requireFileContains(t, sessionPath, `"gjc_session_id": "gjc-`+runID+`"`, "gjc session")
+	requireFileContains(t, receiptPath, `"status":"ralplan_ready"`, "gjc receipt")
 
 	status := requireCLI(t, dir, "--json", "gjc", "status", "--run", runID)
 	if jsonFieldString(t, []byte(status.stdout), "status.gjc_session_id") != "gjc-"+runID {
@@ -708,6 +720,21 @@ JSON
 	}
 	if jsonFieldString(t, []byte(status.stdout), "status.artifact_refs") == "[]" {
 		t.Fatalf("status did not return artifact refs: %s", status.stdout)
+	}
+	sourceHash := jsonFieldString(t, []byte(status.stdout), "status.status_hash")
+	callback := requireCLI(t, dir, "--json", "gjc", "callback-kanban", "--run", runID, "--task", "GAJAE-004", "--idempotency-key", "gajae004-plan-ready", "--source-status-hash", sourceHash)
+	if jsonFieldString(t, []byte(callback.stdout), "status.callback.notification_ref") != "no-wake-claim" {
+		t.Fatalf("callback did not record no-wake-claim metadata: %s", callback.stdout)
+	}
+	if jsonFieldString(t, []byte(callback.stdout), "status.callback.same_thread_wake_claim") != "false" {
+		t.Fatalf("callback claimed same-thread wake: %s", callback.stdout)
+	}
+	locked := requireCLI(t, dir, "--json", "gjc", "lock-plan", "--run", runID, "--accepted-plan-hash", artifactHash, "--approval-ref", "blue-plan-vet:t_48ebdfef")
+	if jsonFieldString(t, []byte(locked.stdout), "status.plan.lock_status") != "locked" {
+		t.Fatalf("lock-plan did not lock mechanical evidence: %s", locked.stdout)
+	}
+	if jsonFieldString(t, []byte(locked.stdout), "status.plan.accepted_plan_hash") != artifactHash {
+		t.Fatalf("lock-plan accepted hash mismatch: %s", locked.stdout)
 	}
 }
 

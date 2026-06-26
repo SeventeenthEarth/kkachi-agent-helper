@@ -30,8 +30,11 @@ const (
 	GJCActorNone        = "none"
 	gjcSessionFileName  = "session.json"
 	gjcStatusFileName   = "status.json"
+	gjcReceiptFileName  = "receipt.json"
 	gjcEventStarted     = "gjc.started"
 	gjcEventFailed      = "gjc.failed"
+	gjcEventCallback    = "gjc.callback_recorded"
+	gjcEventPlanLocked  = "gjc.plan_locked"
 	gjcCommandDeep      = "start-deep-interview"
 	gjcCommandRalplan   = "start-ralplan"
 	gjcCommandUltragoal = "start-ultragoal"
@@ -75,7 +78,10 @@ type GJCStatus struct {
 	GJCSessionID         string           `json:"gjc_session_id"`
 	Process              GJCProcessStatus `json:"process"`
 	Packet               GJCArtifactRef   `json:"packet_ref"`
+	Receipt              *GJCArtifactRef  `json:"receipt_ref,omitempty"`
 	Artifacts            []GJCArtifactRef `json:"artifact_refs"`
+	Plan                 GJCPlanEvidence  `json:"plan,omitempty"`
+	Callback             *GJCCallback     `json:"callback,omitempty"`
 	CurrentRequiredActor string           `json:"current_required_actor"`
 	CurrentWaitReason    *string          `json:"current_wait_reason"`
 	StatusPath           string           `json:"status_path"`
@@ -94,6 +100,27 @@ type GJCProcessStatus struct {
 type GJCArtifactRef struct {
 	Path   string `json:"path"`
 	SHA256 string `json:"sha256"`
+}
+
+type GJCPlanEvidence struct {
+	Artifact           string `json:"artifact,omitempty"`
+	ArtifactHash       string `json:"artifact_hash,omitempty"`
+	LockStatus         string `json:"lock_status,omitempty"`
+	AcceptedPlanHash   string `json:"accepted_plan_hash,omitempty"`
+	ApprovalRef        string `json:"approval_ref,omitempty"`
+	ConflictReportPath string `json:"conflict_report_path,omitempty"`
+}
+
+type GJCCallback struct {
+	TaskID              string `json:"task_id"`
+	Status              string `json:"status"`
+	IdempotencyKey      string `json:"idempotency_key"`
+	SourceStatusHash    string `json:"source_status_hash"`
+	LastCallbackStatus  string `json:"last_callback_status"`
+	NotificationRef     string `json:"notification_ref"`
+	LastNotifiedHash    string `json:"last_notified_hash"`
+	SameThreadWakeClaim bool   `json:"same_thread_wake_claim"`
+	UpdatedAt           string `json:"updated_at"`
 }
 
 type GJCStatusError struct {
@@ -255,6 +282,14 @@ func startGJCUnlocked(root Root, options GJCStartOptions) (GJCStartResult, error
 		status.RecoveryHint = "Regenerate the GJC receipt with supported candidate status and existing run-local artifact refs plus matching sha256 hashes."
 		return writeGJCStatusAndEvent(root, status, gjcEventFailed, err)
 	}
+	receiptRef, err := writeGJCReceipt(root, metadata.RunID, runnerResult.Stdout)
+	if err != nil {
+		status.Process.Status = GJCStatusFailed
+		status.Error = &GJCStatusError{Code: problemCode(err, "gjc_receipt_write_failed"), Message: problemMessage(err)}
+		status.RecoveryHint = "Check run-local GJC receipt evidence permissions before retrying."
+		return writeGJCStatusAndEvent(root, status, gjcEventFailed, err)
+	}
+	status.Receipt = &receiptRef
 	return writeGJCStatusAndEvent(root, status, gjcEventStarted, nil)
 }
 
@@ -317,7 +352,7 @@ func applyGJCReceipt(root Root, runID string, commandKind string, status *GJCSta
 	status.CurrentWaitReason = receipt.CurrentWaitReason
 	status.Error = nil
 	status.RecoveryHint = ""
-	return nil
+	return applyGJCPlanEvidence(root, runID, commandKind, status)
 }
 
 func parseGJCReceipt(stdout []byte) (gjcReceipt, error) {
@@ -401,10 +436,21 @@ func validatePersistedGJCStatus(root Root, metadata RunMetadata, status GJCStatu
 	if err := validateGJCPacketRef(root, metadata.RunID, status.Packet); err != nil {
 		return err
 	}
+	if status.Receipt != nil {
+		if err := validateGJCArtifactRef(root, metadata.RunID, *status.Receipt, "receipt_ref"); err != nil {
+			return err
+		}
+	}
+	if err := validateGJCPlanEvidence(root, metadata.RunID, status); err != nil {
+		return err
+	}
 	for i, ref := range status.Artifacts {
 		if err := validateGJCArtifactRef(root, metadata.RunID, ref, fmt.Sprintf("artifact_refs[%d]", i)); err != nil {
 			return err
 		}
+	}
+	if err := validateGJCCallback(status.Callback); err != nil {
+		return err
 	}
 	return nil
 }
@@ -634,6 +680,10 @@ func gjcStatusPath(root Root, runID string) (SafePath, error) {
 	return ResolveRelativePath(root, mustGJCStatusRelative(runID))
 }
 
+func gjcReceiptPath(root Root, runID string) (SafePath, error) {
+	return ResolveRelativePath(root, filepath.ToSlash(filepath.Join(RunRootPath, runID, "artifacts", "gjc", gjcReceiptFileName)))
+}
+
 func mustGJCStatusRelative(runID string) string {
 	return filepath.ToSlash(filepath.Join(RunRootPath, runID, "artifacts", "gjc", gjcStatusFileName))
 }
@@ -648,7 +698,10 @@ func gjcEventPayload(status GJCStatus) map[string]any {
 		"gjc_session_id":         status.GJCSessionID,
 		"process":                status.Process,
 		"packet_ref":             status.Packet,
+		"receipt_ref":            status.Receipt,
 		"artifact_refs":          status.Artifacts,
+		"plan":                   status.Plan,
+		"callback":               status.Callback,
 		"current_required_actor": status.CurrentRequiredActor,
 		"current_wait_reason":    status.CurrentWaitReason,
 		"status_path":            status.StatusPath,

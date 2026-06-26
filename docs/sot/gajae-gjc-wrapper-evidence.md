@@ -3,7 +3,7 @@
 Date: 2026-06-26
 Owner: KAH deterministic helper layer
 Confirming role: Responsible approver / governance evidence record
-Status: GAJAE-002 Completed for the KAH source-side GJC evidence wrapper MVP; pilot-evidenced; this document does not authorize install/release/runtime activation by itself
+Status: GAJAE-002 Completed for the KAH source-side GJC evidence wrapper MVP; GAJAE-004 source-side ralplan/callback evidence pilot support is completed for source scope; this document does not authorize install/release/runtime activation by itself
 Authority level: KAH-side SOT for deterministic GJC wrapper commands, GJC/KAT artifact refs, async callback evidence, and watcher-compatible status surfaces
 Scope: `kkachi-agent-helper` source behavior only; paired KAS packet/gate authority is `kkachi-hermes-skills/docs/sot/gajae-delegated-execution-contract.md`
 Related docs: `docs/roadmap.md`, `docs/specs.md`, `docs/compatibility.md`, `docs/sot/multi-agent-review-evidence-gates.md`, `docs/sot/strict-workflow-enforcement.md`, KAS `docs/sot/gajae-delegated-execution-contract.md`
@@ -13,7 +13,7 @@ External evidence: `/Users/draccoon/Workspace/Hermes/17thHermes/40_outputs/team/
 
 `GAJAE` is the shared KAS/KAH epic for delegated Gajae Code (`gjc`) execution. KAH's role is to provide a thin deterministic wrapper around GJC and KAT so KAS can delegate planning/implementation without hand-written shell snippets, hidden environment assumptions, or Hermes-visible polling loops.
 
-As of GAJAE-002 closeout, the KAH source tree contains the completed source-side MVP `gjc` start/status wrapper after Red/Orange/Gray review, MAR refresh, post-MAR review, Blue synthesis, final gate, and commit approval. This SOT records the intended and current helper boundary; it does not by itself authorize live runtime activation, KAB activation, provider/auth/token/gateway/model/profile mutation, install/release/push, or any transfer of KAS plan/review/MAR/final authority into KAH.
+As of GAJAE-004 source-side work, the KAH source tree contains the completed `gjc` start/status wrapper plus source-side pilot evidence for ralplan receipt preservation, callback idempotency metadata, and KAS-supplied plan-lock hashes. This SOT records the intended and current helper boundary; it does not by itself authorize live runtime activation, KAB activation, provider/auth/token/gateway/model/profile mutation, install/release/push, or any transfer of KAS plan/review/MAR/final authority into KAH.
 
 KAH must not become the policy or reasoning layer. It records facts, artifact references, hashes, process states, callbacks, and deterministic gate evidence. KAS/Blue/color review decide plan acceptance, implementation acceptance, MAR disposition, and final completion.
 
@@ -41,6 +41,7 @@ kkachi-agent-helper gjc start-ultragoal --run <run_id> --task <task_id> --packet
 kkachi-agent-helper gjc status --run <run_id> --json
 kkachi-agent-helper gjc attach-kat-evidence --run <run_id> --kat-status <path> --json
 kkachi-agent-helper gjc callback-kanban --run <run_id> --task <task_id> --status <status> --json
+kkachi-agent-helper gjc lock-plan --run <run_id> --accepted-plan-hash <sha256> --approval-ref <ref> --json
 ```
 
 The exact CLI may change during implementation, but the wrapper must preserve these responsibilities:
@@ -51,11 +52,19 @@ The exact CLI may change during implementation, but the wrapper must preserve th
 - artifact ref/hash capture;
 - KAT evidence attachment;
 - callback idempotency;
+- source-side plan-lock hash evidence;
 - watcher-compatible compact JSON.
 
 For the GAJAE-003 packet-reference contract, `packet_ref` is the canonical KAS input packet evidence stored in KAH status: the selected run-local packet path plus SHA-256. KAH validates `packet_ref` mechanically as repository-confined, run-local, readable, regular-file evidence with a matching hash before status is consumed. Missing, cross-run, unsafe, non-regular, unreadable, or hash-drifted `packet_ref` evidence fails closed with recovery guidance to regenerate or repair the KAS packet before consuming GJC status.
 
 For GJC candidate output, `artifact_refs` remains the canonical GJC JSON field. KAH may accept `artifacts` as a bounded compatibility alias when `artifact_refs` is absent, but KAH-persisted status evidence must continue to write `artifact_refs`.
+
+For GAJAE-004, `ralplan_ready` requires a run-local plan artifact reference
+under `.kkachi/runs/<run_id>/artifacts/plan/` with a matching SHA-256 hash.
+KAH may record `lock_status: locked`, `accepted_plan_hash`, and `approval_ref`
+only when KAS/Blue/color approval evidence supplies the accepted hash. KAH does
+not decide acceptance. If the locked plan artifact drifts, status consumption
+fails closed with plan-conflict evidence requirements.
 
 ## 4. GJC delegation ledger intent
 
@@ -98,6 +107,9 @@ callback:
   idempotency_key: <key>
   last_callback_status: pending | delivered | failed
   notification_context_ref: <platform-chat-thread-or-origin-ref>
+  source_status_hash: sha256:<hash>
+  last_notified_hash: sha256:<hash>
+  same_thread_wake_claim: false
 ```
 
 The ledger is evidence, not policy authority. KAS interprets it.
@@ -138,7 +150,7 @@ GAJAE uses shared logical task ids across KAS and KAH. KAH tasks require KAH-loc
 | GAJAE-001 | Register GAJAE SOTs and roadmap sequence | Add this SOT, KAS companion cross-link, roadmap/docs index/docs-map entries. | Completed |
 | GAJAE-002 | Implement KAH GJC wrapper MVP | Add `gjc` command group with environment/session normalization and read-only/status-safe start/status behavior. | Completed |
 | GAJAE-003 | Add GJC packet/template and artifact-reference contract | Shared logical task with KAS physical packet-template scope and KAH physical packet-ref/artifact-ref preservation scope. KAH validates `packet_ref` as KAS input packet evidence and preserves GJC `artifact_refs` as candidate output evidence without interpreting policy. | Completed |
-| GAJAE-004 | Async ralplan callback pilot | Start ralplan async, capture plan receipt/status, and record Kanban callback evidence for plan review. | Planned |
+| GAJAE-004 | Async ralplan callback pilot | Source-side support for ralplan receipt/status, callback idempotency evidence, no-wake-claim metadata, and KAS-supplied plan-lock hash recording for plan review. | Completed |
 | GAJAE-005 | Async ultragoal + KAT evidence pilot | Start ultragoal async, attach KAT run-id evidence, and expose review-ready status. | Planned |
 | GAJAE-006 | Watcher/callback closeout | Productize idempotent callback/watcher status surfaces and docs/compatibility notes. | Planned |
 

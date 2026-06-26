@@ -531,8 +531,36 @@ func runGJCCommand(args []string, root project.Root, stdout io.Writer, stderr io
 		}
 		writeGJCStatusResult(stdout, result, jsonMode)
 		return ExitOK
+	case "callback-kanban":
+		options, cliErr := parseGJCCallbackArgs(args[1:])
+		if cliErr != nil {
+			writeError(stderr, jsonMode, *cliErr)
+			return cliErr.ExitCode
+		}
+		result, err := project.RecordGJCCallback(root, options)
+		if err != nil {
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writeGJCStatusResult(stdout, result, jsonMode)
+		return ExitOK
+	case "lock-plan":
+		options, cliErr := parseGJCPlanLockArgs(args[1:])
+		if cliErr != nil {
+			writeError(stderr, jsonMode, *cliErr)
+			return cliErr.ExitCode
+		}
+		result, err := project.LockGJCPlan(root, options)
+		if err != nil {
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writeGJCStatusResult(stdout, result, jsonMode)
+		return ExitOK
 	default:
-		writeError(stderr, jsonMode, cliError{Code: "gjc_subcommand_unknown", Message: "GJC subcommand is not supported", Hint: gjcUsageHint(), ExitCode: ExitUsage, Field: "subcommand", Expected: "start-deep-interview, start-ralplan, start-ultragoal, or status", Actual: subcommand})
+		writeError(stderr, jsonMode, cliError{Code: "gjc_subcommand_unknown", Message: "GJC subcommand is not supported", Hint: gjcUsageHint(), ExitCode: ExitUsage, Field: "subcommand", Expected: "start-deep-interview, start-ralplan, start-ultragoal, status, callback-kanban, or lock-plan", Actual: subcommand})
 		return ExitUsage
 	}
 }
@@ -615,6 +643,142 @@ func parseGJCStatusArgs(args []string) (project.GJCStatusOptions, *cliError) {
 	}
 	if !seenRun {
 		return options, &cliError{Code: "missing_required_option", Message: "gjc status requires --run", Hint: gjcUsageHint(), ExitCode: ExitUsage, Field: "--run", Expected: "required option", Actual: "missing"}
+	}
+	return options, nil
+}
+
+func parseGJCCallbackArgs(args []string) (project.GJCCallbackOptions, *cliError) {
+	options := project.GJCCallbackOptions{}
+	seen := map[string]bool{}
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--run":
+			value, err := requireGJCOptionValue(args, &i, "--run")
+			if err != nil {
+				return options, err
+			}
+			if seen["--run"] {
+				return options, duplicateGJCOption("--run")
+			}
+			seen["--run"] = true
+			options.RunID = value
+		case "--task":
+			value, err := requireGJCOptionValue(args, &i, "--task")
+			if err != nil {
+				return options, err
+			}
+			if seen["--task"] {
+				return options, duplicateGJCOption("--task")
+			}
+			seen["--task"] = true
+			options.TaskID = value
+		case "--status":
+			value, err := requireGJCOptionValue(args, &i, "--status")
+			if err != nil {
+				return options, err
+			}
+			if seen["--status"] {
+				return options, duplicateGJCOption("--status")
+			}
+			seen["--status"] = true
+			options.Status = value
+		case "--result":
+			value, err := requireGJCOptionValue(args, &i, "--result")
+			if err != nil {
+				return options, err
+			}
+			if seen["--result"] {
+				return options, duplicateGJCOption("--result")
+			}
+			seen["--result"] = true
+			options.Result = value
+		case "--idempotency-key":
+			value, err := requireGJCOptionValue(args, &i, "--idempotency-key")
+			if err != nil {
+				return options, err
+			}
+			if seen["--idempotency-key"] {
+				return options, duplicateGJCOption("--idempotency-key")
+			}
+			seen["--idempotency-key"] = true
+			options.IdempotencyKey = value
+		case "--source-status-hash":
+			value, err := requireGJCOptionValue(args, &i, "--source-status-hash")
+			if err != nil {
+				return options, err
+			}
+			if seen["--source-status-hash"] {
+				return options, duplicateGJCOption("--source-status-hash")
+			}
+			seen["--source-status-hash"] = true
+			options.SourceStatusHash = value
+		case "--notification-ref":
+			value, err := requireGJCOptionValue(args, &i, "--notification-ref")
+			if err != nil {
+				return options, err
+			}
+			if seen["--notification-ref"] {
+				return options, duplicateGJCOption("--notification-ref")
+			}
+			seen["--notification-ref"] = true
+			options.NotificationRef = value
+		case "--json":
+		default:
+			return options, &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown gjc callback-kanban option %q", args[i]), Hint: gjcUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "--run, --task, --status, --result, --idempotency-key, --source-status-hash, --notification-ref, or --json", Actual: args[i]}
+		}
+	}
+	for _, option := range []string{"--run", "--task", "--idempotency-key", "--source-status-hash"} {
+		if !seen[option] {
+			return options, &cliError{Code: "missing_required_option", Message: "gjc callback-kanban requires " + option, Hint: gjcUsageHint(), ExitCode: ExitUsage, Field: option, Expected: "required option", Actual: "missing"}
+		}
+	}
+	return options, nil
+}
+
+func parseGJCPlanLockArgs(args []string) (project.GJCPlanLockOptions, *cliError) {
+	options := project.GJCPlanLockOptions{}
+	seen := map[string]bool{}
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--run":
+			value, err := requireGJCOptionValue(args, &i, "--run")
+			if err != nil {
+				return options, err
+			}
+			if seen["--run"] {
+				return options, duplicateGJCOption("--run")
+			}
+			seen["--run"] = true
+			options.RunID = value
+		case "--accepted-plan-hash":
+			value, err := requireGJCOptionValue(args, &i, "--accepted-plan-hash")
+			if err != nil {
+				return options, err
+			}
+			if seen["--accepted-plan-hash"] {
+				return options, duplicateGJCOption("--accepted-plan-hash")
+			}
+			seen["--accepted-plan-hash"] = true
+			options.AcceptedPlanHash = value
+		case "--approval-ref":
+			value, err := requireGJCOptionValue(args, &i, "--approval-ref")
+			if err != nil {
+				return options, err
+			}
+			if seen["--approval-ref"] {
+				return options, duplicateGJCOption("--approval-ref")
+			}
+			seen["--approval-ref"] = true
+			options.ApprovalRef = value
+		case "--json":
+		default:
+			return options, &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown gjc lock-plan option %q", args[i]), Hint: gjcUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "--run, --accepted-plan-hash, --approval-ref, or --json", Actual: args[i]}
+		}
+	}
+	for _, option := range []string{"--run", "--accepted-plan-hash", "--approval-ref"} {
+		if !seen[option] {
+			return options, &cliError{Code: "missing_required_option", Message: "gjc lock-plan requires " + option, Hint: gjcUsageHint(), ExitCode: ExitUsage, Field: option, Expected: "required option", Actual: "missing"}
+		}
 	}
 	return options, nil
 }
@@ -3188,12 +3352,14 @@ var helpPages = map[string]helpOutput{
 		Usage: "kkachi-agent-helper gjc start-deep-interview --run <run_id> --task <task_id> --packet <run-local-packet> [--json]\n" +
 			"  kkachi-agent-helper gjc start-ralplan --run <run_id> --task <task_id> --packet <run-local-packet> [--json]\n" +
 			"  kkachi-agent-helper gjc start-ultragoal --run <run_id> --task <task_id> --packet <run-local-packet> [--json]\n" +
-			"  kkachi-agent-helper gjc status --run <run_id> [--json]",
+			"  kkachi-agent-helper gjc status --run <run_id> [--json]\n" +
+			"  kkachi-agent-helper gjc callback-kanban --run <run_id> --task <task_id> --idempotency-key <key> --source-status-hash sha256:<hash> [--status callback_delivered] [--result pending|delivered|failed] [--notification-ref <ref>] [--json]\n" +
+			"  kkachi-agent-helper gjc lock-plan --run <run_id> --accepted-plan-hash sha256:<hash> --approval-ref <ref> [--json]",
 		Summary:      "Start bounded GJC candidate work and read KAH-owned run-local GJC evidence status.",
-		Subcommands:  []helpItem{{Name: "start-deep-interview", Description: "Run gjc deep-interview for a KAS-supplied run-local packet and record candidate evidence."}, {Name: "start-ralplan", Description: "Run gjc ralplan --write for a KAS-supplied run-local packet and record candidate evidence."}, {Name: "start-ultragoal", Description: "Run gjc ultragoal create-goals for a KAS-supplied run-local packet and record candidate evidence."}, {Name: "status", Description: "Read persisted run-local GJC status evidence without running GJC."}},
-		Options:      []helpItem{{Name: "--run <run_id>", Required: true, Description: "KAH run id or unique prefix."}, {Name: "--task <task_id>", Required: true, Description: "Kkachi task id supplied by KAS."}, {Name: "--packet <run-local-packet>", Required: true, Description: "Repository-relative packet path under .kkachi/runs/<run_id>/."}, {Name: "--json", Description: "Emit structured GJC status output."}, {Name: "--help", Description: "Show gjc help and exit 0."}},
-		JSONBehavior: "Start commands emit schema_version, run_id, task_id, command_kind, real_user_home, gjc_session_id, process/status, packet_ref, artifact refs/hashes, current_required_actor/current_wait_reason, status_path, status_hash, and recovery_hint/error when applicable. Missing GJC, unsafe HOME/path, missing or malformed session/status/packet/artifacts, unsupported statuses, checksum mismatch, cross-run refs, and malformed GJC JSON fail closed with structured errors.",
-		Notes:        []string{"KAH records deterministic GJC evidence only; KAS/Blue/color/MAR/final gates decide acceptance.", "`packet_ref` is KAS input packet evidence; `artifact_refs` are GJC candidate output evidence.", "GJC output remains candidate evidence and must not mark plan, review, MAR, or final Kkachi acceptance.", "attach-kat-evidence, callback-kanban, watcher wake, same-thread Discord wake, and GAJAE-004/005/006 async behavior are not implemented by this GAJAE-002 MVP."},
+		Subcommands:  []helpItem{{Name: "start-deep-interview", Description: "Run gjc deep-interview for a KAS-supplied run-local packet and record candidate evidence."}, {Name: "start-ralplan", Description: "Run gjc ralplan --write for a KAS-supplied run-local packet and record candidate plan evidence."}, {Name: "start-ultragoal", Description: "Run gjc ultragoal create-goals for a KAS-supplied run-local packet and record candidate evidence."}, {Name: "status", Description: "Read persisted run-local GJC status evidence without running GJC."}, {Name: "callback-kanban", Description: "Record idempotent callback evidence for plan-ready routing without claiming acceptance or same-thread wake."}, {Name: "lock-plan", Description: "Record KAS-supplied accepted plan hash after external plan review acceptance."}},
+		Options:      []helpItem{{Name: "--run <run_id>", Required: true, Description: "KAH run id or unique prefix."}, {Name: "--task <task_id>", Description: "Kkachi task id supplied by KAS."}, {Name: "--packet <run-local-packet>", Required: true, Description: "Repository-relative packet path under .kkachi/runs/<run_id>/ for start commands."}, {Name: "--idempotency-key <key>", Description: "Callback replay key."}, {Name: "--source-status-hash sha256:<hash>", Description: "Status hash that triggered the callback."}, {Name: "--notification-ref <ref>", Description: "Callback origin/target metadata; omitted means no-wake-claim and GAJAE-004 never treats this as verified same-thread wake."}, {Name: "--accepted-plan-hash sha256:<hash>", Description: "KAS/Blue/color accepted candidate plan hash."}, {Name: "--approval-ref <ref>", Description: "KAS/Blue/color approval evidence for plan lock."}, {Name: "--json", Description: "Emit structured GJC status output."}, {Name: "--help", Description: "Show gjc help and exit 0."}},
+		JSONBehavior: "Start commands emit schema_version, run_id, task_id, command_kind, real_user_home, gjc_session_id, process/status, packet_ref, receipt_ref, artifact refs/hashes, plan evidence, callback evidence, current_required_actor/current_wait_reason, status_path, status_hash, and recovery_hint/error when applicable. Missing GJC, unsafe HOME/path, missing or malformed session/status/packet/artifacts, unsupported statuses, checksum mismatch, cross-run refs, malformed GJC JSON, missing plan hash for ralplan_ready, callback idempotency conflict, and plan-lock drift fail closed with structured errors.",
+		Notes:        []string{"KAH records deterministic GJC evidence only; KAS/Blue/color/MAR/final gates decide acceptance.", "`packet_ref` is KAS input packet evidence; `artifact_refs` are GJC candidate output evidence.", "GJC output remains candidate evidence and must not mark plan, review, MAR, or final Kkachi acceptance.", "callback-kanban records callback_delivered evidence only; omitted notification metadata is recorded as no-wake-claim.", "lock-plan records a KAS-supplied accepted_plan_hash after external review evidence; KAH does not approve or lock plans by policy.", "attach-kat-evidence, watcher productization, same-thread Discord wake, GAJAE-005 KAT ultragoal evidence, and GAJAE-006 closeout remain deferred."},
 	},
 }
 
@@ -3861,6 +4027,20 @@ func writeGJCStatusHuman(w io.Writer, status project.GJCStatus) {
 	fmt.Fprintf(w, "gjc_session_id: %s\n", status.GJCSessionID)
 	fmt.Fprintf(w, "packet_ref.path: %s\n", status.Packet.Path)
 	fmt.Fprintf(w, "packet_ref.sha256: %s\n", status.Packet.SHA256)
+	if status.Receipt != nil {
+		fmt.Fprintf(w, "receipt_ref.path: %s\n", status.Receipt.Path)
+		fmt.Fprintf(w, "receipt_ref.sha256: %s\n", status.Receipt.SHA256)
+	}
+	if status.Plan.Artifact != "" {
+		fmt.Fprintf(w, "plan.artifact: %s\n", status.Plan.Artifact)
+		fmt.Fprintf(w, "plan.artifact_hash: %s\n", status.Plan.ArtifactHash)
+		fmt.Fprintf(w, "plan.lock_status: %s\n", status.Plan.LockStatus)
+	}
+	if status.Callback != nil {
+		fmt.Fprintf(w, "callback.status: %s\n", status.Callback.Status)
+		fmt.Fprintf(w, "callback.idempotency_key: %s\n", status.Callback.IdempotencyKey)
+		fmt.Fprintf(w, "callback.notification_ref: %s\n", status.Callback.NotificationRef)
+	}
 	fmt.Fprintf(w, "current_required_actor: %s\n", status.CurrentRequiredActor)
 	if status.CurrentWaitReason != nil {
 		fmt.Fprintf(w, "current_wait_reason: %s\n", *status.CurrentWaitReason)
