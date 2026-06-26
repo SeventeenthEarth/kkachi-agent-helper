@@ -2,7 +2,7 @@
 
 `kkachi-agent-helper` is the deterministic local CLI helper for Kkachi project state, run artifacts, locks, schemas, events, diagnostics, and project bootstrap scaffolding. It stays local-first and scriptable: it does not choose a backend, plan work, review code, call network services, or store secrets.
 
-The current implementation covers `corex-001` through `corex-005`, `runwf-001` through `runwf-004`, `gates-001` through `gates-005`, `packg-001` through `packg-004`, `pilot-001` through `pilot-005`, `align-001` through `align-008`, `graph-001` through `graph-012`, `token-001`/`token-002`, MAR evidence, policy-promotion evidence, and DESIGN-004/DESIGN-005 design-evidence schema/artifact/gate support.
+The current implementation covers `corex-001` through `corex-005`, `runwf-001` through `runwf-004`, `gates-001` through `gates-005`, `packg-001` through `packg-004`, `pilot-001` through `pilot-005`, `align-001` through `align-008`, `graph-001` through `graph-012`, `token-001`/`token-002`, MAR evidence, policy-promotion evidence, DESIGN-004/DESIGN-005 design-evidence schema/artifact/gate support, and the GAJAE-002 source-side GJC evidence wrapper MVP.
 
 ## Source of truth
 
@@ -108,7 +108,7 @@ kkachi-agent-helper --help
 kkachi-agent-helper [--json] <command>
 ```
 
-`capabilities --json` is the stable machine-readable command-surface report for KHS activation checks. It includes helper build info, the embedded project schema version, supported command groups including `project probe-toolchain`, compatibility flags such as artifact mutation, phase-plan support, approval records, read-only workflow graph support, workflow graph init/apply/export/diagnostics support, explicit no-direct-YAML-fallback graph support, configurable feedback-intake graph support, task-DAG schema validation, workflow instance state, workflow catalog diagnostics, workflow catalog proposal/apply support, workflow final-gate integration, KAS node-contract registry evidence, strict workflow transition ledger/order verification, token-economy evidence gate support, and explicit omitted surfaces such as the removed `install` command.
+`capabilities --json` is the stable machine-readable command-surface report for KHS activation checks. It includes helper build info, the embedded project schema version, supported command groups including `project probe-toolchain` and `gjc`, compatibility flags such as artifact mutation, phase-plan support, approval records, read-only workflow graph support, workflow graph init/apply/export/diagnostics support, explicit no-direct-YAML-fallback graph support, configurable feedback-intake graph support, task-DAG schema validation, workflow instance state, workflow catalog diagnostics, workflow catalog proposal/apply support, workflow final-gate integration, KAS node-contract registry evidence, strict workflow transition ledger/order verification, token-economy evidence gate support, `gjc_evidence_wrapper`, and explicit omitted surfaces such as the removed `install` command.
 
 Help is project-independent and exits `0`. Use `kkachi-agent-helper <command> --help`, supported subcommand topics such as `kkachi-agent-helper project init --help` and `kkachi-agent-helper run create --help`, or `kkachi-agent-helper help <command> [subcommand]` for required arguments, options, and JSON behavior. Implemented command groups have group help pages, including `schema`, `event`, `lock`, `phase-plan`, `approval`, and `graph`. `--json` with help emits structured help JSON; compatibility automation should still prefer `capabilities --json`.
 
@@ -211,6 +211,19 @@ kkachi-agent-helper graph export --format mermaid|plantuml [--output <path>] [--
 ```
 
 `graph init` writes the initial `.kkachi-workflow.yaml` only when no graph exists, using built-in `khs-default` or an explicit repository-relative YAML template path. `graph validate`, `graph explain`, `graph diff`, and `graph export` do not write graph state. `graph validate` and `graph explain` also project a top-level `feedback_intake` declaration when present, using `policy: "EXTERNAL_FEEDBACK_INTAKE"`, `schema_version: "external-feedback-intake/v1"`, `min_rounds: 1`, `max_rounds: 5`, `required_rounds: [1]`, and `optional_rounds: [2,3,4,5]`; stale `max3`/`1..3`, missing, duplicate, unsupported, conflicting, or round 6+ declarations fail closed. `phase-plan validate` consumes a valid project graph feedback policy for run-local feedback round bounds. Stale-only `max3`/`1..3` graph state can be migrated only by recording an explicit `graph propose --candidate-file` evidence record whose valid candidate declares canonical `1..5` bounds and changes no other graph semantics, then applying it with `graph apply --approval <evidence-ref>`. `graph propose` records `.kkachi/graph/proposals/gprop-*.json` evidence and a `graph.proposal_recorded` event for a complete candidate workflow graph supplied through `--candidate-file`; legacy `--patch` remains accepted for compatibility but is not a partial patch DSL. Proposal recording does not apply changes to `.kkachi-workflow.yaml`. `approval_required=false` in proposal output means the semantic diff did not trigger graph approval policy; `graph apply` still requires `--approval <evidence-ref>` so the apply event records an explicit approval or audit evidence reference. `graph apply` verifies proposal/base/candidate checksums fail-closed, writes `.kkachi-workflow.yaml` atomically, stamps `last_applied_event_id`, and appends `graph.applied`; KAH records the supplied evidence reference but does not decide approval policy. `graph export` renders Mermaid or PlantUML generated artifacts with `authoritative: false` and the source checksum; exports never become workflow graph source of truth.
+
+GJC evidence wrapper:
+
+```sh
+kkachi-agent-helper gjc start-deep-interview --run <run_id> --task <task_id> --packet <run-local-packet> [--json]
+kkachi-agent-helper gjc start-ralplan --run <run_id> --task <task_id> --packet <run-local-packet> [--json]
+kkachi-agent-helper gjc start-ultragoal --run <run_id> --task <task_id> --packet <run-local-packet> [--json]
+kkachi-agent-helper gjc status --run <run_id> [--json]
+```
+
+The GAJAE-002 `gjc` group is a thin deterministic wrapper around a callable `gjc` binary. It sets `HOME=/Users/draccoon` for this local operator environment, creates or reuses a run-local `GJC_SESSION_ID`, invokes the selected GJC planning/execution command with the packet path, and records candidate evidence under `.kkachi/runs/<run_id>/artifacts/gjc/session.json` and `.kkachi/runs/<run_id>/artifacts/gjc/status.json`. JSON output uses schema `kah.gajae_gjc_delegation.v1` and includes `schema_version`, `run_id`, `task_id`, `command_kind`, `real_user_home`, `gjc_session_id`, `process`, `artifact_refs`, `current_required_actor`, `current_wait_reason`, `status_path`, `status_hash`, and `error`/`recovery_hint` when applicable. GJC output is candidate evidence only; KAS, Blue, color gates, MAR, and final Kkachi acceptance remain outside KAH.
+
+The wrapper fails closed for missing `gjc`, unsafe HOME/path input, missing or malformed session/status evidence, unsupported statuses, missing artifact refs, escape or cross-run refs, malformed checksums, checksum mismatches, and malformed GJC JSON. `attach-kat-evidence`, `callback-kanban`, watcher wake, same-thread Discord wake, and GAJAE-004/005/006 async callback behavior are not implemented by this MVP.
 
 Task-DAG workflows and catalog promotion:
 

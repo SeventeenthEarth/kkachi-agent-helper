@@ -2,7 +2,7 @@
 
 Date: 2026-04-30
 Owner: KAH maintainers
-Status: source of truth for implemented helper behavior; graph init, validation/explanation, semantic diff, proposal records, approval-gated apply, non-authoritative graph export, compatibility diagnostics, configurable feedback-intake activation evidence, and graph-policy-driven phase-plan feedback validation are implemented; graph workflow sync diagnostics now also expose stable reason codes; DAGSM-001 task-DAG schema validation/explain, DAGSM-002 run-local workflow instance state, DAGSM-003 multi-DAG catalog diagnostics/final-gate integration, and DAGSM-006 explicit workflow catalog proposal/apply substrate are implemented source-side; token-001/token-002 token-economy evidence gating, MAREV-002 multi-agent-review evidence gate/schema support, and DESIGN-004 design evidence schema/artifact bootstrap are implemented
+Status: source of truth for implemented helper behavior; graph init, validation/explanation, semantic diff, proposal records, approval-gated apply, non-authoritative graph export, compatibility diagnostics, configurable feedback-intake activation evidence, and graph-policy-driven phase-plan feedback validation are implemented; graph workflow sync diagnostics now also expose stable reason codes; DAGSM-001 task-DAG schema validation/explain, DAGSM-002 run-local workflow instance state, DAGSM-003 multi-DAG catalog diagnostics/final-gate integration, and DAGSM-006 explicit workflow catalog proposal/apply substrate are implemented source-side; token-001/token-002 token-economy evidence gating, MAREV-002 multi-agent-review evidence gate/schema support, DESIGN-004 design evidence schema/artifact bootstrap, and GAJAE-002 GJC evidence wrapper MVP are implemented source-side
 Planning graph update date: 2026-05-24
 Planning graph evidence: governance evidence record in kanban task `t_2fb00394`
 
@@ -131,12 +131,37 @@ Default target-project layout:
         task-breakdown.md
         implementation-readiness.md
         handoff-to-development.md
+      artifacts/
+        gjc/
+          session.json
+          status.json
       final-report.md
       gate-reports/
         <gate>.json
 ```
 
 Light mode may use the same artifact names with shorter content or explicit not-applicable records. It must not introduce an incompatible artifact schema without a versioned migration.
+
+### GJC wrapper note
+
+Status: `GAJAE-002` source-side GJC wrapper MVP is implemented. KAH owns deterministic start/status evidence only; KAS, Blue, color gates, MAR, and final Kkachi acceptance remain the authorities for policy, plan acceptance, review disposition, and completion.
+
+Implemented commands:
+
+```sh
+kkachi-agent-helper gjc start-deep-interview --run <run_id> --task <task_id> --packet <run-local-packet> [--json]
+kkachi-agent-helper gjc start-ralplan --run <run_id> --task <task_id> --packet <run-local-packet> [--json]
+kkachi-agent-helper gjc start-ultragoal --run <run_id> --task <task_id> --packet <run-local-packet> [--json]
+kkachi-agent-helper gjc status --run <run_id> [--json]
+```
+
+`gjc` start commands require an initialized project, an existing run, a selected run-local packet ref under `.kkachi/runs/<run_id>/`, and a callable `gjc` binary. The wrapper sets `HOME=/Users/draccoon` by default for this operator environment and exports `GJC_SESSION_ID` from `.kkachi/runs/<run_id>/artifacts/gjc/session.json`; if no session evidence exists, KAH creates the deterministic id `gjc-<run_id>`. KAH never mutates shell profiles, provider settings, auth/token state, gateway state, model settings, KAB sessions, or KHS policy.
+
+The GJC stdout receipt must be a compact JSON object with a supported candidate `status`, at least one run-local `artifact_refs` entry with `path` and `sha256:<64hex>`, and optionally `current_required_actor` / `current_wait_reason`. For MVP receipt compatibility, KAH also accepts `artifacts` as an alias when `artifact_refs` is absent, but persisted KAH status always writes `artifact_refs`. Supported command-specific ready statuses are `deep_interview_ready`, `ralplan_ready`, and `ultragoal_ready`; common statuses are `running`, `blocked`, `failed`, and `cancelled`. Required actors are limited to `gjc`, `kas`, `color`, `mar`, `user`, `kat`, and `none`.
+
+KAH writes `.kkachi/runs/<run_id>/artifacts/gjc/status.json` with schema `kah.gajae_gjc_delegation.v1`, `run_id`, `task_id`, `command_kind`, `real_user_home`, `gjc_session_id`, `process`, `artifact_refs`, `current_required_actor`, `current_wait_reason`, `status_path`, `status_hash`, `updated_at`, and `error` / `recovery_hint` on failures. `status_hash` is the checksum of the status payload before the hash field is populated, and is used as compact ledger evidence rather than final acceptance proof.
+
+KAH fails closed for missing `gjc`, non-zero GJC exit, missing or malformed JSON receipts, unsafe HOME, unsafe/escape/cross-run/missing refs, malformed or mismatched checksums, stale or mismatched `status_hash`, unsupported statuses, unsupported actors, missing/malformed session evidence, missing/malformed status evidence, and status/session mismatches. `attach-kat-evidence`, `callback-kanban`, watcher wake, same-thread Discord wake, KAT extraction, and GAJAE-004/005/006 async callback behavior remain planned/unsupported until separate implementation and tests land.
 
 ### Project workflow graph note
 

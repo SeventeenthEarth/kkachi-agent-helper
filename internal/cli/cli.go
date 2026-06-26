@@ -36,6 +36,7 @@ var commandGroups = map[string]struct{}{
 	"approval":    {},
 	"graph":       {},
 	"workflow":    {},
+	"gjc":         {},
 }
 
 const (
@@ -110,6 +111,7 @@ type compatibilityFlagsOutput struct {
 	DesignEvidenceGate                      bool `json:"design_evidence_gate"`
 	DesignEvidenceDiagnostics               bool `json:"design_evidence_diagnostics"`
 	DesignEvidenceFinalGate                 bool `json:"design_evidence_final_gate"`
+	GJCEvidenceWrapper                      bool `json:"gjc_evidence_wrapper"`
 	InstallCommand                          bool `json:"install_command"`
 }
 
@@ -452,6 +454,9 @@ func runWithOptions(args []string, stdout io.Writer, stderr io.Writer, info Buil
 			if command == "workflow" {
 				return runWorkflowCommand(opts.args[1:], root, stdout, stderr, opts.json)
 			}
+			if command == "gjc" {
+				return runGJCCommand(opts.args[1:], root, stdout, stderr, opts.json)
+			}
 			writeError(stderr, opts.json, cliError{
 				Code:     "not_implemented",
 				Message:  fmt.Sprintf("command group %q is not implemented yet", command),
@@ -486,6 +491,144 @@ func runCapabilitiesCommand(args []string, stdout io.Writer, stderr io.Writer, i
 	}
 	writeCapabilities(stdout, info, jsonMode)
 	return ExitOK
+}
+
+func runGJCCommand(args []string, root project.Root, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
+	if len(args) == 0 {
+		writeError(stderr, jsonMode, cliError{Code: "gjc_subcommand_required", Message: "GJC subcommand is required", Hint: gjcUsageHint(), ExitCode: ExitUsage})
+		return ExitUsage
+	}
+	subcommand := args[0]
+	switch subcommand {
+	case "start-deep-interview", "start-ralplan", "start-ultragoal":
+		options, cliErr := parseGJCStartArgs(subcommand, args[1:])
+		if cliErr != nil {
+			writeError(stderr, jsonMode, *cliErr)
+			return cliErr.ExitCode
+		}
+		result, err := project.StartGJC(root, options)
+		if err != nil {
+			if result.Status.SchemaVersion != "" {
+				writeGJCStartResult(stdout, result, jsonMode)
+			}
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writeGJCStartResult(stdout, result, jsonMode)
+		return ExitOK
+	case "status":
+		options, cliErr := parseGJCStatusArgs(args[1:])
+		if cliErr != nil {
+			writeError(stderr, jsonMode, *cliErr)
+			return cliErr.ExitCode
+		}
+		result, err := project.ShowGJCStatus(root, options)
+		if err != nil {
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writeGJCStatusResult(stdout, result, jsonMode)
+		return ExitOK
+	default:
+		writeError(stderr, jsonMode, cliError{Code: "gjc_subcommand_unknown", Message: "GJC subcommand is not supported", Hint: gjcUsageHint(), ExitCode: ExitUsage, Field: "subcommand", Expected: "start-deep-interview, start-ralplan, start-ultragoal, or status", Actual: subcommand})
+		return ExitUsage
+	}
+}
+
+func parseGJCStartArgs(commandKind string, args []string) (project.GJCStartOptions, *cliError) {
+	options := project.GJCStartOptions{CommandKind: commandKind}
+	seenRun := false
+	seenTask := false
+	seenPacket := false
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--run":
+			value, err := requireGJCOptionValue(args, &i, "--run")
+			if err != nil {
+				return options, err
+			}
+			if seenRun {
+				return options, duplicateGJCOption("--run")
+			}
+			seenRun = true
+			options.RunID = value
+		case "--task":
+			value, err := requireGJCOptionValue(args, &i, "--task")
+			if err != nil {
+				return options, err
+			}
+			if seenTask {
+				return options, duplicateGJCOption("--task")
+			}
+			seenTask = true
+			options.TaskID = value
+		case "--packet":
+			value, err := requireGJCOptionValue(args, &i, "--packet")
+			if err != nil {
+				return options, err
+			}
+			if seenPacket {
+				return options, duplicateGJCOption("--packet")
+			}
+			seenPacket = true
+			options.Packet = value
+		case "--json":
+			// accepted for command-local compatibility; global --json is preferred.
+		default:
+			return options, &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown gjc option %q", args[i]), Hint: gjcUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "--run, --task, --packet, or --json", Actual: args[i]}
+		}
+	}
+	if !seenRun {
+		return options, &cliError{Code: "missing_required_option", Message: "gjc start requires --run", Hint: gjcUsageHint(), ExitCode: ExitUsage, Field: "--run", Expected: "required option", Actual: "missing"}
+	}
+	if !seenTask {
+		return options, &cliError{Code: "missing_required_option", Message: "gjc start requires --task", Hint: gjcUsageHint(), ExitCode: ExitUsage, Field: "--task", Expected: "required option", Actual: "missing"}
+	}
+	if !seenPacket {
+		return options, &cliError{Code: "missing_required_option", Message: "gjc start requires --packet", Hint: gjcUsageHint(), ExitCode: ExitUsage, Field: "--packet", Expected: "required option", Actual: "missing"}
+	}
+	return options, nil
+}
+
+func parseGJCStatusArgs(args []string) (project.GJCStatusOptions, *cliError) {
+	options := project.GJCStatusOptions{}
+	seenRun := false
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--run":
+			value, err := requireGJCOptionValue(args, &i, "--run")
+			if err != nil {
+				return options, err
+			}
+			if seenRun {
+				return options, duplicateGJCOption("--run")
+			}
+			seenRun = true
+			options.RunID = value
+		case "--json":
+			// accepted for command-local compatibility; global --json is preferred.
+		default:
+			return options, &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown gjc status option %q", args[i]), Hint: gjcUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "--run or --json", Actual: args[i]}
+		}
+	}
+	if !seenRun {
+		return options, &cliError{Code: "missing_required_option", Message: "gjc status requires --run", Hint: gjcUsageHint(), ExitCode: ExitUsage, Field: "--run", Expected: "required option", Actual: "missing"}
+	}
+	return options, nil
+}
+
+func requireGJCOptionValue(args []string, index *int, option string) (string, *cliError) {
+	if *index+1 >= len(args) {
+		return "", &cliError{Code: "missing_option_value", Message: option + " requires a value", Hint: gjcUsageHint(), ExitCode: ExitUsage, Field: option, Expected: "value", Actual: "missing"}
+	}
+	*index = *index + 1
+	return args[*index], nil
+}
+
+func duplicateGJCOption(option string) *cliError {
+	return &cliError{Code: "duplicate_option", Message: fmt.Sprintf("duplicate gjc option %q", option), Hint: gjcUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "option appears once", Actual: option}
 }
 
 func runWorkflowCommand(args []string, root project.Root, stdout io.Writer, stderr io.Writer, jsonMode bool) int {
@@ -2668,6 +2811,10 @@ func workflowUsageHint() string {
 	return "Use workflow validate/explain --file <workflow.yaml> --json, workflow catalog validate/explain --file <catalog.yaml>, workflow catalog propose --packet <kas-promote-packet.json> --reason <text>, workflow catalog apply --proposal <proposal-id> --approval <evidence-ref> --proposal-hash sha256:<64hex>, workflow create/show/ready --run <run_id>, or workflow node <start|complete|block> --run <run_id> --node <node_id>."
 }
 
+func gjcUsageHint() string {
+	return "Use gjc start-deep-interview|start-ralplan|start-ultragoal --run <run_id> --task <task_id> --packet <run-local-packet> or gjc status --run <run_id> with optional global --json."
+}
+
 func approvalUsageHint() string {
 	return "Use approval request <run_id> --phase <phase-id> --reason <reason> [--evidence <ref>], approval record <run_id> --phase <phase-id> --decision <approved|rejected> --by <approver> --evidence <ref> [--reason <reason>], or approval show <run_id> [--phase <phase-id>] with optional global --json."
 }
@@ -2813,6 +2960,7 @@ func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
 			{Name: "approval", Status: capabilityStatusSupported, Subcommands: []string{"request", "record", "show"}},
 			{Name: "graph", Status: capabilityStatusSupported, Subcommands: []string{"init", "validate", "explain", "diff", "propose", "apply", "export"}},
 			{Name: "workflow", Status: capabilityStatusSupported, Subcommands: []string{"validate", "explain", "catalog", "catalog propose", "catalog apply", "create", "show", "ready", "node"}},
+			{Name: "gjc", Status: capabilityStatusSupported, Subcommands: []string{"start-deep-interview", "start-ralplan", "start-ultragoal", "status"}},
 		},
 		CompatibilityFlags: compatibilityFlagsOutput{
 			ProjectInit:                             true,
@@ -2853,6 +3001,7 @@ func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
 			DesignEvidenceGate:                      true,
 			DesignEvidenceDiagnostics:               true,
 			DesignEvidenceFinalGate:                 true,
+			GJCEvidenceWrapper:                      true,
 			InstallCommand:                          false,
 		},
 		DeprecatedSurfaces: []capabilitySurfaceOutput{},
@@ -2868,7 +3017,7 @@ var helpPages = map[string]helpOutput{
 		Status:       capabilityStatusSupported,
 		Usage:        "kkachi-agent-helper [--json] <command> [subcommand] [options]",
 		Summary:      "Deterministic local helper for Kkachi project state, run artifacts, gates, events, schemas, locks, diagnostics, workflow validation, and compatibility discovery.",
-		Subcommands:  []helpItem{{Name: "version", Description: "Print helper build version."}, {Name: "capabilities", Description: "Print the command-surface compatibility report."}, {Name: "project", Description: "Initialize and inspect helper project state."}, {Name: "run", Description: "Create, list, show, activate, close, or abort helper runs."}, {Name: "artifact", Description: "Initialize, list, and validate canonical run artifacts."}, {Name: "gate", Description: "Run deterministic gate checks."}, {Name: "event", Description: "Append attributed helper events."}, {Name: "schema", Description: "Validate, export, or migrate helper schemas/state."}, {Name: "lock", Description: "Recover stale helper write locks explicitly."}, {Name: "diagnostics", Description: "Export redacted diagnostics bundles."}, {Name: "phase-plan", Description: "Manage KHS-declared phase-plan state."}, {Name: "approval", Description: "Record and show KHS-declared approval requests/decisions."}, {Name: "graph", Description: "Initialize and inspect project workflow graph state."}, {Name: "workflow", Description: "Validate and explain task-DAG workflow YAML."}, {Name: "help", Description: "Show help for the top level or a command topic."}},
+		Subcommands:  []helpItem{{Name: "version", Description: "Print helper build version."}, {Name: "capabilities", Description: "Print the command-surface compatibility report."}, {Name: "project", Description: "Initialize and inspect helper project state."}, {Name: "run", Description: "Create, list, show, activate, close, or abort helper runs."}, {Name: "artifact", Description: "Initialize, list, and validate canonical run artifacts."}, {Name: "gate", Description: "Run deterministic gate checks."}, {Name: "event", Description: "Append attributed helper events."}, {Name: "schema", Description: "Validate, export, or migrate helper schemas/state."}, {Name: "lock", Description: "Recover stale helper write locks explicitly."}, {Name: "diagnostics", Description: "Export redacted diagnostics bundles."}, {Name: "phase-plan", Description: "Manage KHS-declared phase-plan state."}, {Name: "approval", Description: "Record and show KHS-declared approval requests/decisions."}, {Name: "graph", Description: "Initialize and inspect project workflow graph state."}, {Name: "workflow", Description: "Validate and explain task-DAG workflow YAML."}, {Name: "gjc", Description: "Start GJC candidate execution and read run-local GJC evidence status."}, {Name: "help", Description: "Show help for the top level or a command topic."}},
 		Options:      []helpItem{{Name: "--json", Description: "Emit machine-readable JSON for commands that support JSON output."}, {Name: "--help", Description: "Show help and exit 0 without requiring helper project state."}, {Name: "--version", Description: "Print helper build version."}},
 		JSONBehavior: "Use --json with help for structured help. Use capabilities --json for stable machine compatibility checks; command help is supplemental documentation.",
 	},
@@ -2877,7 +3026,7 @@ var helpPages = map[string]helpOutput{
 		Status:       capabilityStatusSupported,
 		Usage:        "kkachi-agent-helper help [command] [subcommand]",
 		Summary:      "Show help for the top level or a command topic without requiring helper project state.",
-		Arguments:    []helpItem{{Name: "[command] [subcommand]", Description: "Optional help topic such as run create, project init, schema, event, lock, phase-plan, graph, or workflow."}},
+		Arguments:    []helpItem{{Name: "[command] [subcommand]", Description: "Optional help topic such as run create, project init, schema, event, lock, phase-plan, graph, workflow, or gjc."}},
 		JSONBehavior: "Use --json with help for structured help. Use capabilities --json for stable machine compatibility checks; command help is supplemental documentation.",
 	},
 	"project": {
@@ -3032,6 +3181,19 @@ var helpPages = map[string]helpOutput{
 		Options:      []helpItem{{Name: "--file <repo-relative-path>", Description: "Task-DAG YAML file for validate/explain/create, or catalog YAML for workflow catalog commands."}, {Name: "--packet <repo-relative-path>", Description: "KAS WFLOW-009 workflow-promote packet for workflow catalog propose."}, {Name: "--proposal <proposal-id>", Description: "Workflow catalog proposal id returned by workflow catalog propose."}, {Name: "--approval <evidence-ref>", Description: "Required hash-bound approval evidence for workflow catalog apply."}, {Name: "--proposal-hash sha256:<64hex>", Description: "Required canonical proposal hash for workflow catalog apply."}, {Name: "--catalog <repo-relative-path>", Description: "Task-DAG workflow catalog for explicit workflow create mode."}, {Name: "--workflow-id <id>", Description: "Explicit workflow id for catalog explain/create; KAH does not select workflows."}, {Name: "--node-contract-registry <repo-relative-path>", Description: "Optional KAS WFLOW-003 registry evidence for structural node-contract coverage only."}, {Name: "--run <run_id>", Description: "Run id for workflow instance commands."}, {Name: "--node <node_id>", Description: "Workflow node id for node transitions."}, {Name: "--evidence <repo-relative-path>", Description: "Optional transition evidence path; complete checks it with declared required_outputs."}, {Name: "--reason <text>", Description: "Reason for block transitions or workflow catalog proposals."}, {Name: "--expect-revision <n>", Description: "Optional optimistic-concurrency guard; stale revisions fail closed."}, {Name: "--json", Description: "Emit structured workflow diagnostics/state."}, {Name: "--help", Description: "Show workflow help and exit 0."}},
 		JSONBehavior: "workflow validate/explain emit task-DAG result data. workflow catalog validate/explain emit catalog diagnostics/result data. workflow catalog propose/apply emit proposal, hash, checksum, backup, and audit evidence. workflow create/show/ready/node emit workflow instance state/result data. Invalid DAGs/catalogs, missing approval, missing or mismatched proposal hashes, missing required outputs, unsafe paths, ambiguous catalog references, mixed file/catalog create mode, and stale revisions fail closed with structured JSON and non-zero exits.",
 		Notes:        []string{"DAGSM-001 supports schema_version task-dag/v1, workflow_id, nodes, id, depends_on, join=all_of, and required_outputs only.", "DAGSM-002 stores run-local .kkachi/runs/<run_id>/workflow-instance.json, enforces pending/running/succeeded/blocked node states, calculates ready nodes deterministically, checks declared required outputs on completion, and appends workflow audit events.", "DAGSM-003 validates .kkachi/workflow-catalog.yaml style task-DAG catalogs and optional KAS WFLOW-003 node-contract registry structure as evidence only.", "DAGSM-006 records and applies KAS-supplied workflow catalog promotion candidates only after hash-bound approval; propose does not write target files.", "KAH does not implement selector matching, ranking, fallback choice, dynamic node creation, retry/rollback automation, KAS policy selection, backend execution, or agent assignment."},
+	},
+	"gjc": {
+		Command: "kkachi-agent-helper gjc",
+		Status:  capabilityStatusSupported,
+		Usage: "kkachi-agent-helper gjc start-deep-interview --run <run_id> --task <task_id> --packet <run-local-packet> [--json]\n" +
+			"  kkachi-agent-helper gjc start-ralplan --run <run_id> --task <task_id> --packet <run-local-packet> [--json]\n" +
+			"  kkachi-agent-helper gjc start-ultragoal --run <run_id> --task <task_id> --packet <run-local-packet> [--json]\n" +
+			"  kkachi-agent-helper gjc status --run <run_id> [--json]",
+		Summary:      "Start bounded GJC candidate work and read KAH-owned run-local GJC evidence status.",
+		Subcommands:  []helpItem{{Name: "start-deep-interview", Description: "Run gjc deep-interview for a KAS-supplied run-local packet and record candidate evidence."}, {Name: "start-ralplan", Description: "Run gjc ralplan --write for a KAS-supplied run-local packet and record candidate evidence."}, {Name: "start-ultragoal", Description: "Run gjc ultragoal create-goals for a KAS-supplied run-local packet and record candidate evidence."}, {Name: "status", Description: "Read persisted run-local GJC status evidence without running GJC."}},
+		Options:      []helpItem{{Name: "--run <run_id>", Required: true, Description: "KAH run id or unique prefix."}, {Name: "--task <task_id>", Required: true, Description: "Kkachi task id supplied by KAS."}, {Name: "--packet <run-local-packet>", Required: true, Description: "Repository-relative packet path under .kkachi/runs/<run_id>/."}, {Name: "--json", Description: "Emit structured GJC status output."}, {Name: "--help", Description: "Show gjc help and exit 0."}},
+		JSONBehavior: "Start commands emit schema_version, run_id, task_id, command_kind, real_user_home, gjc_session_id, process/status, artifact refs/hashes, current_required_actor/current_wait_reason, status_path, status_hash, and recovery_hint/error when applicable. Missing GJC, unsafe HOME/path, missing or malformed session/status/artifacts, unsupported statuses, checksum mismatch, cross-run refs, and malformed GJC JSON fail closed with structured errors.",
+		Notes:        []string{"KAH records deterministic GJC evidence only; KAS/Blue/color/MAR/final gates decide acceptance.", "GJC output remains candidate evidence and must not mark plan, review, MAR, or final Kkachi acceptance.", "attach-kat-evidence, callback-kanban, watcher wake, same-thread Discord wake, and GAJAE-004/005/006 async behavior are not implemented by this GAJAE-002 MVP."},
 	},
 }
 
@@ -3672,6 +3834,46 @@ func writeWorkflowInstanceCommandResult(stdout io.Writer, stderr io.Writer, resu
 	return ExitSafety
 }
 
+func writeGJCStartResult(w io.Writer, result project.GJCStartResult, jsonMode bool) {
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(result)
+		return
+	}
+	writeGJCStatusHuman(w, result.Status)
+	if result.EventID != "" {
+		fmt.Fprintf(w, "event_id: %s\n", result.EventID)
+	}
+}
+
+func writeGJCStatusResult(w io.Writer, result project.GJCStatusResult, jsonMode bool) {
+	if jsonMode {
+		_ = json.NewEncoder(w).Encode(result)
+		return
+	}
+	writeGJCStatusHuman(w, result.Status)
+}
+
+func writeGJCStatusHuman(w io.Writer, status project.GJCStatus) {
+	fmt.Fprintf(w, "gjc %s: %s\n", status.CommandKind, status.Process.Status)
+	fmt.Fprintf(w, "run_id: %s\n", status.RunID)
+	fmt.Fprintf(w, "task_id: %s\n", status.TaskID)
+	fmt.Fprintf(w, "real_user_home: %s\n", status.RealUserHome)
+	fmt.Fprintf(w, "gjc_session_id: %s\n", status.GJCSessionID)
+	fmt.Fprintf(w, "current_required_actor: %s\n", status.CurrentRequiredActor)
+	if status.CurrentWaitReason != nil {
+		fmt.Fprintf(w, "current_wait_reason: %s\n", *status.CurrentWaitReason)
+	}
+	fmt.Fprintf(w, "status_path: %s\n", status.StatusPath)
+	fmt.Fprintf(w, "status_hash: %s\n", status.StatusHash)
+	if status.Error != nil {
+		fmt.Fprintf(w, "error.code: %s\n", status.Error.Code)
+		fmt.Fprintf(w, "error.message: %s\n", status.Error.Message)
+	}
+	if status.RecoveryHint != "" {
+		fmt.Fprintf(w, "recovery_hint: %s\n", status.RecoveryHint)
+	}
+}
+
 func writeLockRecoverResult(w io.Writer, result project.LockRecoveryResult, jsonMode bool) {
 	payload := lockRecoverOutput{Recovered: result.Recovered}
 	if jsonMode {
@@ -3957,7 +4159,7 @@ func writeHumanError(w io.Writer, err cliError) {
 }
 
 func usageHint() string {
-	return "Usage: kkachi-agent-helper [--json] <version|capabilities|project|run|artifact|gate|event|schema|lock|diagnostics|phase-plan|approval|graph>"
+	return "Usage: kkachi-agent-helper [--json] <version|capabilities|project|run|artifact|gate|event|schema|lock|diagnostics|phase-plan|approval|graph|workflow|gjc>"
 }
 
 func redactCLIError(err cliError) cliError {
@@ -4005,9 +4207,9 @@ func exitCodeForProblem(code string) int {
 	switch code {
 	case "repo_root_not_found":
 		return ExitNotFound
-	case "artifact_baseline_encode_failed", "artifact_json_encode_failed", "schema_encode_failed", "graph_proposal_encode_failed":
+	case "artifact_baseline_encode_failed", "artifact_json_encode_failed", "schema_encode_failed", "graph_proposal_encode_failed", "gjc_status_encode_failed", "gjc_session_encode_failed":
 		return ExitInternal
-	case "absolute_path", "empty_path", "path_escape", "repo_root_path", "symlink_escape", "symlink_resolution_failed", "path_inspection_failed", "repo_root_required", "helper_state_exists", "last_event_id_mismatch", "status_invalid_json", "status_last_event_id_invalid", "status_active_run_invalid", "status_project_id_invalid", "project_config_read_failed", "project_config_invalid", "event_log_invalid", "event_log_empty", "event_id_invalid", "event_id_exhausted", "run_metadata_invalid", "run_metadata_invalid_json", "active_run_conflict", "run_transition_invalid", "run_not_found", "run_id_ambiguous", "run_root_read_failed", "run_metadata_read_failed", "run_id_collision", "run_artifact_init_invalid_state", "run_artifact_mutation_invalid_state", "artifact_inspection_failed", "artifact_path_invalid", "artifact_source_missing", "artifact_source_inspection_failed", "artifact_source_invalid", "artifact_source_read_failed", "artifact_read_failed", "artifact_status_invalid", "artifact_reason_required", "artifact_status_unsupported", "artifact_status_not_applicable", "artifact_json_invalid", "status_gate_summary_invalid", "lock_conflict", "lock_stale_recovery_required", "lock_metadata_invalid", "lock_not_found", "lock_identity_mismatch", "lock_release_failed", "schema_validation_read_failed", "schema_reference_invalid", "schema_read_failed", "schema_export_inspection_failed", "schema_export_conflict", "schema_export_read_failed", "schema_migration_path_inspection_failed", "schema_migration_source_version_mismatch", "schema_migration_read_failed", "schema_migration_invalid_json", "schema_migration_invalid_event_log", "schema_migration_version_missing", "schema_migration_backup_failed", "install_manifest_read_failed", "install_manifest_invalid_json", "install_manifest_invalid", "install_manifest_kind_mismatch", "install_source_invalid", "install_source_item_invalid", "install_source_read_failed", "install_checksum_mismatch", "install_duplicate_target", "install_target_inspection_failed", "install_target_read_failed", "install_owner_marker_missing", "install_compatibility_failed", "install_preflight_blocked", "install_apply_failed", "diagnostics_encode_failed", "diagnostics_output_exists", "graph_already_exists", "graph_template_required", "graph_template_unknown", "graph_template_invalid", "graph_output_invalid", "graph_init_invalid", "graph_proposal_invalid", "graph_proposal_inspection_failed", "graph_proposal_id_exhausted", "graph_export_output_invalid", "graph_export_output_inspection_failed", "graph_export_output_exists", "task_dag_read_failed":
+	case "absolute_path", "empty_path", "path_escape", "repo_root_path", "symlink_escape", "symlink_resolution_failed", "path_inspection_failed", "repo_root_required", "helper_state_exists", "last_event_id_mismatch", "status_invalid_json", "status_last_event_id_invalid", "status_active_run_invalid", "status_project_id_invalid", "project_config_read_failed", "project_config_invalid", "event_log_invalid", "event_log_empty", "event_id_invalid", "event_id_exhausted", "run_metadata_invalid", "run_metadata_invalid_json", "active_run_conflict", "run_transition_invalid", "run_not_found", "run_id_ambiguous", "run_root_read_failed", "run_metadata_read_failed", "run_id_collision", "run_artifact_init_invalid_state", "run_artifact_mutation_invalid_state", "artifact_inspection_failed", "artifact_path_invalid", "artifact_source_missing", "artifact_source_inspection_failed", "artifact_source_invalid", "artifact_source_read_failed", "artifact_read_failed", "artifact_status_invalid", "artifact_reason_required", "artifact_status_unsupported", "artifact_status_not_applicable", "artifact_json_invalid", "status_gate_summary_invalid", "lock_conflict", "lock_stale_recovery_required", "lock_metadata_invalid", "lock_not_found", "lock_identity_mismatch", "lock_release_failed", "schema_validation_read_failed", "schema_reference_invalid", "schema_read_failed", "schema_export_inspection_failed", "schema_export_conflict", "schema_export_read_failed", "schema_migration_path_inspection_failed", "schema_migration_source_version_mismatch", "schema_migration_read_failed", "schema_migration_invalid_json", "schema_migration_invalid_event_log", "schema_migration_version_missing", "schema_migration_backup_failed", "install_manifest_read_failed", "install_manifest_invalid_json", "install_manifest_invalid", "install_manifest_kind_mismatch", "install_source_invalid", "install_source_item_invalid", "install_source_read_failed", "install_checksum_mismatch", "install_duplicate_target", "install_target_inspection_failed", "install_target_read_failed", "install_owner_marker_missing", "install_compatibility_failed", "install_preflight_blocked", "install_apply_failed", "diagnostics_encode_failed", "diagnostics_output_exists", "graph_already_exists", "graph_template_required", "graph_template_unknown", "graph_template_invalid", "graph_output_invalid", "graph_init_invalid", "graph_proposal_invalid", "graph_proposal_inspection_failed", "graph_proposal_id_exhausted", "graph_export_output_invalid", "graph_export_output_inspection_failed", "graph_export_output_exists", "task_dag_read_failed", "gjc_command_missing", "gjc_command_failed", "gjc_command_nonzero", "gjc_command_unsupported", "gjc_json_missing", "gjc_json_invalid", "gjc_receipt_invalid", "gjc_status_missing", "gjc_status_read_failed", "gjc_status_invalid_json", "gjc_status_invalid", "gjc_status_hash_mismatch", "gjc_status_unsupported", "gjc_task_required", "gjc_home_unsafe", "gjc_session_missing", "gjc_session_read_failed", "gjc_session_invalid_json", "gjc_session_invalid", "gjc_session_mismatch", "gjc_artifact_refs_missing", "gjc_artifact_read_failed", "gjc_checksum_malformed", "gjc_checksum_mismatch", "gjc_required_actor_unsupported", "gjc_ref_cross_run", "gjc_ref_missing", "gjc_ref_inspection_failed", "gjc_ref_invalid":
 		return ExitSafety
 	default:
 		return ExitUsage

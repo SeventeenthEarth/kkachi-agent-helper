@@ -358,6 +358,64 @@ func TestGraphDocsSOTAndReadonlyImplementationContract(t *testing.T) {
 	}
 }
 
+func TestGAJAE002DocsCompatibilityContract(t *testing.T) {
+	for _, tc := range []docContractCase{
+		{
+			rel: "README.md",
+			wants: []string{
+				"GAJAE-002 source-side GJC evidence wrapper MVP",
+				"kkachi-agent-helper gjc start-ralplan --run <run_id> --task <task_id> --packet <run-local-packet> [--json]",
+				"HOME=/Users/draccoon",
+				"`.kkachi/runs/<run_id>/artifacts/gjc/session.json`",
+				"GJC output is candidate evidence only",
+				"GAJAE-004/005/006 async callback behavior are not implemented",
+			},
+		},
+		{
+			rel: "docs/specs.md",
+			wants: []string{
+				"GAJAE-002 GJC evidence wrapper MVP are implemented source-side",
+				"### GJC wrapper note",
+				"schema `kah.gajae_gjc_delegation.v1`",
+				"`status_hash` is the checksum of the status payload before the hash field is populated",
+				"KAH fails closed for missing `gjc`",
+				"GAJAE-004/005/006 async callback behavior remain planned/unsupported",
+			},
+		},
+		{
+			rel: "docs/compatibility.md",
+			wants: []string{
+				"GAJAE-002 GJC evidence wrapper MVP are implemented source-side",
+				"`gjc_evidence_wrapper=true`",
+				"KAH normalizes GJC execution to `HOME=/Users/draccoon`",
+				"treats GJC output as candidate evidence only",
+				"unsupported statuses/actors, and malformed GJC JSON fail closed",
+			},
+		},
+		{
+			rel: "docs/roadmap.md",
+			wants: []string{
+				"| GAJAE-002 | KAH | Implement GJC wrapper MVP | Completed |",
+				"Completed after KAH-local tests, first color review remediation, MAR refresh, post-MAR Red/Orange/Gray review, Blue synthesis, final gate, and commit approval",
+				"GAJAE-004/005/006 async/KAT/callback/watcher behavior remains planned",
+			},
+		},
+		{
+			rel: "docs/sot/gajae-gjc-wrapper-evidence.md",
+			wants: []string{
+				"Status: GAJAE-002 Completed for the KAH source-side GJC evidence wrapper MVP",
+				"the KAH source tree contains the completed source-side MVP `gjc` start/status wrapper",
+				"does not by itself authorize live runtime activation",
+				"| GAJAE-002 | Implement KAH GJC wrapper MVP | Add `gjc` command group with environment/session normalization and read-only/status-safe start/status behavior. | Completed |",
+			},
+		},
+	} {
+		t.Run(tc.rel, func(t *testing.T) {
+			assertDocContractContains(t, tc)
+		})
+	}
+}
+
 func jsonFieldString(t *testing.T, raw []byte, field string) string {
 	t.Helper()
 	var value any
@@ -572,6 +630,79 @@ func createRun(t *testing.T, repo, taskID, executionMode string) string {
 	t.Helper()
 	res := requireCLI(t, repo, "run", "create", "--title", taskID+" e2e", "--work-path", "A_development_execution", "--work-mode", "standard", "--urgency", "normal", "--sot-policy", "existing_sot_basis", "--execution-mode", executionMode, "--commander", "Gongmyeong", "--task-id", taskID, "--json")
 	return jsonFieldString(t, []byte(res.stdout), "run_id")
+}
+
+func TestE2E_GJCFakeBinaryPersistsRunLocalEvidence(t *testing.T) {
+	dir := repo(t, "gjc-e2e")
+	requireCLI(t, dir, "project", "init", "--json")
+	runID := createRun(t, dir, "GAJAE-002", "production_write")
+	packetRel := filepath.ToSlash(filepath.Join(".kkachi", "runs", runID, "artifacts", "gjc", "packet.json"))
+	artifactRel := filepath.ToSlash(filepath.Join(".kkachi", "runs", runID, "artifacts", "plan", "gjc-result.md"))
+	writeFile(t, filepath.Join(dir, filepath.FromSlash(packetRel)), `{"task_id":"GAJAE-002"}`)
+	artifactBody := "Status: complete\nGJC candidate evidence only.\n"
+	writeFile(t, filepath.Join(dir, filepath.FromSlash(artifactRel)), artifactBody)
+	sum := sha256.Sum256([]byte(artifactBody))
+	artifactHash := "sha256:" + hex.EncodeToString(sum[:])
+
+	binDir := filepath.Join(t.TempDir(), "bin")
+	fakeGJC := filepath.Join(binDir, "gjc")
+	receipt, err := json.Marshal(map[string]any{
+		"status": "ralplan_ready",
+		"artifact_refs": []map[string]string{{
+			"path":   artifactRel,
+			"sha256": artifactHash,
+		}},
+		"current_required_actor": "kas",
+		"current_wait_reason":    "plan vet ready",
+	})
+	if err != nil {
+		t.Fatalf("marshal fake GJC receipt: %v", err)
+	}
+	writeFile(t, fakeGJC, fmt.Sprintf(`#!/bin/sh
+if [ "$HOME" != "/Users/draccoon" ]; then
+  echo "unexpected HOME=$HOME" >&2
+  exit 42
+fi
+if [ -z "$GJC_SESSION_ID" ]; then
+  echo "missing GJC_SESSION_ID" >&2
+  exit 43
+fi
+if [ "$1" != "ralplan" ] || [ "$2" != "--write" ] || [ "$3" != "--packet" ] || [ -z "$4" ] || [ "$5" != "--json" ]; then
+  echo "unexpected args: $*" >&2
+  exit 44
+fi
+cat <<'JSON'
+%s
+JSON
+`, string(receipt)))
+	if err := os.Chmod(fakeGJC, 0o755); err != nil {
+		t.Fatalf("chmod fake gjc: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	start := requireCLI(t, dir, "--json", "gjc", "start-ralplan", "--run", runID, "--task", "GAJAE-002", "--packet", packetRel)
+	if jsonFieldString(t, []byte(start.stdout), "status.process.status") != "ralplan_ready" {
+		t.Fatalf("start stdout = %s", start.stdout)
+	}
+	if jsonFieldString(t, []byte(start.stdout), "status.real_user_home") != "/Users/draccoon" {
+		t.Fatalf("start did not normalize HOME: %s", start.stdout)
+	}
+	if jsonFieldString(t, []byte(start.stdout), "status.artifact_refs") == "[]" {
+		t.Fatalf("start did not record artifact refs: %s", start.stdout)
+	}
+
+	statusPath := filepath.Join(dir, ".kkachi", "runs", runID, "artifacts", "gjc", "status.json")
+	sessionPath := filepath.Join(dir, ".kkachi", "runs", runID, "artifacts", "gjc", "session.json")
+	requireFileContains(t, statusPath, `"status_hash": "sha256:`, "gjc status")
+	requireFileContains(t, sessionPath, `"gjc_session_id": "gjc-`+runID+`"`, "gjc session")
+
+	status := requireCLI(t, dir, "--json", "gjc", "status", "--run", runID)
+	if jsonFieldString(t, []byte(status.stdout), "status.gjc_session_id") != "gjc-"+runID {
+		t.Fatalf("status stdout = %s", status.stdout)
+	}
+	if jsonFieldString(t, []byte(status.stdout), "status.artifact_refs") == "[]" {
+		t.Fatalf("status did not return artifact refs: %s", status.stdout)
+	}
 }
 
 func copyDir(t *testing.T, src, dst string) {

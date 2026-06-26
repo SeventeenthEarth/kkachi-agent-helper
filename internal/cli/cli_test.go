@@ -111,7 +111,7 @@ func TestCapabilitiesJSONOutputIsProjectIndependent(t *testing.T) {
 		t.Fatalf("project schema version = %q, want %q", payload.ProjectSchemaVersion, project.SchemaVersion)
 	}
 	flags := payload.CompatibilityFlags
-	if !flags.ProjectInit || !flags.RunLifecycle || !flags.ArtifactInit || !flags.ArtifactList || !flags.ArtifactValidate || !flags.ArtifactMutation || !flags.Gates || !flags.BackendEvidenceRequirements || !flags.DiagnosticsExport || !flags.PhasePlan || !flags.ApprovalRecords || !flags.WorkflowGraphReadonly || !flags.WorkflowGraphInit || !flags.WorkflowGraphApply || !flags.WorkflowGraphExport || !flags.WorkflowGraphDiagnostics || !flags.WorkflowGraphNoDirectYAMLFallback || !flags.WorkflowGraphConfigurableFeedbackIntake || !flags.TaskDAGSchemaValidation || !flags.WorkflowInstanceState || !flags.WorkflowCatalogDiagnostics || !flags.WorkflowCatalogProposalApply || !flags.WorkflowFinalGateIntegration || !flags.WorkflowNodeContractRegistryEvidence || !flags.WorkflowStrictTransitionLedger || !flags.WorkflowTransitionOrderVerification || !flags.WorkflowPhaseProjectionValidation || !flags.TokenEconomyEvidenceGate || !flags.TokenEconomyToken002EvidenceGate || !flags.MultiAgentReviewEvidenceGate || !flags.MultiAgentReviewEvidenceSchema || !flags.PolicyPromotionEvidenceGate || !flags.PolicyPromotionEvidenceSchema {
+	if !flags.ProjectInit || !flags.RunLifecycle || !flags.ArtifactInit || !flags.ArtifactList || !flags.ArtifactValidate || !flags.ArtifactMutation || !flags.Gates || !flags.BackendEvidenceRequirements || !flags.DiagnosticsExport || !flags.PhasePlan || !flags.ApprovalRecords || !flags.WorkflowGraphReadonly || !flags.WorkflowGraphInit || !flags.WorkflowGraphApply || !flags.WorkflowGraphExport || !flags.WorkflowGraphDiagnostics || !flags.WorkflowGraphNoDirectYAMLFallback || !flags.WorkflowGraphConfigurableFeedbackIntake || !flags.TaskDAGSchemaValidation || !flags.WorkflowInstanceState || !flags.WorkflowCatalogDiagnostics || !flags.WorkflowCatalogProposalApply || !flags.WorkflowFinalGateIntegration || !flags.WorkflowNodeContractRegistryEvidence || !flags.WorkflowStrictTransitionLedger || !flags.WorkflowTransitionOrderVerification || !flags.WorkflowPhaseProjectionValidation || !flags.TokenEconomyEvidenceGate || !flags.TokenEconomyToken002EvidenceGate || !flags.MultiAgentReviewEvidenceGate || !flags.MultiAgentReviewEvidenceSchema || !flags.PolicyPromotionEvidenceGate || !flags.PolicyPromotionEvidenceSchema || !flags.GJCEvidenceWrapper {
 		t.Fatalf("compatibility flags = %#v, want implemented surfaces enabled", flags)
 	}
 	if flags.InstallCommand {
@@ -221,6 +221,7 @@ func TestHelpCommandsExitZeroWithoutProjectState(t *testing.T) {
 		{name: "graph group", args: []string{"graph", "--help"}, want: []string{"kkachi-agent-helper graph", "diff", "propose", "apply", "export", "--candidate-file <repo-relative-candidate-graph>", "--patch <repo-relative-candidate-graph>", "--approval <evidence-ref>", "audit evidence reference", "--format mermaid|plantuml"}},
 		{name: "workflow group", args: []string{"workflow", "--help"}, want: []string{"workflow catalog validate", "workflow catalog propose", "--proposal-hash sha256:<64hex>", "KAH does not select workflows"}},
 		{name: "workflow catalog apply help alias", args: []string{"workflow", "catalog", "apply", "--help"}, want: []string{"workflow catalog apply", "--proposal-hash sha256:<64hex>", "hash-bound approval"}},
+		{name: "gjc group", args: []string{"gjc", "--help"}, want: []string{"kkachi-agent-helper gjc", "start-ralplan", "--packet <run-local-packet> (required)", "candidate evidence", "not implemented by this GAJAE-002 MVP"}},
 		{name: "help alias", args: []string{"help", "run", "create"}, want: []string{"kkachi-agent-helper run create", "--execution-mode"}},
 		{name: "help help", args: []string{"help", "help"}, want: []string{"kkachi-agent-helper help", "[command] [subcommand]", "JSON behavior:"}},
 	}
@@ -279,6 +280,113 @@ func TestWorkflowHelpAdvertisesSupportedInventoryAndPolicyBoundary(t *testing.T)
 	}
 }
 
+func TestGJCStartAndStatusUseFakeBinaryAndPersistEvidence(t *testing.T) {
+	repo := tempGitRepo(t)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := runWithOptions(projectInitArgs(), &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("project init exit = %d stderr=%s", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	createArgs := []string{"run", "create", "--title", "GAJAE test", "--work-path", "A_development_execution", "--work-mode", "standard", "--urgency", "normal", "--sot-policy", "existing_sot_basis", "--execution-mode", "production_write", "--backend-evidence", "required", "--commander", "hwangchung", "--task-id", "GAJAE-002", "--json"}
+	if code := runWithOptions(createArgs, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("run create exit = %d stderr=%s", code, stderr.String())
+	}
+	var created runCreateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
+		t.Fatalf("run create JSON: %v\n%s", err, stdout.String())
+	}
+	runID := created.RunID
+	packetRel := filepath.ToSlash(filepath.Join(project.RunRootPath, runID, "artifacts/gjc/packet.json"))
+	artifactRel := filepath.ToSlash(filepath.Join(project.RunRootPath, runID, "artifacts/plan/gjc-plan.md"))
+	writeFileForCLITest(t, filepath.Join(repo, filepath.FromSlash(packetRel)), `{"task":"GAJAE-002"}`+"\n")
+	artifactContent := "# Candidate plan\n"
+	writeFileForCLITest(t, filepath.Join(repo, filepath.FromSlash(artifactRel)), artifactContent)
+	artifactHash := cliWorkflowCatalogChecksum(artifactContent)
+	receipt := `{"status":"ralplan_ready","artifact_refs":[{"path":"` + artifactRel + `","sha256":"` + artifactHash + `"}],"current_required_actor":"kas"}`
+	fakeDir := t.TempDir()
+	fakeGJC := filepath.Join(fakeDir, "gjc")
+	script := "#!/bin/sh\n" +
+		"test \"$HOME\" = \"/Users/draccoon\" || exit 9\n" +
+		"test -n \"$GJC_SESSION_ID\" || exit 8\n" +
+		"printf '%s\\n' '" + receipt + "'\n"
+	if err := os.WriteFile(fakeGJC, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake gjc: %v", err)
+	}
+	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	stdout.Reset()
+	stderr.Reset()
+	startArgs := []string{"--json", "gjc", "start-ralplan", "--run", runID, "--task", "GAJAE-002", "--packet", packetRel}
+	if code := runWithOptions(startArgs, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("gjc start exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	var start project.GJCStartResult
+	if err := json.Unmarshal(stdout.Bytes(), &start); err != nil {
+		t.Fatalf("gjc start JSON: %v\n%s", err, stdout.String())
+	}
+	if start.Status.RealUserHome != "/Users/draccoon" || start.Status.GJCSessionID == "" || start.Status.Process.Status != "ralplan_ready" {
+		t.Fatalf("start status = %#v, want normalized HOME, session, and ralplan candidate", start.Status)
+	}
+	if start.Status.StatusPath != filepath.ToSlash(filepath.Join(project.RunRootPath, runID, "artifacts/gjc/status.json")) || start.Status.StatusHash == "" {
+		t.Fatalf("start status path/hash = %#v, want persisted run-local status", start.Status)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := runWithOptions([]string{"--json", "gjc", "status", "--run", runID}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("gjc status exit = %d stderr=%s", code, stderr.String())
+	}
+	var shown project.GJCStatusResult
+	if err := json.Unmarshal(stdout.Bytes(), &shown); err != nil {
+		t.Fatalf("gjc status JSON: %v\n%s", err, stdout.String())
+	}
+	if shown.Status.GJCSessionID != start.Status.GJCSessionID || shown.Status.Artifacts[0].SHA256 != artifactHash {
+		t.Fatalf("shown status = %#v, want persisted session and artifact hash", shown.Status)
+	}
+}
+
+func TestGJCSafetyProblemCodesExitSafety(t *testing.T) {
+	for _, code := range []string{
+		"gjc_command_missing",
+		"gjc_command_failed",
+		"gjc_command_nonzero",
+		"gjc_command_unsupported",
+		"gjc_json_missing",
+		"gjc_json_invalid",
+		"gjc_receipt_invalid",
+		"gjc_status_missing",
+		"gjc_status_read_failed",
+		"gjc_status_invalid_json",
+		"gjc_status_invalid",
+		"gjc_status_hash_mismatch",
+		"gjc_status_unsupported",
+		"gjc_task_required",
+		"gjc_home_unsafe",
+		"gjc_session_missing",
+		"gjc_session_read_failed",
+		"gjc_session_invalid_json",
+		"gjc_session_invalid",
+		"gjc_session_mismatch",
+		"gjc_artifact_refs_missing",
+		"gjc_artifact_read_failed",
+		"gjc_checksum_malformed",
+		"gjc_checksum_mismatch",
+		"gjc_required_actor_unsupported",
+		"gjc_ref_cross_run",
+		"gjc_ref_missing",
+		"gjc_ref_inspection_failed",
+		"gjc_ref_invalid",
+	} {
+		t.Run(code, func(t *testing.T) {
+			if got := exitCodeForProblem(code); got != ExitSafety {
+				t.Fatalf("exitCodeForProblem(%q) = %d, want %d", code, got, ExitSafety)
+			}
+		})
+	}
+}
+
 func TestImplementedCommandGroupsHaveHelpPages(t *testing.T) {
 	for command := range commandGroups {
 		if _, ok := helpPages[command]; !ok {
@@ -294,6 +402,16 @@ func helpItemsContainName(items []helpItem, want string) bool {
 		}
 	}
 	return false
+}
+
+func writeFileForCLITest(t *testing.T, path string, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", path, err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
 }
 
 func TestHelpJSONOutput(t *testing.T) {
@@ -1681,6 +1799,7 @@ func assertCapabilityCommandGroups(t *testing.T, groups []capabilityCommandGroup
 		{Name: "approval", Status: capabilityStatusSupported, Subcommands: []string{"request", "record", "show"}},
 		{Name: "graph", Status: capabilityStatusSupported, Subcommands: []string{"init", "validate", "explain", "diff", "propose", "apply", "export"}},
 		{Name: "workflow", Status: capabilityStatusSupported, Subcommands: []string{"validate", "explain", "catalog", "catalog propose", "catalog apply", "create", "show", "ready", "node"}},
+		{Name: "gjc", Status: capabilityStatusSupported, Subcommands: []string{"start-deep-interview", "start-ralplan", "start-ultragoal", "status"}},
 	}
 	if !slices.EqualFunc(groups, want, func(got capabilityCommandGroup, want capabilityCommandGroup) bool {
 		return got.Name == want.Name && got.Status == want.Status && slices.Equal(got.Subcommands, want.Subcommands)
