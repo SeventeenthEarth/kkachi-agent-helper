@@ -19,7 +19,7 @@ func TestBinaryEntrypointSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("go run failed: %v\n%s", err, string(output))
 	}
-	if got, want := string(output), "kkachi-agent-helper 0.1.14\n"; got != want {
+	if got, want := string(output), "kkachi-agent-helper 0.2.0\n"; got != want {
 		t.Fatalf("output = %q, want %q", got, want)
 	}
 }
