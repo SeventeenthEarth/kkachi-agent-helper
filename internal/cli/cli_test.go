@@ -338,6 +338,27 @@ func TestGJCStartAndStatusUseFakeBinaryAndPersistEvidence(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
+	callbackArgs := []string{
+		"--json", "gjc", "callback-kanban",
+		"--run", runID,
+		"--task", "GAJAE-002",
+		"--idempotency-key", "cli-callback-ready",
+		"--source-status-hash", start.Status.StatusHash,
+		"--notification-ref", "discord:origin-thread",
+	}
+	if code := runWithOptions(callbackArgs, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
+		t.Fatalf("gjc callback-kanban exit = %d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	var callback project.GJCStatusResult
+	if err := json.Unmarshal(stdout.Bytes(), &callback); err != nil {
+		t.Fatalf("gjc callback-kanban JSON: %v\n%s", err, stdout.String())
+	}
+	if callback.Status.Callback == nil || callback.Status.Callback.NotificationStatus != "metadata_recorded_no_wake_claim" || callback.Status.Callback.WakeEvidenceStatus != "missing_watcher_evidence" || callback.Status.Callback.SameThreadWakeClaim || callback.Status.Callback.LastCallbackStatus != "delivered" {
+		t.Fatalf("callback JSON = %#v, want notification/wake evidence fields without wake claim", callback.Status.Callback)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
 	if code := runWithOptions([]string{"--json", "gjc", "status", "--run", runID}, &stdout, &stderr, testBuildInfo(), runOptions{workingDir: repo}); code != ExitOK {
 		t.Fatalf("gjc status exit = %d stderr=%s", code, stderr.String())
 	}
@@ -347,6 +368,9 @@ func TestGJCStartAndStatusUseFakeBinaryAndPersistEvidence(t *testing.T) {
 	}
 	if shown.Status.GJCSessionID != start.Status.GJCSessionID || shown.Status.Packet != start.Status.Packet || shown.Status.Artifacts[0].SHA256 != artifactHash {
 		t.Fatalf("shown status = %#v, want persisted session and artifact hash", shown.Status)
+	}
+	if shown.Status.Callback == nil || shown.Status.Callback.NotificationStatus != "metadata_recorded_no_wake_claim" || shown.Status.Callback.WakeEvidenceStatus != "missing_watcher_evidence" || shown.Status.Callback.SameThreadWakeClaim {
+		t.Fatalf("shown callback = %#v, want persisted notification/wake evidence fields without wake claim", shown.Status.Callback)
 	}
 }
 
@@ -1802,7 +1826,7 @@ func assertCapabilityCommandGroups(t *testing.T, groups []capabilityCommandGroup
 		{Name: "approval", Status: capabilityStatusSupported, Subcommands: []string{"request", "record", "show"}},
 		{Name: "graph", Status: capabilityStatusSupported, Subcommands: []string{"init", "validate", "explain", "diff", "propose", "apply", "export"}},
 		{Name: "workflow", Status: capabilityStatusSupported, Subcommands: []string{"validate", "explain", "catalog", "catalog propose", "catalog apply", "create", "show", "ready", "node"}},
-		{Name: "gjc", Status: capabilityStatusSupported, Subcommands: []string{"start-deep-interview", "start-ralplan", "start-ultragoal", "status", "attach-kat-evidence"}},
+		{Name: "gjc", Status: capabilityStatusSupported, Subcommands: []string{"start-deep-interview", "start-ralplan", "start-ultragoal", "status", "callback-kanban", "lock-plan", "attach-kat-evidence"}},
 	}
 	if !slices.EqualFunc(groups, want, func(got capabilityCommandGroup, want capabilityCommandGroup) bool {
 		return got.Name == want.Name && got.Status == want.Status && slices.Equal(got.Subcommands, want.Subcommands)

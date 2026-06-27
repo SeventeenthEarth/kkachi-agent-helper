@@ -136,6 +136,8 @@ type GJCCallback struct {
 	SourceStatusHash    string `json:"source_status_hash"`
 	LastCallbackStatus  string `json:"last_callback_status"`
 	NotificationRef     string `json:"notification_ref"`
+	NotificationStatus  string `json:"notification_status"`
+	WakeEvidenceStatus  string `json:"wake_evidence_status"`
 	LastNotifiedHash    string `json:"last_notified_hash"`
 	SameThreadWakeClaim bool   `json:"same_thread_wake_claim"`
 	UpdatedAt           string `json:"updated_at"`

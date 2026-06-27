@@ -370,19 +370,19 @@ func TestGAJAE002DocsCompatibilityContract(t *testing.T) {
 				"HOME=/Users/draccoon",
 				"`.kkachi/runs/<run_id>/artifacts/gjc/session.json`",
 				"GJC output, callbacks, and plan locks are candidate/mechanical evidence only",
-				"GAJAE-005/006 behavior remain deferred",
+				"GAJAE-006 callback/watcher closeout fields are productized as factual evidence",
 			},
 		},
 		{
 			rel: "docs/specs.md",
 			wants: []string{
-				"`GAJAE-004` source-side GJC ralplan/callback pilot evidence is implemented",
+				"`GAJAE-004` source-side GJC ralplan/callback pilot evidence",
 				"### GJC wrapper note",
 				"schema `kah.gajae_gjc_delegation.v1`",
 				"`status_hash` is the checksum of the status payload before the hash field is populated",
 				"KAH fails closed for missing `gjc`",
 				"callback idempotency conflicts",
-				"GAJAE-005/006 remain deferred",
+				"GAJAE-006 closeout productizes callback/watcher status fields",
 			},
 		},
 		{

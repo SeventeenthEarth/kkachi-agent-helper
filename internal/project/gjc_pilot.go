@@ -19,6 +19,9 @@ const (
 	gjcKATAttachmentReady       = "kat_evidence_ready"
 	gjcKATAttachmentFailed      = "kat_evidence_failed"
 	gjcNoWakeClaimNotification  = "no-wake-claim"
+	gjcNotificationNoWakeClaim  = "no_wake_claim"
+	gjcNotificationMetadataOnly = "metadata_recorded_no_wake_claim"
+	gjcWakeEvidenceMissing      = "missing_watcher_evidence"
 	gjcPlanConflictReportName   = "plan-conflict.json"
 	gjcCallbackConflictHint     = "Use a new idempotency key for a different callback source hash or repair the existing callback evidence."
 	gjcPlanLockAcceptancePolicy = "KAS/Blue/color approval evidence is required; KAH records the supplied hash mechanically only."
@@ -434,8 +437,10 @@ func parseGJCCallbackOptions(status GJCStatus, options GJCCallbackOptions) (GJCC
 		return GJCCallback{}, &Problem{Code: "gjc_checksum_malformed", Message: "GJC callback source status hash is malformed", Hint: "Use the status_hash from the status evidence that triggered the callback.", Field: "source_status_hash", Expected: "sha256:<64hex>", Actual: sourceHash}
 	}
 	notificationRef := strings.TrimSpace(options.NotificationRef)
-	if notificationRef == "" {
+	notificationStatus := gjcNotificationMetadataOnly
+	if notificationRef == "" || notificationRef == gjcNoWakeClaimNotification {
 		notificationRef = gjcNoWakeClaimNotification
+		notificationStatus = gjcNotificationNoWakeClaim
 	}
 	return GJCCallback{
 		TaskID:              taskID,
@@ -444,10 +449,21 @@ func parseGJCCallbackOptions(status GJCStatus, options GJCCallbackOptions) (GJCC
 		SourceStatusHash:    sourceHash,
 		LastCallbackStatus:  result,
 		NotificationRef:     notificationRef,
+		NotificationStatus:  notificationStatus,
+		WakeEvidenceStatus:  gjcWakeEvidenceMissing,
 		LastNotifiedHash:    sourceHash,
 		SameThreadWakeClaim: false,
 		UpdatedAt:           options.Now().UTC().Format(time.RFC3339),
 	}, nil
+}
+
+func validGJCNotificationStatus(status string) bool {
+	switch status {
+	case gjcNotificationNoWakeClaim, gjcNotificationMetadataOnly:
+		return true
+	default:
+		return false
+	}
 }
 
 func validGJCCallbackResult(result string) bool {
@@ -579,6 +595,15 @@ func validateGJCCallback(callback *GJCCallback) error {
 	}
 	if !validGJCCallbackResult(callback.LastCallbackStatus) {
 		return &Problem{Code: "gjc_callback_result_unsupported", Message: "GJC callback result is unsupported", Hint: "Use pending, delivered, or failed.", Field: "callback.last_callback_status", Expected: "pending, delivered, or failed", Actual: callback.LastCallbackStatus}
+	}
+	if !validGJCNotificationStatus(callback.NotificationStatus) {
+		return &Problem{Code: "gjc_callback_notification_status_unsupported", Message: "GJC callback notification status is unsupported", Hint: "Use no_wake_claim or metadata_recorded_no_wake_claim; callback metadata is not wake readiness.", Field: "callback.notification_status", Expected: "no_wake_claim or metadata_recorded_no_wake_claim", Actual: callback.NotificationStatus}
+	}
+	if strings.TrimSpace(callback.WakeEvidenceStatus) != gjcWakeEvidenceMissing {
+		return &Problem{Code: "gjc_callback_wake_evidence_unsupported", Message: "GJC callback wake evidence status is unsupported", Hint: "Same-thread wake readiness remains no-wake-claim until explicit watcher/origin evidence support is implemented and verified.", Field: "callback.wake_evidence_status", Expected: gjcWakeEvidenceMissing, Actual: callback.WakeEvidenceStatus}
+	}
+	if callback.SameThreadWakeClaim {
+		return &Problem{Code: "gjc_callback_wake_claim_unsupported", Message: "GJC callback cannot claim same-thread wake readiness", Hint: "Record notification metadata only; KAS/Blue may claim wake readiness only after explicit watcher/origin evidence exists.", Field: "callback.same_thread_wake_claim", Expected: "false", Actual: "true"}
 	}
 	return nil
 }

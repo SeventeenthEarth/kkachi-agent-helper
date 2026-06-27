@@ -482,7 +482,7 @@ func TestGJCCallbackRecordsIdempotentEvidenceAndRejectsConflicts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecordGJCCallback(first) error = %v", err)
 	}
-	if first.Status.Callback == nil || first.Status.Callback.IdempotencyKey != callback.IdempotencyKey || first.Status.Callback.NotificationRef != "no-wake-claim" || first.Status.Callback.SameThreadWakeClaim {
+	if first.Status.Callback == nil || first.Status.Callback.IdempotencyKey != callback.IdempotencyKey || first.Status.Callback.NotificationRef != "no-wake-claim" || first.Status.Callback.NotificationStatus != "no_wake_claim" || first.Status.Callback.WakeEvidenceStatus != "missing_watcher_evidence" || first.Status.Callback.SameThreadWakeClaim {
 		t.Fatalf("callback evidence = %#v, want idempotency, no-wake-claim metadata, and no same-thread wake claim", first.Status.Callback)
 	}
 
@@ -494,7 +494,7 @@ func TestGJCCallbackRecordsIdempotentEvidenceAndRejectsConflicts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecordGJCCallback(notification) error = %v", err)
 	}
-	if notified.Status.Callback == nil || notified.Status.Callback.NotificationRef != "discord:origin-thread" || notified.Status.Callback.SameThreadWakeClaim {
+	if notified.Status.Callback == nil || notified.Status.Callback.NotificationRef != "discord:origin-thread" || notified.Status.Callback.NotificationStatus != "metadata_recorded_no_wake_claim" || notified.Status.Callback.WakeEvidenceStatus != "missing_watcher_evidence" || notified.Status.Callback.SameThreadWakeClaim {
 		t.Fatalf("notification callback evidence = %#v, want metadata preserved without wake claim", notified.Status.Callback)
 	}
 
@@ -510,6 +510,92 @@ func TestGJCCallbackRecordsIdempotentEvidenceAndRejectsConflicts(t *testing.T) {
 	conflict.SourceStatusHash = "sha256:" + strings.Repeat("1", 64)
 	_, err = RecordGJCCallback(root, conflict)
 	assertProblemCode(t, err, "gjc_callback_idempotency_conflict")
+}
+
+func TestGJCCallbackRejectsUnsupportedWakeEvidenceClaims(t *testing.T) {
+	cases := []struct {
+		name     string
+		mutate   func(*GJCCallback)
+		wantCode string
+	}{
+		{
+			name: "unsupported notification status",
+			mutate: func(callback *GJCCallback) {
+				callback.NotificationStatus = "wake_ready"
+			},
+			wantCode: "gjc_callback_notification_status_unsupported",
+		},
+		{
+			name: "unsupported wake evidence status",
+			mutate: func(callback *GJCCallback) {
+				callback.WakeEvidenceStatus = "same_thread_wake_verified"
+			},
+			wantCode: "gjc_callback_wake_evidence_unsupported",
+		},
+		{
+			name: "same thread wake claim",
+			mutate: func(callback *GJCCallback) {
+				callback.SameThreadWakeClaim = true
+			},
+			wantCode: "gjc_callback_wake_claim_unsupported",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := initializedRepo(t)
+			root, _ := DiscoverRoot(repo)
+			options := deterministicCreateRunOptions()
+			options.TaskID = "GAJAE-004"
+			created, err := CreateRun(root, options)
+			if err != nil {
+				t.Fatalf("CreateRun() error = %v", err)
+			}
+			runID := created.Metadata.RunID
+			packetRel := packetRelative(runID, "artifacts/gjc/gjc-ralplan-packet.yaml")
+			writeGJCTestFile(t, repo, runID, "artifacts/gjc/gjc-ralplan-packet.yaml", []byte("packet_kind: ralplan\n"))
+			planArtifact := writeGJCTestFile(t, repo, runID, "artifacts/plan/gjc-plan.md", []byte("# Candidate plan\n"))
+			artifactRef := GJCArtifactRef{Path: packetRelative(runID, "artifacts/plan/gjc-plan.md"), SHA256: sha256String(mustReadBytes(t, planArtifact))}
+
+			oldRunner := gjcRunCommand
+			gjcRunCommand = func(invocation gjcRunnerInvocation) (gjcRunnerResult, error) {
+				receipt := map[string]any{
+					"status":        "ralplan_ready",
+					"artifact_refs": []GJCArtifactRef{artifactRef},
+				}
+				data, _ := json.Marshal(receipt)
+				return gjcRunnerResult{PID: 1234, ExitCode: 0, Stdout: data}, nil
+			}
+			defer func() { gjcRunCommand = oldRunner }()
+
+			start, err := StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-004", Packet: packetRel, CommandKind: "start-ralplan", Now: testRunNow(4)})
+			if err != nil {
+				t.Fatalf("StartGJC() error = %v", err)
+			}
+			result, err := RecordGJCCallback(root, GJCCallbackOptions{
+				RunID:            runID,
+				TaskID:           "GAJAE-004",
+				IdempotencyKey:   "gajae004-plan-ready",
+				SourceStatusHash: start.Status.StatusHash,
+				NotificationRef:  "discord:origin-thread",
+				Now:              testRunNow(5),
+			})
+			if err != nil {
+				t.Fatalf("RecordGJCCallback() error = %v", err)
+			}
+			status := result.Status
+			if status.Callback == nil {
+				t.Fatal("callback evidence missing from status")
+			}
+			callback := *status.Callback
+			tc.mutate(&callback)
+			status.Callback = &callback
+			rewriteGJCStatusForTest(t, root, status)
+
+			_, err = ShowGJCStatus(root, GJCStatusOptions{RunID: runID})
+			assertProblemCode(t, err, tc.wantCode)
+		})
+	}
 }
 
 func TestGJCPlanLockBindsAcceptedHashAndRejectsDrift(t *testing.T) {
@@ -1171,6 +1257,27 @@ func writeGJCKATEvidenceForTest(t *testing.T, repo string, runID string, status 
 		summary:   GJCArtifactRef{Path: packetRelative(runID, "artifacts/test/kat.summary.json"), SHA256: sha256String(mustReadBytes(t, summaryPath))},
 		summaryMD: GJCArtifactRef{Path: packetRelative(runID, "artifacts/test/kat.summary.md"), SHA256: sha256String(mustReadBytes(t, summaryMDPath))},
 		rawLog:    GJCArtifactRef{Path: packetRelative(runID, "artifacts/test/kat.raw.log"), SHA256: sha256String(mustReadBytes(t, rawLogPath))},
+	}
+}
+
+func rewriteGJCStatusForTest(t *testing.T, root Root, status GJCStatus) {
+	t.Helper()
+	path, err := gjcStatusPath(root, status.RunID)
+	if err != nil {
+		t.Fatalf("resolve GJC status path: %v", err)
+	}
+	statusHash, err := computeGJCStatusHash(status)
+	if err != nil {
+		t.Fatalf("compute GJC status hash: %v", err)
+	}
+	status.StatusHash = statusHash
+	data, err := json.MarshalIndent(status, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal GJC status: %v", err)
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(path.Absolute, data, 0o600); err != nil {
+		t.Fatalf("rewrite GJC status: %v", err)
 	}
 }
 

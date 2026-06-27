@@ -158,9 +158,11 @@ KAH must preserve enough evidence for no-agent watchers and Kanban callbacks to 
 - source status hash;
 - comment/complete result;
 - notification target or origin reference when available;
+- notification status (`metadata_recorded_no_wake_claim` or `no_wake_claim`);
+- wake evidence status (`missing_watcher_evidence` until explicit origin/thread metadata and watcher proof exist);
 - last-notified hash to avoid repeat notifications.
 
-Callbacks may report that a plan or implementation bundle is ready. They must not mark Kkachi plan approval, review acceptance, MAR acceptance, or final completion by themselves.
+Callbacks may report that a plan or implementation bundle is ready. They must not mark Kkachi plan approval, review acceptance, MAR acceptance, same-thread wake readiness, or final completion by themselves. Metadata-only callbacks are factual notification evidence and must remain `no-wake-claim` until a separately verified watcher/origin/thread evidence path exists.
 
 ## 7. Shared task sequence and KAH ownership
 
@@ -173,7 +175,7 @@ GAJAE uses shared logical task ids across KAS and KAH. KAH tasks require KAH-loc
 | GAJAE-003 | Add GJC packet/template and artifact-reference contract | Shared logical task with KAS physical packet-template scope and KAH physical packet-ref/artifact-ref preservation scope. KAH validates `packet_ref` as KAS input packet evidence and preserves GJC `artifact_refs` as candidate output evidence without interpreting policy. | Completed |
 | GAJAE-004 | Async ralplan callback pilot | Source-side support for ralplan receipt/status, callback idempotency evidence, no-wake-claim metadata, and KAS-supplied plan-lock hash recording for plan review. | Completed |
 | GAJAE-005 | Async ultragoal + KAT evidence pilot | Start ultragoal async, attach KAT run-id evidence, and expose review-ready status. | Source-side pilot |
-| GAJAE-006 | Watcher/callback closeout | Productize idempotent callback/watcher status surfaces and docs/compatibility notes. | Planned |
+| GAJAE-006 | Watcher/callback closeout | Productize idempotent callback/watcher status surfaces and docs/compatibility notes. | Completed |
 
 ## 8. GAJAE-001 acceptance criteria
 
