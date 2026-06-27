@@ -14,15 +14,15 @@ func TestStartGJCRecordsRunLocalStatusAndReusesSession(t *testing.T) {
 	repo := initializedRepo(t)
 	root, _ := DiscoverRoot(repo)
 	options := deterministicCreateRunOptions()
-	options.TaskID = "GAJAE-002"
+	options.TaskID = "GAJAE-007"
 	created, err := CreateRun(root, options)
 	if err != nil {
 		t.Fatalf("CreateRun() error = %v", err)
 	}
 	runID := created.Metadata.RunID
-	packetRel := packetRelative(runID, "artifacts/gjc/packet.json")
-	packetAbs := writeGJCTestFile(t, repo, runID, "artifacts/gjc/packet.json", []byte(`{"task":"GAJAE-002"}`+"\n"))
-	packetAbs = canonicalTestPath(t, packetAbs)
+	artifactInput := writeGJCTestFile(t, repo, runID, "artifacts/gjc/ralplan-input.md", []byte("# Ralplan input\n"))
+	artifactInput = canonicalTestPath(t, artifactInput)
+	packetRel := writeNativeRalplanPacket(t, repo, runID, "planner", "1", packetRelative(runID, "artifacts/gjc/ralplan-input.md"))
 	artifact := writeGJCTestFile(t, repo, runID, "artifacts/plan/gjc-plan.md", []byte("# Candidate plan\n"))
 	artifactRef := GJCArtifactRef{Path: packetRelative(runID, "artifacts/plan/gjc-plan.md"), SHA256: sha256String(mustReadBytes(t, artifact))}
 
@@ -35,8 +35,11 @@ func TestStartGJCRecordsRunLocalStatusAndReusesSession(t *testing.T) {
 		if !envContains(invocation.Env, "GJC_SESSION_ID="+invocation.SessionID) {
 			t.Fatalf("env=%#v, want GJC_SESSION_ID", invocation.Env)
 		}
-		if !slices.Equal(invocation.Args, []string{"ralplan", "--write", "--packet", packetAbs, "--json"}) {
-			t.Fatalf("args = %#v, want ralplan packet invocation", invocation.Args)
+		if slices.Contains(invocation.Args, "--packet") {
+			t.Fatalf("args = %#v, must not use legacy --packet for native ralplan", invocation.Args)
+		}
+		if !slices.Equal(invocation.Args, []string{"ralplan", "--write", "--stage", "planner", "--stage_n", "1", "--artifact", artifactInput, "--json"}) {
+			t.Fatalf("args = %#v, want native ralplan invocation", invocation.Args)
 		}
 		sessions = append(sessions, invocation.SessionID)
 		receipt := map[string]any{
@@ -49,7 +52,7 @@ func TestStartGJCRecordsRunLocalStatusAndReusesSession(t *testing.T) {
 	}
 	defer func() { gjcRunCommand = oldRunner }()
 
-	result, err := StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-002", Packet: packetRel, CommandKind: "start-ralplan", Now: testRunNow(4)})
+	result, err := StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-007", Packet: packetRel, CommandKind: "start-ralplan", Now: testRunNow(4)})
 	if err != nil {
 		t.Fatalf("StartGJC(first) error = %v", err)
 	}
@@ -68,12 +71,171 @@ func TestStartGJCRecordsRunLocalStatusAndReusesSession(t *testing.T) {
 		t.Fatalf("shown session = %q, want %q", shown.Status.GJCSessionID, result.Status.GJCSessionID)
 	}
 
-	_, err = StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-002", Packet: packetRel, CommandKind: "start-ralplan", Now: testRunNow(5)})
+	_, err = StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-007", Packet: packetRel, CommandKind: "start-ralplan", Now: testRunNow(5)})
 	if err != nil {
 		t.Fatalf("StartGJC(second) error = %v", err)
 	}
 	if len(sessions) != 2 || sessions[0] == "" || sessions[0] != sessions[1] {
 		t.Fatalf("sessions = %#v, want stable run-local session reuse", sessions)
+	}
+}
+
+func TestStartGJCRalplanRequiresNativeInputBeforeRunner(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.TaskID = "GAJAE-007"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+	packetRel := packetRelative(runID, "artifacts/gjc/gjc-ralplan-packet.yaml")
+	writeGJCTestFile(t, repo, runID, "artifacts/gjc/gjc-ralplan-packet.yaml", []byte("packet_kind: ralplan\n"))
+
+	oldRunner := gjcRunCommand
+	gjcRunCommand = func(invocation gjcRunnerInvocation) (gjcRunnerResult, error) {
+		t.Fatalf("runner should not be called when native_ralplan_input is missing")
+		return gjcRunnerResult{}, nil
+	}
+	defer func() { gjcRunCommand = oldRunner }()
+
+	_, err = StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-007", Packet: packetRel, CommandKind: "start-ralplan", Now: testRunNow(4)})
+	assertProblemCode(t, err, "gjc_ralplan_native_input_missing")
+}
+
+func TestStartGJCRalplanRejectsUnsafeNativeArtifactBeforeRunner(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.TaskID = "GAJAE-007"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+	packetRel := writeNativeRalplanPacket(t, repo, runID, "planner", "1", "../escape.md")
+
+	oldRunner := gjcRunCommand
+	gjcRunCommand = func(invocation gjcRunnerInvocation) (gjcRunnerResult, error) {
+		t.Fatalf("runner should not be called when native ralplan artifact escapes the run root")
+		return gjcRunnerResult{}, nil
+	}
+	defer func() { gjcRunCommand = oldRunner }()
+
+	_, err = StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-007", Packet: packetRel, CommandKind: "start-ralplan", Now: testRunNow(4)})
+	assertProblemCode(t, err, "path_escape")
+}
+
+func TestStartGJCRalplanRejectsDuplicateNativeFieldsBeforeRunner(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.TaskID = "GAJAE-007"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+	inputRel := packetRelative(runID, "artifacts/gjc/ralplan-input.md")
+	writeGJCTestFile(t, repo, runID, "artifacts/gjc/ralplan-input.md", []byte("# Native input\n"))
+	packetRel := packetRelative(runID, "artifacts/gjc/gjc-ralplan-packet.yaml")
+	writeGJCTestFile(t, repo, runID, "artifacts/gjc/gjc-ralplan-packet.yaml", []byte("packet_kind: ralplan\nnative_ralplan_input:\n  stage: \"planner\"\n  stage: \"reviewer\"\n  stage_n: 1\n  artifact: \""+inputRel+"\"\n"))
+
+	oldRunner := gjcRunCommand
+	gjcRunCommand = func(invocation gjcRunnerInvocation) (gjcRunnerResult, error) {
+		t.Fatalf("runner should not be called when native ralplan input has duplicate keys")
+		return gjcRunnerResult{}, nil
+	}
+	defer func() { gjcRunCommand = oldRunner }()
+
+	_, err = StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-007", Packet: packetRel, CommandKind: "start-ralplan", Now: testRunNow(4)})
+	assertProblemCode(t, err, "gjc_ralplan_native_input_invalid")
+}
+
+func TestStartGJCRalplanRejectsDuplicateNativeBlocksBeforeRunner(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.TaskID = "GAJAE-007"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+	inputRel := packetRelative(runID, "artifacts/gjc/ralplan-input.md")
+	writeGJCTestFile(t, repo, runID, "artifacts/gjc/ralplan-input.md", []byte("# Native input\n"))
+	packetRel := packetRelative(runID, "artifacts/gjc/gjc-ralplan-packet.yaml")
+	writeGJCTestFile(t, repo, runID, "artifacts/gjc/gjc-ralplan-packet.yaml", []byte("packet_kind: ralplan\nnative_ralplan_input:\n  stage: \"planner\"\n  stage_n: 1\n  artifact: \""+inputRel+"\"\nnative_ralplan_input:\n  stage: \"reviewer\"\n  stage_n: 2\n  artifact: \""+inputRel+"\"\n"))
+
+	oldRunner := gjcRunCommand
+	gjcRunCommand = func(invocation gjcRunnerInvocation) (gjcRunnerResult, error) {
+		t.Fatalf("runner should not be called when native ralplan input has duplicate blocks")
+		return gjcRunnerResult{}, nil
+	}
+	defer func() { gjcRunCommand = oldRunner }()
+
+	_, err = StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-007", Packet: packetRel, CommandKind: "start-ralplan", Now: testRunNow(4)})
+	assertProblemCode(t, err, "gjc_ralplan_native_input_invalid")
+}
+
+func TestStartGJCRalplanRejectsNestedNativeBlockBeforeRunner(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.TaskID = "GAJAE-007"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+	inputRel := packetRelative(runID, "artifacts/gjc/ralplan-input.md")
+	writeGJCTestFile(t, repo, runID, "artifacts/gjc/ralplan-input.md", []byte("# Native input\n"))
+	packetRel := packetRelative(runID, "artifacts/gjc/gjc-ralplan-packet.yaml")
+	writeGJCTestFile(t, repo, runID, "artifacts/gjc/gjc-ralplan-packet.yaml", []byte("packet_kind: ralplan\nouter:\n  native_ralplan_input:\n    stage: \"planner\"\n    stage_n: 1\n    artifact: \""+inputRel+"\"\n"))
+
+	oldRunner := gjcRunCommand
+	gjcRunCommand = func(invocation gjcRunnerInvocation) (gjcRunnerResult, error) {
+		t.Fatalf("runner should not be called when native ralplan input is nested")
+		return gjcRunnerResult{}, nil
+	}
+	defer func() { gjcRunCommand = oldRunner }()
+
+	_, err = StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-007", Packet: packetRel, CommandKind: "start-ralplan", Now: testRunNow(4)})
+	assertProblemCode(t, err, "gjc_ralplan_native_input_invalid")
+}
+
+func TestStartGJCRalplanAcceptsQuotedNativeArtifactWithComment(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.TaskID = "GAJAE-007"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+	inputRel := packetRelative(runID, "artifacts/gjc/ralplan-input.md")
+	inputAbs := writeGJCTestFile(t, repo, runID, "artifacts/gjc/ralplan-input.md", []byte("# Native input\n"))
+	inputAbs = canonicalTestPath(t, inputAbs)
+	packetRel := packetRelative(runID, "artifacts/gjc/gjc-ralplan-packet.yaml")
+	writeGJCTestFile(t, repo, runID, "artifacts/gjc/gjc-ralplan-packet.yaml", []byte("packet_kind: ralplan\nnative_ralplan_input:\n  stage: \"planner\" # GJC stage\n  stage_n: \"1\" # first pass\n  artifact: \""+inputRel+"\" # input material\n"))
+	plan := writeGJCTestFile(t, repo, runID, "artifacts/plan/gjc-plan.md", []byte("# Candidate plan\n"))
+	artifactRef := GJCArtifactRef{Path: packetRelative(runID, "artifacts/plan/gjc-plan.md"), SHA256: sha256String(mustReadBytes(t, plan))}
+
+	oldRunner := gjcRunCommand
+	gjcRunCommand = func(invocation gjcRunnerInvocation) (gjcRunnerResult, error) {
+		if !slices.Equal(invocation.Args, []string{"ralplan", "--write", "--stage", "planner", "--stage_n", "1", "--artifact", inputAbs, "--json"}) {
+			t.Fatalf("args = %#v, want normalized native ralplan input", invocation.Args)
+		}
+		receipt := map[string]any{"status": "ralplan_ready", "artifact_refs": []GJCArtifactRef{artifactRef}}
+		data, _ := json.Marshal(receipt)
+		return gjcRunnerResult{PID: 1234, ExitCode: 0, Stdout: data}, nil
+	}
+	defer func() { gjcRunCommand = oldRunner }()
+
+	if _, err := StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-007", Packet: packetRel, CommandKind: "start-ralplan", Now: testRunNow(4)}); err != nil {
+		t.Fatalf("StartGJC() error = %v", err)
 	}
 }
 
@@ -87,8 +249,8 @@ func TestStartGJCPreservesPacketRefAndShowStatusValidatesIt(t *testing.T) {
 		t.Fatalf("CreateRun() error = %v", err)
 	}
 	runID := created.Metadata.RunID
-	packetRel := packetRelative(runID, "artifacts/gjc/gjc-ralplan-packet.yaml")
-	packetAbs := writeGJCTestFile(t, repo, runID, "artifacts/gjc/gjc-ralplan-packet.yaml", []byte("packet_kind: ralplan\n"))
+	packetRel := writeNativeRalplanPacket(t, repo, runID, "planner", "1", packetRelative(runID, "artifacts/gjc/ralplan-input.md"))
+	packetAbs := filepath.Join(repo, filepath.FromSlash(packetRel))
 	packetHash := sha256String(mustReadBytes(t, packetAbs))
 	artifact := writeGJCTestFile(t, repo, runID, "artifacts/plan/gjc-plan.md", []byte("# Candidate plan\n"))
 	artifactRef := GJCArtifactRef{Path: packetRelative(runID, "artifacts/plan/gjc-plan.md"), SHA256: sha256String(mustReadBytes(t, artifact))}
@@ -132,7 +294,7 @@ func TestShowGJCStatusRejectsPacketRefHashDrift(t *testing.T) {
 	}
 	runID := created.Metadata.RunID
 	packetRel := packetRelative(runID, "artifacts/gjc/gjc-ralplan-packet.yaml")
-	writeGJCTestFile(t, repo, runID, "artifacts/gjc/gjc-ralplan-packet.yaml", []byte("packet_kind: ralplan\n"))
+	writeNativeRalplanPacket(t, repo, runID, "planner", "1", packetRelative(runID, "artifacts/gjc/ralplan-input.md"))
 	artifact := writeGJCTestFile(t, repo, runID, "artifacts/plan/gjc-plan.md", []byte("# Candidate plan\n"))
 	artifactRef := GJCArtifactRef{Path: packetRelative(runID, "artifacts/plan/gjc-plan.md"), SHA256: sha256String(mustReadBytes(t, artifact))}
 
@@ -168,8 +330,7 @@ func TestStartGJCRejectsChecksumMismatchAndRecordsFailureStatus(t *testing.T) {
 		t.Fatalf("CreateRun() error = %v", err)
 	}
 	runID := created.Metadata.RunID
-	packetRel := packetRelative(runID, "artifacts/gjc/packet.json")
-	writeGJCTestFile(t, repo, runID, "artifacts/gjc/packet.json", []byte(`{"task":"GAJAE-002"}`+"\n"))
+	packetRel := writeNativeRalplanPacket(t, repo, runID, "planner", "1", packetRelative(runID, "artifacts/gjc/ralplan-input.md"))
 	writeGJCTestFile(t, repo, runID, "artifacts/plan/gjc-plan.md", []byte("# Candidate plan\n"))
 
 	oldRunner := gjcRunCommand
@@ -203,8 +364,7 @@ func TestShowGJCStatusRejectsTamperedStatusHash(t *testing.T) {
 		t.Fatalf("CreateRun() error = %v", err)
 	}
 	runID := created.Metadata.RunID
-	packetRel := packetRelative(runID, "artifacts/gjc/packet.json")
-	writeGJCTestFile(t, repo, runID, "artifacts/gjc/packet.json", []byte(`{"task":"GAJAE-002"}`+"\n"))
+	packetRel := writeNativeRalplanPacket(t, repo, runID, "planner", "1", packetRelative(runID, "artifacts/gjc/ralplan-input.md"))
 	artifact := writeGJCTestFile(t, repo, runID, "artifacts/plan/gjc-plan.md", []byte("# Candidate plan\n"))
 	artifactRef := GJCArtifactRef{Path: packetRelative(runID, "artifacts/plan/gjc-plan.md"), SHA256: sha256String(mustReadBytes(t, artifact))}
 
@@ -368,7 +528,7 @@ func TestShowGJCStatusRejectsUnsupportedStatus(t *testing.T) {
 	}
 	runID := created.Metadata.RunID
 	packetRel := packetRelative(runID, "artifacts/gjc/gjc-ralplan-packet.yaml")
-	writeGJCTestFile(t, repo, runID, "artifacts/gjc/gjc-ralplan-packet.yaml", []byte("packet_kind: ralplan\n"))
+	writeNativeRalplanPacket(t, repo, runID, "planner", "1", packetRelative(runID, "artifacts/gjc/ralplan-input.md"))
 	artifact := writeGJCTestFile(t, repo, runID, "artifacts/plan/gjc-plan.md", []byte("# Candidate plan\n"))
 	artifactRef := GJCArtifactRef{Path: packetRelative(runID, "artifacts/plan/gjc-plan.md"), SHA256: sha256String(mustReadBytes(t, artifact))}
 
@@ -418,7 +578,7 @@ func TestStartGJCRejectsRalplanReadyWithoutPlanArtifact(t *testing.T) {
 	}
 	runID := created.Metadata.RunID
 	packetRel := packetRelative(runID, "artifacts/gjc/gjc-ralplan-packet.yaml")
-	writeGJCTestFile(t, repo, runID, "artifacts/gjc/gjc-ralplan-packet.yaml", []byte("packet_kind: ralplan\n"))
+	writeNativeRalplanPacket(t, repo, runID, "planner", "1", packetRelative(runID, "artifacts/gjc/ralplan-input.md"))
 	nonPlanArtifact := writeGJCTestFile(t, repo, runID, "artifacts/gjc/receipt.json", []byte(`{"stage":"plan"}`+"\n"))
 	artifactRef := GJCArtifactRef{Path: packetRelative(runID, "artifacts/gjc/receipt.json"), SHA256: sha256String(mustReadBytes(t, nonPlanArtifact))}
 
@@ -448,7 +608,7 @@ func TestGJCCallbackRecordsIdempotentEvidenceAndRejectsConflicts(t *testing.T) {
 	}
 	runID := created.Metadata.RunID
 	packetRel := packetRelative(runID, "artifacts/gjc/gjc-ralplan-packet.yaml")
-	writeGJCTestFile(t, repo, runID, "artifacts/gjc/gjc-ralplan-packet.yaml", []byte("packet_kind: ralplan\n"))
+	writeNativeRalplanPacket(t, repo, runID, "planner", "1", packetRelative(runID, "artifacts/gjc/ralplan-input.md"))
 	planArtifact := writeGJCTestFile(t, repo, runID, "artifacts/plan/gjc-plan.md", []byte("# Candidate plan\n"))
 	artifactRef := GJCArtifactRef{Path: packetRelative(runID, "artifacts/plan/gjc-plan.md"), SHA256: sha256String(mustReadBytes(t, planArtifact))}
 
@@ -553,7 +713,7 @@ func TestGJCCallbackRejectsUnsupportedWakeEvidenceClaims(t *testing.T) {
 			}
 			runID := created.Metadata.RunID
 			packetRel := packetRelative(runID, "artifacts/gjc/gjc-ralplan-packet.yaml")
-			writeGJCTestFile(t, repo, runID, "artifacts/gjc/gjc-ralplan-packet.yaml", []byte("packet_kind: ralplan\n"))
+			writeNativeRalplanPacket(t, repo, runID, "planner", "1", packetRelative(runID, "artifacts/gjc/ralplan-input.md"))
 			planArtifact := writeGJCTestFile(t, repo, runID, "artifacts/plan/gjc-plan.md", []byte("# Candidate plan\n"))
 			artifactRef := GJCArtifactRef{Path: packetRelative(runID, "artifacts/plan/gjc-plan.md"), SHA256: sha256String(mustReadBytes(t, planArtifact))}
 
@@ -609,7 +769,7 @@ func TestGJCPlanLockBindsAcceptedHashAndRejectsDrift(t *testing.T) {
 	}
 	runID := created.Metadata.RunID
 	packetRel := packetRelative(runID, "artifacts/gjc/gjc-ralplan-packet.yaml")
-	writeGJCTestFile(t, repo, runID, "artifacts/gjc/gjc-ralplan-packet.yaml", []byte("packet_kind: ralplan\n"))
+	writeNativeRalplanPacket(t, repo, runID, "planner", "1", packetRelative(runID, "artifacts/gjc/ralplan-input.md"))
 	planArtifact := writeGJCTestFile(t, repo, runID, "artifacts/plan/gjc-plan.md", []byte("# Candidate plan\n"))
 	artifactRef := GJCArtifactRef{Path: packetRelative(runID, "artifacts/plan/gjc-plan.md"), SHA256: sha256String(mustReadBytes(t, planArtifact))}
 
@@ -1151,6 +1311,28 @@ func writeGJCTestFile(t *testing.T, repo string, runID string, relative string, 
 		t.Fatalf("write test file: %v", err)
 	}
 	return path
+}
+
+func writeNativeRalplanPacket(t *testing.T, repo string, runID string, stage string, stageN string, artifact string) string {
+	t.Helper()
+	if strings.HasPrefix(artifact, packetRelative(runID, "")) {
+		artifactPath := filepath.Join(repo, filepath.FromSlash(artifact))
+		if _, err := os.Stat(artifactPath); os.IsNotExist(err) {
+			if err := os.MkdirAll(filepath.Dir(artifactPath), 0o755); err != nil {
+				t.Fatalf("mkdir native ralplan artifact: %v", err)
+			}
+			if err := os.WriteFile(artifactPath, []byte("# Native ralplan input\n"), 0o600); err != nil {
+				t.Fatalf("write native ralplan artifact: %v", err)
+			}
+		}
+	}
+	content := "packet_kind: ralplan\n" +
+		"native_ralplan_input:\n" +
+		"  stage: \"" + stage + "\"\n" +
+		"  stage_n: " + stageN + "\n" +
+		"  artifact: \"" + artifact + "\"\n"
+	writeGJCTestFile(t, repo, runID, "artifacts/gjc/gjc-ralplan-packet.yaml", []byte(content))
+	return packetRelative(runID, "artifacts/gjc/gjc-ralplan-packet.yaml")
 }
 
 func packetRelative(runID string, relative string) string {

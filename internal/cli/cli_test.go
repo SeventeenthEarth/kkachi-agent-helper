@@ -298,9 +298,11 @@ func TestGJCStartAndStatusUseFakeBinaryAndPersistEvidence(t *testing.T) {
 		t.Fatalf("run create JSON: %v\n%s", err, stdout.String())
 	}
 	runID := created.RunID
-	packetRel := filepath.ToSlash(filepath.Join(project.RunRootPath, runID, "artifacts/gjc/packet.json"))
+	packetRel := filepath.ToSlash(filepath.Join(project.RunRootPath, runID, "artifacts/gjc/gjc-ralplan-packet.yaml"))
+	inputRel := filepath.ToSlash(filepath.Join(project.RunRootPath, runID, "artifacts/gjc/ralplan-input.md"))
 	artifactRel := filepath.ToSlash(filepath.Join(project.RunRootPath, runID, "artifacts/plan/gjc-plan.md"))
-	writeFileForCLITest(t, filepath.Join(repo, filepath.FromSlash(packetRel)), `{"task":"GAJAE-002"}`+"\n")
+	writeFileForCLITest(t, filepath.Join(repo, filepath.FromSlash(inputRel)), "# Native ralplan input\n")
+	writeFileForCLITest(t, filepath.Join(repo, filepath.FromSlash(packetRel)), "packet_kind: ralplan\nnative_ralplan_input:\n  stage: \"planner\"\n  stage_n: 1\n  artifact: \""+inputRel+"\"\n")
 	artifactContent := "# Candidate plan\n"
 	writeFileForCLITest(t, filepath.Join(repo, filepath.FromSlash(artifactRel)), artifactContent)
 	artifactHash := cliWorkflowCatalogChecksum(artifactContent)

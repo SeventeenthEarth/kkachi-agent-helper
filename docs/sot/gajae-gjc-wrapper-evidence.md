@@ -176,7 +176,7 @@ GAJAE uses shared logical task ids across KAS and KAH. KAH tasks require KAH-loc
 | GAJAE-004 | Async ralplan callback pilot | Source-side support for ralplan receipt/status, callback idempotency evidence, no-wake-claim metadata, and KAS-supplied plan-lock hash recording for plan review. | Completed |
 | GAJAE-005 | Async ultragoal + KAT evidence pilot | Start ultragoal async, attach KAT run-id evidence, and expose review-ready status. | Source-side pilot |
 | GAJAE-006 | Watcher/callback closeout | Productize idempotent callback/watcher status surfaces and docs/compatibility notes. | Completed |
-| GAJAE-007 | Real GJC `ralplan` adapter | Convert KAS packet content into GJC 0.7.3 native ralplan inputs and persist candidate plan refs/hashes without KAH plan acceptance. | Planned |
+| GAJAE-007 | Real GJC `ralplan` adapter | Convert KAS packet `native_ralplan_input.stage`, `.stage_n`, and `.artifact` fields into GJC 0.7.3 native `ralplan --write` flags and persist candidate plan refs/hashes without KAH plan acceptance. | Completed |
 | GAJAE-008 | Real GJC `ultragoal` adapter | Convert KAS packet content into GJC 0.7.3 native ultragoal brief input and persist implementation-candidate refs/hashes without review/MAR/final acceptance. | Planned |
 | GAJAE-009 | KAT evidence normalization / attach adapter | Normalize KAT v0.1.0 factual artifacts into a KAH-bindable evidence snapshot or consume a KAT-emitted compatible snapshot. | Planned |
 | GAJAE-010 | Contract docs and skill guidance update | Update KAS/KAH/KAT repo docs plus Hermes skill references after the real adapter contracts settle. | Planned |

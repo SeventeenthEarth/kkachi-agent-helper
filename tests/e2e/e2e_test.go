@@ -640,9 +640,11 @@ func TestE2E_GJCFakeBinaryPersistsRunLocalEvidence(t *testing.T) {
 	dir := repo(t, "gjc-e2e")
 	requireCLI(t, dir, "project", "init", "--json")
 	runID := createRun(t, dir, "GAJAE-004", "production_write")
-	packetRel := filepath.ToSlash(filepath.Join(".kkachi", "runs", runID, "artifacts", "gjc", "packet.json"))
+	packetRel := filepath.ToSlash(filepath.Join(".kkachi", "runs", runID, "artifacts", "gjc", "gjc-ralplan-packet.yaml"))
+	inputRel := filepath.ToSlash(filepath.Join(".kkachi", "runs", runID, "artifacts", "gjc", "ralplan-input.md"))
 	artifactRel := filepath.ToSlash(filepath.Join(".kkachi", "runs", runID, "artifacts", "plan", "gjc-result.md"))
-	writeFile(t, filepath.Join(dir, filepath.FromSlash(packetRel)), `{"task_id":"GAJAE-004"}`)
+	writeFile(t, filepath.Join(dir, filepath.FromSlash(inputRel)), "# Native ralplan input\n")
+	writeFile(t, filepath.Join(dir, filepath.FromSlash(packetRel)), "packet_kind: ralplan\nnative_ralplan_input:\n  stage: \"planner\"\n  stage_n: 1\n  artifact: \""+inputRel+"\"\n")
 	artifactBody := "Status: complete\nGJC candidate evidence only.\n"
 	writeFile(t, filepath.Join(dir, filepath.FromSlash(artifactRel)), artifactBody)
 	sum := sha256.Sum256([]byte(artifactBody))
@@ -671,7 +673,7 @@ if [ -z "$GJC_SESSION_ID" ]; then
   echo "missing GJC_SESSION_ID" >&2
   exit 43
 fi
-if [ "$1" != "ralplan" ] || [ "$2" != "--write" ] || [ "$3" != "--packet" ] || [ -z "$4" ] || [ "$5" != "--json" ]; then
+if [ "$1" != "ralplan" ] || [ "$2" != "--write" ] || [ "$3" != "--stage" ] || [ "$4" != "planner" ] || [ "$5" != "--stage_n" ] || [ "$6" != "1" ] || [ "$7" != "--artifact" ] || [ -z "$8" ] || [ "$9" != "--json" ]; then
   echo "unexpected args: $*" >&2
   exit 44
 fi

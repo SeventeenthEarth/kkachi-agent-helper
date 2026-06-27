@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -42,9 +43,10 @@ const (
 )
 
 var (
-	gjcSessionIDPattern = regexp.MustCompile(`^gjc-run-\d{8}T\d{6}Z-[0-9a-f]{12}$`)
-	gjcChecksumPattern  = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
-	gjcRunCommand       = defaultGJCRunner
+	gjcSessionIDPattern   = regexp.MustCompile(`^gjc-run-\d{8}T\d{6}Z-[0-9a-f]{12}$`)
+	gjcChecksumPattern    = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	gjcNativeStagePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]*$`)
+	gjcRunCommand         = defaultGJCRunner
 )
 
 type GJCStartOptions struct {
@@ -171,6 +173,12 @@ type gjcRunnerResult struct {
 	Stderr   []byte
 }
 
+type gjcNativeRalplanInput struct {
+	Stage    string
+	StageN   string
+	Artifact SafePath
+}
+
 type gjcReceipt struct {
 	Status               string           `json:"status"`
 	Artifacts            []GJCArtifactRef `json:"artifact_refs"`
@@ -246,6 +254,10 @@ func startGJCUnlocked(root Root, options GJCStartOptions) (GJCStartResult, error
 		return GJCStartResult{}, &Problem{Code: "gjc_artifact_read_failed", Message: "cannot read GJC packet_ref", Hint: "Regenerate or repair the run-local KAS packet before starting GJC.", Path: packet.Relative, Field: "packet_ref.path", Expected: "readable packet file", Actual: err.Error()}
 	}
 	packetRef := GJCArtifactRef{Path: packet.Relative, SHA256: sha256String(packetData)}
+	args, err := gjcArgsForCommand(root, metadata.RunID, commandKind, packet.Absolute, packetData)
+	if err != nil {
+		return GJCStartResult{}, err
+	}
 	session, err := loadOrCreateGJCSession(root, metadata.RunID, options.Now)
 	if err != nil {
 		return GJCStartResult{}, err
@@ -256,7 +268,7 @@ func startGJCUnlocked(root Root, options GJCStartOptions) (GJCStartResult, error
 	}
 	invocation := gjcRunnerInvocation{
 		Command:      gjcCommand,
-		Args:         gjcArgsForCommand(commandKind, packet.Absolute),
+		Args:         args,
 		Dir:          root.Path,
 		Env:          gjcEnv(realHome, session.SessionID),
 		RealUserHome: realHome,
@@ -595,17 +607,134 @@ func normalizeGJCRealHome(value string) (string, error) {
 	return cleaned, nil
 }
 
-func gjcArgsForCommand(commandKind string, packet string) []string {
+func gjcArgsForCommand(root Root, runID string, commandKind string, packet string, packetData []byte) ([]string, error) {
 	switch commandKind {
 	case gjcCommandDeep:
-		return []string{"deep-interview", "--packet", packet, "--json"}
+		return []string{"deep-interview", "--packet", packet, "--json"}, nil
 	case gjcCommandRalplan:
-		return []string{"ralplan", "--write", "--packet", packet, "--json"}
+		native, err := parseGJCRalplanNativeInput(root, runID, packetData)
+		if err != nil {
+			return nil, err
+		}
+		return []string{"ralplan", "--write", "--stage", native.Stage, "--stage_n", native.StageN, "--artifact", native.Artifact.Absolute, "--json"}, nil
 	case gjcCommandUltragoal:
-		return []string{"ultragoal", "create-goals", "--packet", packet, "--json"}
+		return []string{"ultragoal", "create-goals", "--packet", packet, "--json"}, nil
 	default:
-		return []string{commandKind, "--packet", packet, "--json"}
+		return []string{commandKind, "--packet", packet, "--json"}, nil
 	}
+}
+
+func parseGJCRalplanNativeInput(root Root, runID string, packetData []byte) (gjcNativeRalplanInput, error) {
+	fields, found, err := extractGJCRalplanNativeInputFields(packetData)
+	if err != nil {
+		return gjcNativeRalplanInput{}, err
+	}
+	if !found {
+		return gjcNativeRalplanInput{}, &Problem{Code: "gjc_ralplan_native_input_missing", Message: "ralplan packet lacks native_ralplan_input", Hint: "Regenerate the KAS ralplan packet with native_ralplan_input.stage, native_ralplan_input.stage_n, and native_ralplan_input.artifact before starting GJC.", Field: "native_ralplan_input", Expected: "stage, stage_n, and artifact fields", Actual: "missing"}
+	}
+	stage := strings.TrimSpace(fields["stage"])
+	stageN := strings.TrimSpace(fields["stage_n"])
+	artifact := strings.TrimSpace(fields["artifact"])
+	if stage == "" || stageN == "" || artifact == "" {
+		return gjcNativeRalplanInput{}, &Problem{Code: "gjc_ralplan_native_input_invalid", Message: "ralplan native input is incomplete", Hint: "Provide all required native_ralplan_input fields: stage, stage_n, and artifact.", Field: "native_ralplan_input", Expected: "non-empty stage, stage_n, and artifact", Actual: fmt.Sprintf("stage=%q stage_n=%q artifact=%q", stage, stageN, artifact)}
+	}
+	if !gjcNativeStagePattern.MatchString(stage) {
+		return gjcNativeRalplanInput{}, &Problem{Code: "gjc_ralplan_native_input_invalid", Message: "ralplan native stage is malformed", Hint: "Use a compact GJC stage token such as planner.", Field: "native_ralplan_input.stage", Expected: "alphanumeric stage token", Actual: stage}
+	}
+	stageNumber, err := strconv.Atoi(stageN)
+	if err != nil || stageNumber < 1 {
+		return gjcNativeRalplanInput{}, &Problem{Code: "gjc_ralplan_native_input_invalid", Message: "ralplan native stage number is malformed", Hint: "Use a positive integer for native_ralplan_input.stage_n.", Field: "native_ralplan_input.stage_n", Expected: "positive integer", Actual: stageN}
+	}
+	artifactPath, err := validateGJCRunRef(root, runID, artifact, "native_ralplan_input.artifact")
+	if err != nil {
+		return gjcNativeRalplanInput{}, err
+	}
+	return gjcNativeRalplanInput{Stage: stage, StageN: strconv.Itoa(stageNumber), Artifact: artifactPath}, nil
+}
+
+func extractGJCRalplanNativeInputFields(packetData []byte) (map[string]string, bool, error) {
+	fields := map[string]string{}
+	lines := strings.Split(string(packetData), "\n")
+	blockCount := 0
+	for idx, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "native_ralplan_input:" {
+			continue
+		}
+		indent := len(line) - len(strings.TrimLeft(line, " 	"))
+		if indent != 0 {
+			return nil, true, &Problem{Code: "gjc_ralplan_native_input_invalid", Message: "ralplan native input block is nested", Hint: "Declare native_ralplan_input once at the packet top level.", Field: fmt.Sprintf("native_ralplan_input line %d", idx+1), Expected: "top-level native_ralplan_input block", Actual: "nested block"}
+		}
+		blockCount++
+	}
+	if blockCount > 1 {
+		return nil, true, &Problem{Code: "gjc_ralplan_native_input_invalid", Message: "ralplan packet has duplicate native input blocks", Hint: "Declare native_ralplan_input exactly once at the packet top level.", Field: "native_ralplan_input", Expected: "single block", Actual: "duplicate blocks"}
+	}
+	inBlock := false
+	blockIndent := -1
+	for idx, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		indent := len(line) - len(strings.TrimLeft(line, " 	"))
+		if !inBlock {
+			if trimmed == "native_ralplan_input:" {
+				inBlock = true
+				blockIndent = indent
+			}
+			continue
+		}
+		if indent <= blockIndent {
+			break
+		}
+		key, value, ok := strings.Cut(trimmed, ":")
+		if !ok {
+			return nil, true, &Problem{Code: "gjc_ralplan_native_input_invalid", Message: "ralplan native input has a malformed field", Hint: "Use simple key: value lines under native_ralplan_input.", Field: fmt.Sprintf("native_ralplan_input line %d", idx+1), Expected: "key: value", Actual: trimmed}
+		}
+		key = strings.TrimSpace(key)
+		value = normalizeGJCPacketScalar(value)
+		switch key {
+		case "stage", "stage_n", "artifact":
+			if _, exists := fields[key]; exists {
+				return nil, true, &Problem{Code: "gjc_ralplan_native_input_invalid", Message: "ralplan native input has a duplicate field", Hint: "Declare each native_ralplan_input field exactly once: stage, stage_n, and artifact.", Field: "native_ralplan_input." + key, Expected: "single field declaration", Actual: "duplicate"}
+			}
+			fields[key] = value
+		}
+	}
+	return fields, inBlock, nil
+}
+
+func normalizeGJCPacketScalar(value string) string {
+	value = strings.TrimSpace(stripGJCPacketInlineComment(value))
+	if len(value) >= 2 {
+		if (value[0] == '"' && value[len(value)-1] == '"') || (value[0] == '\'' && value[len(value)-1] == '\'') {
+			return strings.TrimSpace(value[1 : len(value)-1])
+		}
+	}
+	return strings.TrimSpace(value)
+}
+
+func stripGJCPacketInlineComment(value string) string {
+	inSingle := false
+	inDouble := false
+	for idx, r := range value {
+		switch r {
+		case '\'':
+			if !inDouble {
+				inSingle = !inSingle
+			}
+		case '"':
+			if !inSingle {
+				inDouble = !inDouble
+			}
+		case '#':
+			if !inSingle && !inDouble && (idx == 0 || value[idx-1] == ' ' || value[idx-1] == '	') {
+				return value[:idx]
+			}
+		}
+	}
+	return value
 }
 
 func gjcEnv(home string, sessionID string) []string {
