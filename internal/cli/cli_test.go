@@ -443,6 +443,25 @@ func writeFileForCLITest(t *testing.T, path string, content string) {
 	}
 }
 
+func TestParseGJCKATAttachArgsAllowsKATV010StatusOnly(t *testing.T) {
+	options, err := parseGJCKATAttachArgs([]string{
+		"--run", "run-20260627T160233Z-b52e50d140ff",
+		"--kat-status", ".kkachi/runs/run-20260627T160233Z-b52e50d140ff/artifacts/test/unit.status.json",
+		"--kat-status-hash", "sha256:" + strings.Repeat("1", 64),
+		"--attachment-status", "kat_evidence_failed",
+		"--json",
+	})
+	if err != nil {
+		t.Fatalf("parseGJCKATAttachArgs() error = %#v", err)
+	}
+	if options.SummaryPath != "" || options.RawLogPath != "" || options.SummaryMDPath != "" {
+		t.Fatalf("derived refs should be resolved from KAT status later, got %#v", options)
+	}
+	if options.AttachmentStatus != "kat_evidence_failed" {
+		t.Fatalf("attachment status = %q", options.AttachmentStatus)
+	}
+}
+
 func TestHelpJSONOutput(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

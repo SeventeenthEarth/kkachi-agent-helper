@@ -33,7 +33,7 @@ The GAJAE pilot and the 2026-06-27 `/tmp/kkachi-gjc` scratch verification proved
 3. Native `gjc ralplan --write` returns artifact path, stage, stage number, SHA-256, and created-at metadata that KAH should capture, but GJC 0.7.3 requires KAH to provide stage/stage-number/artifact or equivalent native inputs; KAH must not call live GJC with `--packet` alone.
 4. Native `gjc ultragoal` writes `brief.md`, `goals.json`, `ledger.jsonl`, and exposes `status --json`, but GJC 0.7.3 requires `--brief`, `--brief-file`, or `--from-stdin`; KAH must derive that brief input from the KAS packet rather than passing `--packet` alone.
 5. GJC can call Hermes Kanban CLI from foreground and background processes. KAH should still record callback intent, idempotency key, result, and notification metadata instead of relying on transient stdout.
-6. KAT writes Kkachi run-id test artifacts under `.kkachi/runs/<run_id>/artifacts/test/` when invoked with global `--run-id` before `run`, but raw KAT v0.1.0 status is not directly attachable until KAH normalizes it or KAT emits a bindable GAJAE snapshot.
+6. KAT writes Kkachi run-id test artifacts under `.kkachi/runs/<run_id>/artifacts/test/` when invoked with global `--run-id` before `run`; GAJAE-009 KAH behavior normalizes raw KAT v0.1.0 status/summary/raw-log refs into bindable factual KAH KAT evidence without requiring a KAT-emitted compatibility snapshot.
 7. KAT extractor statuses `degraded` and `no_match` are valid evidence states but do not override command exit code or KAS acceptance decisions.
 8. Same-thread Discord wake-up requires explicit channel/thread metadata or an origin-bound watcher; KAH should preserve metadata/evidence but not decide notification routing policy.
 
@@ -46,7 +46,7 @@ kkachi-agent-helper gjc start-deep-interview --run <run_id> --task <task_id> --p
 kkachi-agent-helper gjc start-ralplan --run <run_id> --task <task_id> --packet <path> --json
 kkachi-agent-helper gjc start-ultragoal --run <run_id> --task <task_id> --packet <path> --json
 kkachi-agent-helper gjc status --run <run_id> --json
-kkachi-agent-helper gjc attach-kat-evidence --run <run_id> --kat-status <path> --json
+kkachi-agent-helper gjc attach-kat-evidence --run <run_id> --kat-status <path> --kat-status-hash sha256:<hash> --json
 kkachi-agent-helper gjc callback-kanban --run <run_id> --task <task_id> --status <status> --json
 kkachi-agent-helper gjc lock-plan --run <run_id> --accepted-plan-hash <sha256> --approval-ref <ref> --json
 ```
@@ -132,13 +132,15 @@ The ledger is evidence, not policy authority. KAS interprets it.
 
 ## 5. KAT attachment contract
 
-KAH should recognize KAT evidence produced by:
+KAH recognizes KAT v0.1.0 evidence produced by:
 
 ```bash
 kkachi-agent-tester --run-id <run_id> run --lane <lane> -- <command...>
 ```
 
-KAH must reject or report incomplete evidence when the expected files are missing, unreadable, outside the project/run root, checksum-mismatched, or impossible to map to the current run.
+For GAJAE-009, `attach-kat-evidence` accepts the run-local KAT status JSON and status hash as the minimum operator input. KAH normalizes the factual v0.1.0 fields `summary_path`, `summary_sha256`, `raw_log_path`, `raw_log_sha256`, `extractor_status`, and `exit_code` into the persisted KAH `kat` evidence section, derives the sibling Markdown summary ref from `<summary>.json -> <summary>.md`, and binds the attachment to the pre-attachment GJC `status_hash` as `source_status_hash`. KAT `status_hash` remains KAT self-integrity metadata only; KAH must not treat it as the GJC source status hash.
+
+KAH must reject or report incomplete evidence when the expected files are missing, unreadable, outside the project/run root, symlinked/non-regular, checksum-mismatched, or impossible to map to the current run.
 
 KAH must not treat `extractor_status=degraded` or `extractor_status=no_match` as command success. These states are parser/rule-quality evidence only.
 
@@ -178,7 +180,7 @@ GAJAE uses shared logical task ids across KAS and KAH. KAH tasks require KAH-loc
 | GAJAE-006 | Watcher/callback closeout | Productize idempotent callback/watcher status surfaces and docs/compatibility notes. | Completed |
 | GAJAE-007 | Real GJC `ralplan` adapter | Convert KAS packet `native_ralplan_input.stage`, `.stage_n`, and `.artifact` fields into GJC 0.7.3 native `ralplan --write` flags and persist candidate plan refs/hashes without KAH plan acceptance. | Completed |
 | GAJAE-008 | Real GJC `ultragoal` adapter | Convert KAS packet `native_ultragoal_input.brief` into run-local `native_input_ref` evidence, invoke native `ultragoal create-goals --brief-file`, and persist implementation-candidate refs/hashes without review/MAR/final acceptance. | Completed |
-| GAJAE-009 | KAT evidence normalization / attach adapter | Normalize KAT v0.1.0 factual artifacts into a KAH-bindable evidence snapshot or consume a KAT-emitted compatible snapshot. | Planned |
+| GAJAE-009 | KAT evidence normalization / attach adapter | Normalize KAT v0.1.0 factual artifacts into KAH-bindable KAT evidence from status/summary/raw-log refs without requiring KAT source changes. | Completed |
 | GAJAE-010 | Contract docs and skill guidance update | Update KAS/KAH/KAT repo docs plus Hermes skill references after the real adapter contracts settle. | Planned |
 
 ## 7.1. GAJAE-007..010 pilot-unblock task scope
