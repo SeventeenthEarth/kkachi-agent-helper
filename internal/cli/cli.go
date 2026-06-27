@@ -559,8 +559,22 @@ func runGJCCommand(args []string, root project.Root, stdout io.Writer, stderr io
 		}
 		writeGJCStatusResult(stdout, result, jsonMode)
 		return ExitOK
+	case "attach-kat-evidence":
+		options, cliErr := parseGJCKATAttachArgs(args[1:])
+		if cliErr != nil {
+			writeError(stderr, jsonMode, *cliErr)
+			return cliErr.ExitCode
+		}
+		result, err := project.AttachGJCKATEvidence(root, options)
+		if err != nil {
+			cliErr := errorFromProjectProblem(err)
+			writeError(stderr, jsonMode, cliErr)
+			return cliErr.ExitCode
+		}
+		writeGJCStatusResult(stdout, result, jsonMode)
+		return ExitOK
 	default:
-		writeError(stderr, jsonMode, cliError{Code: "gjc_subcommand_unknown", Message: "GJC subcommand is not supported", Hint: gjcUsageHint(), ExitCode: ExitUsage, Field: "subcommand", Expected: "start-deep-interview, start-ralplan, start-ultragoal, status, callback-kanban, or lock-plan", Actual: subcommand})
+		writeError(stderr, jsonMode, cliError{Code: "gjc_subcommand_unknown", Message: "GJC subcommand is not supported", Hint: gjcUsageHint(), ExitCode: ExitUsage, Field: "subcommand", Expected: "start-deep-interview, start-ralplan, start-ultragoal, status, callback-kanban, lock-plan, or attach-kat-evidence", Actual: subcommand})
 		return ExitUsage
 	}
 }
@@ -778,6 +792,124 @@ func parseGJCPlanLockArgs(args []string) (project.GJCPlanLockOptions, *cliError)
 	for _, option := range []string{"--run", "--accepted-plan-hash", "--approval-ref"} {
 		if !seen[option] {
 			return options, &cliError{Code: "missing_required_option", Message: "gjc lock-plan requires " + option, Hint: gjcUsageHint(), ExitCode: ExitUsage, Field: option, Expected: "required option", Actual: "missing"}
+		}
+	}
+	return options, nil
+}
+
+func parseGJCKATAttachArgs(args []string) (project.GJCKATAttachOptions, *cliError) {
+	options := project.GJCKATAttachOptions{}
+	seen := map[string]bool{}
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--run":
+			value, err := requireGJCOptionValue(args, &i, "--run")
+			if err != nil {
+				return options, err
+			}
+			if seen["--run"] {
+				return options, duplicateGJCOption("--run")
+			}
+			seen["--run"] = true
+			options.RunID = value
+		case "--kat-status":
+			value, err := requireGJCOptionValue(args, &i, "--kat-status")
+			if err != nil {
+				return options, err
+			}
+			if seen["--kat-status"] {
+				return options, duplicateGJCOption("--kat-status")
+			}
+			seen["--kat-status"] = true
+			options.StatusPath = value
+		case "--kat-status-hash":
+			value, err := requireGJCOptionValue(args, &i, "--kat-status-hash")
+			if err != nil {
+				return options, err
+			}
+			if seen["--kat-status-hash"] {
+				return options, duplicateGJCOption("--kat-status-hash")
+			}
+			seen["--kat-status-hash"] = true
+			options.StatusHash = value
+		case "--summary-json":
+			value, err := requireGJCOptionValue(args, &i, "--summary-json")
+			if err != nil {
+				return options, err
+			}
+			if seen["--summary-json"] {
+				return options, duplicateGJCOption("--summary-json")
+			}
+			seen["--summary-json"] = true
+			options.SummaryPath = value
+		case "--summary-json-hash":
+			value, err := requireGJCOptionValue(args, &i, "--summary-json-hash")
+			if err != nil {
+				return options, err
+			}
+			if seen["--summary-json-hash"] {
+				return options, duplicateGJCOption("--summary-json-hash")
+			}
+			seen["--summary-json-hash"] = true
+			options.SummaryHash = value
+		case "--summary-md":
+			value, err := requireGJCOptionValue(args, &i, "--summary-md")
+			if err != nil {
+				return options, err
+			}
+			if seen["--summary-md"] {
+				return options, duplicateGJCOption("--summary-md")
+			}
+			seen["--summary-md"] = true
+			options.SummaryMDPath = value
+		case "--summary-md-hash":
+			value, err := requireGJCOptionValue(args, &i, "--summary-md-hash")
+			if err != nil {
+				return options, err
+			}
+			if seen["--summary-md-hash"] {
+				return options, duplicateGJCOption("--summary-md-hash")
+			}
+			seen["--summary-md-hash"] = true
+			options.SummaryMDHash = value
+		case "--raw-log":
+			value, err := requireGJCOptionValue(args, &i, "--raw-log")
+			if err != nil {
+				return options, err
+			}
+			if seen["--raw-log"] {
+				return options, duplicateGJCOption("--raw-log")
+			}
+			seen["--raw-log"] = true
+			options.RawLogPath = value
+		case "--raw-log-hash":
+			value, err := requireGJCOptionValue(args, &i, "--raw-log-hash")
+			if err != nil {
+				return options, err
+			}
+			if seen["--raw-log-hash"] {
+				return options, duplicateGJCOption("--raw-log-hash")
+			}
+			seen["--raw-log-hash"] = true
+			options.RawLogHash = value
+		case "--attachment-status":
+			value, err := requireGJCOptionValue(args, &i, "--attachment-status")
+			if err != nil {
+				return options, err
+			}
+			if seen["--attachment-status"] {
+				return options, duplicateGJCOption("--attachment-status")
+			}
+			seen["--attachment-status"] = true
+			options.AttachmentStatus = value
+		case "--json":
+		default:
+			return options, &cliError{Code: "unknown_option", Message: fmt.Sprintf("unknown gjc attach-kat-evidence option %q", args[i]), Hint: gjcUsageHint(), ExitCode: ExitUsage, Field: "option", Expected: "--run, --kat-status, --kat-status-hash, --summary-json, --summary-json-hash, --summary-md, --summary-md-hash, --raw-log, --raw-log-hash, --attachment-status, or --json", Actual: args[i]}
+		}
+	}
+	for _, option := range []string{"--run", "--kat-status", "--kat-status-hash", "--summary-json", "--summary-json-hash", "--summary-md", "--summary-md-hash", "--raw-log", "--raw-log-hash"} {
+		if !seen[option] {
+			return options, &cliError{Code: "missing_required_option", Message: "gjc attach-kat-evidence requires " + option, Hint: gjcUsageHint(), ExitCode: ExitUsage, Field: option, Expected: "required option", Actual: "missing"}
 		}
 	}
 	return options, nil
@@ -2976,7 +3108,7 @@ func workflowUsageHint() string {
 }
 
 func gjcUsageHint() string {
-	return "Use gjc start-deep-interview|start-ralplan|start-ultragoal --run <run_id> --task <task_id> --packet <run-local-packet> or gjc status --run <run_id> with optional global --json."
+	return "Use gjc start-deep-interview|start-ralplan|start-ultragoal --run <run_id> --task <task_id> --packet <run-local-packet>, gjc attach-kat-evidence --run <run_id> --kat-status <path> --kat-status-hash sha256:<hash> --summary-json <path> --summary-json-hash sha256:<hash> --summary-md <path> --summary-md-hash sha256:<hash> --raw-log <path> --raw-log-hash sha256:<hash>, or gjc status --run <run_id> with optional global --json."
 }
 
 func approvalUsageHint() string {
@@ -3124,7 +3256,7 @@ func capabilitiesPayload(info BuildInfo) capabilitiesOutput {
 			{Name: "approval", Status: capabilityStatusSupported, Subcommands: []string{"request", "record", "show"}},
 			{Name: "graph", Status: capabilityStatusSupported, Subcommands: []string{"init", "validate", "explain", "diff", "propose", "apply", "export"}},
 			{Name: "workflow", Status: capabilityStatusSupported, Subcommands: []string{"validate", "explain", "catalog", "catalog propose", "catalog apply", "create", "show", "ready", "node"}},
-			{Name: "gjc", Status: capabilityStatusSupported, Subcommands: []string{"start-deep-interview", "start-ralplan", "start-ultragoal", "status"}},
+			{Name: "gjc", Status: capabilityStatusSupported, Subcommands: []string{"start-deep-interview", "start-ralplan", "start-ultragoal", "status", "attach-kat-evidence"}},
 		},
 		CompatibilityFlags: compatibilityFlagsOutput{
 			ProjectInit:                             true,
@@ -3354,12 +3486,13 @@ var helpPages = map[string]helpOutput{
 			"  kkachi-agent-helper gjc start-ultragoal --run <run_id> --task <task_id> --packet <run-local-packet> [--json]\n" +
 			"  kkachi-agent-helper gjc status --run <run_id> [--json]\n" +
 			"  kkachi-agent-helper gjc callback-kanban --run <run_id> --task <task_id> --idempotency-key <key> --source-status-hash sha256:<hash> [--status callback_delivered] [--result pending|delivered|failed] [--notification-ref <ref>] [--json]\n" +
-			"  kkachi-agent-helper gjc lock-plan --run <run_id> --accepted-plan-hash sha256:<hash> --approval-ref <ref> [--json]",
+			"  kkachi-agent-helper gjc lock-plan --run <run_id> --accepted-plan-hash sha256:<hash> --approval-ref <ref> [--json]\n" +
+			"  kkachi-agent-helper gjc attach-kat-evidence --run <run_id> --kat-status <path> --kat-status-hash sha256:<hash> --summary-json <path> --summary-json-hash sha256:<hash> --summary-md <path> --summary-md-hash sha256:<hash> --raw-log <path> --raw-log-hash sha256:<hash> [--attachment-status kat_evidence_ready|kat_evidence_failed] [--json]",
 		Summary:      "Start bounded GJC candidate work and read KAH-owned run-local GJC evidence status.",
-		Subcommands:  []helpItem{{Name: "start-deep-interview", Description: "Run gjc deep-interview for a KAS-supplied run-local packet and record candidate evidence."}, {Name: "start-ralplan", Description: "Run gjc ralplan --write for a KAS-supplied run-local packet and record candidate plan evidence."}, {Name: "start-ultragoal", Description: "Run gjc ultragoal create-goals for a KAS-supplied run-local packet and record candidate evidence."}, {Name: "status", Description: "Read persisted run-local GJC status evidence without running GJC."}, {Name: "callback-kanban", Description: "Record idempotent callback evidence for plan-ready routing without claiming acceptance or same-thread wake."}, {Name: "lock-plan", Description: "Record KAS-supplied accepted plan hash after external plan review acceptance."}},
-		Options:      []helpItem{{Name: "--run <run_id>", Required: true, Description: "KAH run id or unique prefix."}, {Name: "--task <task_id>", Description: "Kkachi task id supplied by KAS."}, {Name: "--packet <run-local-packet>", Required: true, Description: "Repository-relative packet path under .kkachi/runs/<run_id>/ for start commands."}, {Name: "--idempotency-key <key>", Description: "Callback replay key."}, {Name: "--source-status-hash sha256:<hash>", Description: "Status hash that triggered the callback."}, {Name: "--notification-ref <ref>", Description: "Callback origin/target metadata; omitted means no-wake-claim and GAJAE-004 never treats this as verified same-thread wake."}, {Name: "--accepted-plan-hash sha256:<hash>", Description: "KAS/Blue/color accepted candidate plan hash."}, {Name: "--approval-ref <ref>", Description: "KAS/Blue/color approval evidence for plan lock."}, {Name: "--json", Description: "Emit structured GJC status output."}, {Name: "--help", Description: "Show gjc help and exit 0."}},
-		JSONBehavior: "Start commands emit schema_version, run_id, task_id, command_kind, real_user_home, gjc_session_id, process/status, packet_ref, receipt_ref, artifact refs/hashes, plan evidence, callback evidence, current_required_actor/current_wait_reason, status_path, status_hash, and recovery_hint/error when applicable. Missing GJC, unsafe HOME/path, missing or malformed session/status/packet/artifacts, unsupported statuses, checksum mismatch, cross-run refs, malformed GJC JSON, missing plan hash for ralplan_ready, callback idempotency conflict, and plan-lock drift fail closed with structured errors.",
-		Notes:        []string{"KAH records deterministic GJC evidence only; KAS/Blue/color/MAR/final gates decide acceptance.", "`packet_ref` is KAS input packet evidence; `artifact_refs` are GJC candidate output evidence.", "GJC output remains candidate evidence and must not mark plan, review, MAR, or final Kkachi acceptance.", "callback-kanban records callback_delivered evidence only; omitted notification metadata is recorded as no-wake-claim.", "lock-plan records a KAS-supplied accepted_plan_hash after external review evidence; KAH does not approve or lock plans by policy.", "attach-kat-evidence, watcher productization, same-thread Discord wake, GAJAE-005 KAT ultragoal evidence, and GAJAE-006 closeout remain deferred."},
+		Subcommands:  []helpItem{{Name: "start-deep-interview", Description: "Run gjc deep-interview for a KAS-supplied run-local packet and record candidate evidence."}, {Name: "start-ralplan", Description: "Run gjc ralplan --write for a KAS-supplied run-local packet and record candidate plan evidence."}, {Name: "start-ultragoal", Description: "Run gjc ultragoal create-goals for a KAS-supplied run-local packet and record candidate evidence."}, {Name: "status", Description: "Read persisted run-local GJC status evidence without running GJC."}, {Name: "callback-kanban", Description: "Record idempotent callback evidence for plan-ready routing without claiming acceptance or same-thread wake."}, {Name: "lock-plan", Description: "Record KAS-supplied accepted plan hash after external plan review acceptance."}, {Name: "attach-kat-evidence", Description: "Attach run-local KAT status, summary, and raw-log evidence after ultragoal_ready without claiming acceptance."}},
+		Options:      []helpItem{{Name: "--run <run_id>", Required: true, Description: "KAH run id or unique prefix."}, {Name: "--task <task_id>", Description: "Kkachi task id supplied by KAS."}, {Name: "--packet <run-local-packet>", Required: true, Description: "Repository-relative packet path under .kkachi/runs/<run_id>/ for start commands."}, {Name: "--kat-status <path>", Description: "Run-local KAT status JSON ref for attach-kat-evidence."}, {Name: "--kat-status-hash sha256:<hash>", Description: "SHA-256 of the KAT status JSON."}, {Name: "--summary-json <path>", Description: "Run-local KAT summary JSON ref."}, {Name: "--summary-json-hash sha256:<hash>", Description: "SHA-256 of the KAT summary JSON."}, {Name: "--summary-md <path>", Description: "Run-local KAT summary Markdown ref."}, {Name: "--summary-md-hash sha256:<hash>", Description: "SHA-256 of the KAT summary Markdown."}, {Name: "--raw-log <path>", Description: "Run-local KAT raw log ref."}, {Name: "--raw-log-hash sha256:<hash>", Description: "SHA-256 of the KAT raw log."}, {Name: "--attachment-status kat_evidence_ready|kat_evidence_failed", Description: "Factual KAT attachment status; never an approval state."}, {Name: "--idempotency-key <key>", Description: "Callback replay key."}, {Name: "--source-status-hash sha256:<hash>", Description: "Status hash that triggered the callback."}, {Name: "--notification-ref <ref>", Description: "Callback origin/target metadata; omitted means no-wake-claim and GAJAE-004 never treats this as verified same-thread wake."}, {Name: "--accepted-plan-hash sha256:<hash>", Description: "KAS/Blue/color accepted candidate plan hash."}, {Name: "--approval-ref <ref>", Description: "KAS/Blue/color approval evidence for plan lock."}, {Name: "--json", Description: "Emit structured GJC status output."}, {Name: "--help", Description: "Show gjc help and exit 0."}},
+		JSONBehavior: "Start commands emit schema_version, run_id, task_id, command_kind, real_user_home, gjc_session_id, process/status, packet_ref, receipt_ref, artifact refs/hashes, plan evidence, KAT evidence, callback evidence, current_required_actor/current_wait_reason, status_path, status_hash, and recovery_hint/error when applicable. Missing GJC, unsafe HOME/path, missing or malformed session/status/packet/artifacts/KAT refs, unsupported statuses, checksum mismatch, cross-run refs, malformed GJC or KAT JSON, KAT run-id mismatch, KAT authority claims, missing plan hash for ralplan_ready, callback idempotency conflict, and plan-lock drift fail closed with structured errors.",
+		Notes:        []string{"KAH records deterministic GJC/KAT evidence only; KAS/Blue/color/MAR/final gates decide acceptance.", "`packet_ref` is KAS input packet evidence; `artifact_refs` are GJC candidate output evidence.", "GJC output remains candidate evidence and must not mark plan, review, MAR, or final Kkachi acceptance.", "attach-kat-evidence records factual KAT status, summary, raw-log, extractor status, and command exit code only; it cannot approve review, MAR, waiver, or final completion.", "callback-kanban records callback_delivered evidence only; omitted notification metadata is recorded as no-wake-claim.", "lock-plan records a KAS-supplied accepted_plan_hash after external review evidence; KAH does not approve or lock plans by policy.", "Watcher productization, same-thread Discord wake, and GAJAE-006 closeout remain deferred."},
 	},
 }
 
@@ -4391,7 +4524,7 @@ func exitCodeForProblem(code string) int {
 		return ExitNotFound
 	case "artifact_baseline_encode_failed", "artifact_json_encode_failed", "schema_encode_failed", "graph_proposal_encode_failed", "gjc_status_encode_failed", "gjc_session_encode_failed":
 		return ExitInternal
-	case "absolute_path", "empty_path", "path_escape", "repo_root_path", "symlink_escape", "symlink_resolution_failed", "path_inspection_failed", "repo_root_required", "helper_state_exists", "last_event_id_mismatch", "status_invalid_json", "status_last_event_id_invalid", "status_active_run_invalid", "status_project_id_invalid", "project_config_read_failed", "project_config_invalid", "event_log_invalid", "event_log_empty", "event_id_invalid", "event_id_exhausted", "run_metadata_invalid", "run_metadata_invalid_json", "active_run_conflict", "run_transition_invalid", "run_not_found", "run_id_ambiguous", "run_root_read_failed", "run_metadata_read_failed", "run_id_collision", "run_artifact_init_invalid_state", "run_artifact_mutation_invalid_state", "artifact_inspection_failed", "artifact_path_invalid", "artifact_source_missing", "artifact_source_inspection_failed", "artifact_source_invalid", "artifact_source_read_failed", "artifact_read_failed", "artifact_status_invalid", "artifact_reason_required", "artifact_status_unsupported", "artifact_status_not_applicable", "artifact_json_invalid", "status_gate_summary_invalid", "lock_conflict", "lock_stale_recovery_required", "lock_metadata_invalid", "lock_not_found", "lock_identity_mismatch", "lock_release_failed", "schema_validation_read_failed", "schema_reference_invalid", "schema_read_failed", "schema_export_inspection_failed", "schema_export_conflict", "schema_export_read_failed", "schema_migration_path_inspection_failed", "schema_migration_source_version_mismatch", "schema_migration_read_failed", "schema_migration_invalid_json", "schema_migration_invalid_event_log", "schema_migration_version_missing", "schema_migration_backup_failed", "install_manifest_read_failed", "install_manifest_invalid_json", "install_manifest_invalid", "install_manifest_kind_mismatch", "install_source_invalid", "install_source_item_invalid", "install_source_read_failed", "install_checksum_mismatch", "install_duplicate_target", "install_target_inspection_failed", "install_target_read_failed", "install_owner_marker_missing", "install_compatibility_failed", "install_preflight_blocked", "install_apply_failed", "diagnostics_encode_failed", "diagnostics_output_exists", "graph_already_exists", "graph_template_required", "graph_template_unknown", "graph_template_invalid", "graph_output_invalid", "graph_init_invalid", "graph_proposal_invalid", "graph_proposal_inspection_failed", "graph_proposal_id_exhausted", "graph_export_output_invalid", "graph_export_output_inspection_failed", "graph_export_output_exists", "task_dag_read_failed", "gjc_command_missing", "gjc_command_failed", "gjc_command_nonzero", "gjc_command_unsupported", "gjc_json_missing", "gjc_json_invalid", "gjc_receipt_invalid", "gjc_status_missing", "gjc_status_read_failed", "gjc_status_invalid_json", "gjc_status_invalid", "gjc_status_hash_mismatch", "gjc_status_unsupported", "gjc_task_required", "gjc_home_unsafe", "gjc_session_missing", "gjc_session_read_failed", "gjc_session_invalid_json", "gjc_session_invalid", "gjc_session_mismatch", "gjc_artifact_refs_missing", "gjc_artifact_read_failed", "gjc_checksum_malformed", "gjc_checksum_mismatch", "gjc_required_actor_unsupported", "gjc_ref_cross_run", "gjc_ref_missing", "gjc_ref_inspection_failed", "gjc_ref_invalid":
+	case "absolute_path", "empty_path", "path_escape", "repo_root_path", "symlink_escape", "symlink_resolution_failed", "path_inspection_failed", "repo_root_required", "helper_state_exists", "last_event_id_mismatch", "status_invalid_json", "status_last_event_id_invalid", "status_active_run_invalid", "status_project_id_invalid", "project_config_read_failed", "project_config_invalid", "event_log_invalid", "event_log_empty", "event_id_invalid", "event_id_exhausted", "run_metadata_invalid", "run_metadata_invalid_json", "active_run_conflict", "run_transition_invalid", "run_not_found", "run_id_ambiguous", "run_root_read_failed", "run_metadata_read_failed", "run_id_collision", "run_artifact_init_invalid_state", "run_artifact_mutation_invalid_state", "artifact_inspection_failed", "artifact_path_invalid", "artifact_source_missing", "artifact_source_inspection_failed", "artifact_source_invalid", "artifact_source_read_failed", "artifact_read_failed", "artifact_status_invalid", "artifact_reason_required", "artifact_status_unsupported", "artifact_status_not_applicable", "artifact_json_invalid", "status_gate_summary_invalid", "lock_conflict", "lock_stale_recovery_required", "lock_metadata_invalid", "lock_not_found", "lock_identity_mismatch", "lock_release_failed", "schema_validation_read_failed", "schema_reference_invalid", "schema_read_failed", "schema_export_inspection_failed", "schema_export_conflict", "schema_export_read_failed", "schema_migration_path_inspection_failed", "schema_migration_source_version_mismatch", "schema_migration_read_failed", "schema_migration_invalid_json", "schema_migration_invalid_event_log", "schema_migration_version_missing", "schema_migration_backup_failed", "install_manifest_read_failed", "install_manifest_invalid_json", "install_manifest_invalid", "install_manifest_kind_mismatch", "install_source_invalid", "install_source_item_invalid", "install_source_read_failed", "install_checksum_mismatch", "install_duplicate_target", "install_target_inspection_failed", "install_target_read_failed", "install_owner_marker_missing", "install_compatibility_failed", "install_preflight_blocked", "install_apply_failed", "diagnostics_encode_failed", "diagnostics_output_exists", "graph_already_exists", "graph_template_required", "graph_template_unknown", "graph_template_invalid", "graph_output_invalid", "graph_init_invalid", "graph_proposal_invalid", "graph_proposal_inspection_failed", "graph_proposal_id_exhausted", "graph_export_output_invalid", "graph_export_output_inspection_failed", "graph_export_output_exists", "task_dag_read_failed", "gjc_command_missing", "gjc_command_failed", "gjc_command_nonzero", "gjc_command_unsupported", "gjc_json_missing", "gjc_json_invalid", "gjc_receipt_invalid", "gjc_status_missing", "gjc_status_read_failed", "gjc_status_invalid_json", "gjc_status_invalid", "gjc_status_hash_mismatch", "gjc_status_unsupported", "gjc_task_required", "gjc_home_unsafe", "gjc_session_missing", "gjc_session_read_failed", "gjc_session_invalid_json", "gjc_session_invalid", "gjc_session_mismatch", "gjc_artifact_refs_missing", "gjc_artifact_read_failed", "gjc_checksum_malformed", "gjc_checksum_mismatch", "gjc_required_actor_unsupported", "gjc_ref_cross_run", "gjc_ref_missing", "gjc_ref_inspection_failed", "gjc_ref_invalid", "gjc_kat_attachment_invalid_state", "gjc_kat_run_id_mismatch", "gjc_kat_status_invalid", "gjc_kat_status_invalid_json", "gjc_kat_status_unsupported", "gjc_kat_extractor_status_unsupported", "gjc_kat_authority_claim", "gjc_kat_attachment_status_unsupported", "gjc_kat_source_status_hash_mismatch":
 		return ExitSafety
 	default:
 		return ExitUsage

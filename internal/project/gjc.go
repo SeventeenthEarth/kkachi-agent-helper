@@ -35,6 +35,7 @@ const (
 	gjcEventFailed      = "gjc.failed"
 	gjcEventCallback    = "gjc.callback_recorded"
 	gjcEventPlanLocked  = "gjc.plan_locked"
+	gjcEventKATAttached = "gjc.kat_attached"
 	gjcCommandDeep      = "start-deep-interview"
 	gjcCommandRalplan   = "start-ralplan"
 	gjcCommandUltragoal = "start-ultragoal"
@@ -81,6 +82,7 @@ type GJCStatus struct {
 	Receipt              *GJCArtifactRef  `json:"receipt_ref,omitempty"`
 	Artifacts            []GJCArtifactRef `json:"artifact_refs"`
 	Plan                 GJCPlanEvidence  `json:"plan,omitempty"`
+	KAT                  *GJCKATEvidence  `json:"kat,omitempty"`
 	Callback             *GJCCallback     `json:"callback,omitempty"`
 	CurrentRequiredActor string           `json:"current_required_actor"`
 	CurrentWaitReason    *string          `json:"current_wait_reason"`
@@ -109,6 +111,22 @@ type GJCPlanEvidence struct {
 	AcceptedPlanHash   string `json:"accepted_plan_hash,omitempty"`
 	ApprovalRef        string `json:"approval_ref,omitempty"`
 	ConflictReportPath string `json:"conflict_report_path,omitempty"`
+}
+
+type GJCKATEvidence struct {
+	RunID            string         `json:"run_id"`
+	StatusRef        GJCArtifactRef `json:"status_ref"`
+	SourceStatusRef  GJCArtifactRef `json:"source_status_ref"`
+	SummaryRef       GJCArtifactRef `json:"summary_ref"`
+	SummaryMDRef     GJCArtifactRef `json:"summary_md_ref"`
+	RawLogRef        GJCArtifactRef `json:"raw_log_ref"`
+	StatusHash       string         `json:"status_hash"`
+	RawLogHash       string         `json:"raw_log_hash"`
+	SourceStatusHash string         `json:"source_status_hash"`
+	ExtractorStatus  string         `json:"extractor_status"`
+	CommandExitCode  int            `json:"command_exit_code"`
+	AttachmentStatus string         `json:"attachment_status"`
+	UpdatedAt        string         `json:"updated_at"`
 }
 
 type GJCCallback struct {
@@ -444,6 +462,9 @@ func validatePersistedGJCStatus(root Root, metadata RunMetadata, status GJCStatu
 	if err := validateGJCPlanEvidence(root, metadata.RunID, status); err != nil {
 		return err
 	}
+	if err := validateGJCKATEvidence(root, metadata.RunID, status.KAT); err != nil {
+		return err
+	}
 	for i, ref := range status.Artifacts {
 		if err := validateGJCArtifactRef(root, metadata.RunID, ref, fmt.Sprintf("artifact_refs[%d]", i)); err != nil {
 			return err
@@ -701,6 +722,7 @@ func gjcEventPayload(status GJCStatus) map[string]any {
 		"receipt_ref":            status.Receipt,
 		"artifact_refs":          status.Artifacts,
 		"plan":                   status.Plan,
+		"kat":                    status.KAT,
 		"callback":               status.Callback,
 		"current_required_actor": status.CurrentRequiredActor,
 		"current_wait_reason":    status.CurrentWaitReason,

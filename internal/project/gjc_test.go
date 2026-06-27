@@ -569,6 +569,492 @@ func TestGJCPlanLockBindsAcceptedHashAndRejectsDrift(t *testing.T) {
 	}
 }
 
+func TestAttachGJCKATEvidenceRecordsRunLocalEvidenceWithoutAcceptance(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+	start := startGJCUltragoalReadyForTest(t, root, repo, runID)
+	kat := writeGJCKATEvidenceForTest(t, repo, runID, map[string]any{
+		"schema_version":      "kat.status.v1",
+		"run_id":              runID,
+		"status":              "failed",
+		"extractor_status":    "degraded",
+		"command_exit_code":   1,
+		"self_approval":       false,
+		"final_accepted":      false,
+		"review_approved":     false,
+		"waiver_approved":     false,
+		"candidate_evidence":  true,
+		"source_status_hash":  start.Status.StatusHash,
+		"current_authority":   "KAS/Blue/color/MAR/final",
+		"completion_boundary": "not_final_acceptance",
+	})
+
+	result, err := AttachGJCKATEvidence(root, GJCKATAttachOptions{
+		RunID:            runID,
+		StatusPath:       kat.status.Path,
+		StatusHash:       kat.status.SHA256,
+		SummaryPath:      kat.summary.Path,
+		SummaryHash:      kat.summary.SHA256,
+		SummaryMDPath:    kat.summaryMD.Path,
+		SummaryMDHash:    kat.summaryMD.SHA256,
+		RawLogPath:       kat.rawLog.Path,
+		RawLogHash:       kat.rawLog.SHA256,
+		AttachmentStatus: "kat_evidence_ready",
+		Now:              testRunNow(8),
+	})
+	if err != nil {
+		t.Fatalf("AttachGJCKATEvidence() error = %v", err)
+	}
+	if result.Status.KAT == nil {
+		t.Fatalf("KAT evidence missing from status")
+	}
+	if result.Status.Process.Status != "ultragoal_ready" {
+		t.Fatalf("process status = %q, want candidate ultragoal_ready preserved", result.Status.Process.Status)
+	}
+	if result.Status.KAT.RunID != runID || result.Status.KAT.StatusRef != kat.status || result.Status.KAT.RawLogHash != kat.rawLog.SHA256 {
+		t.Fatalf("KAT evidence = %#v, want run-local refs and hashes", result.Status.KAT)
+	}
+	if result.Status.KAT.ExtractorStatus != "degraded" || result.Status.KAT.CommandExitCode != 1 || result.Status.KAT.AttachmentStatus != "kat_evidence_ready" {
+		t.Fatalf("KAT status fields = %#v, want factual extractor/exit/attachment evidence", result.Status.KAT)
+	}
+	if result.Status.KAT.SourceStatusHash != start.Status.StatusHash {
+		t.Fatalf("source status hash = %q, want %q", result.Status.KAT.SourceStatusHash, start.Status.StatusHash)
+	}
+	if result.Status.CurrentRequiredActor != GJCActorColor {
+		t.Fatalf("current actor = %q, want color review routing without acceptance", result.Status.CurrentRequiredActor)
+	}
+}
+
+func TestAttachGJCKATEvidenceFailsClosed(t *testing.T) {
+	tests := []struct {
+		name       string
+		mutate     func(t *testing.T, repo string, runID string, opts *GJCKATAttachOptions, status map[string]any)
+		wantCode   string
+		wantNoFile bool
+	}{
+		{
+			name: "missing raw log hash",
+			mutate: func(t *testing.T, repo string, runID string, opts *GJCKATAttachOptions, status map[string]any) {
+				opts.RawLogHash = ""
+			},
+			wantCode: "gjc_checksum_malformed",
+		},
+		{
+			name: "status run id mismatch",
+			mutate: func(t *testing.T, repo string, runID string, opts *GJCKATAttachOptions, status map[string]any) {
+				status["run_id"] = "run-20260626T134058Z-deadbeef0000"
+				rewriteGJCKATStatusForTest(t, repo, opts, status)
+			},
+			wantCode: "gjc_kat_run_id_mismatch",
+		},
+		{
+			name: "unsupported final status",
+			mutate: func(t *testing.T, repo string, runID string, opts *GJCKATAttachOptions, status map[string]any) {
+				status["status"] = "final_accepted"
+				rewriteGJCKATStatusForTest(t, repo, opts, status)
+			},
+			wantCode: "gjc_kat_status_unsupported",
+		},
+		{
+			name: "self approval claim",
+			mutate: func(t *testing.T, repo string, runID string, opts *GJCKATAttachOptions, status map[string]any) {
+				status["self_approval"] = true
+				rewriteGJCKATStatusForTest(t, repo, opts, status)
+			},
+			wantCode: "gjc_kat_authority_claim",
+		},
+		{
+			name: "mar accepted claim",
+			mutate: func(t *testing.T, repo string, runID string, opts *GJCKATAttachOptions, status map[string]any) {
+				status["mar_accepted"] = true
+				rewriteGJCKATStatusForTest(t, repo, opts, status)
+			},
+			wantCode: "gjc_kat_authority_claim",
+		},
+		{
+			name: "mar approved claim",
+			mutate: func(t *testing.T, repo string, runID string, opts *GJCKATAttachOptions, status map[string]any) {
+				status["mar_approved"] = true
+				rewriteGJCKATStatusForTest(t, repo, opts, status)
+			},
+			wantCode: "gjc_kat_authority_claim",
+		},
+		{
+			name: "malformed json",
+			mutate: func(t *testing.T, repo string, runID string, opts *GJCKATAttachOptions, status map[string]any) {
+				path := filepath.Join(repo, filepath.FromSlash(opts.StatusPath))
+				if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+					t.Fatalf("write malformed KAT status: %v", err)
+				}
+				opts.StatusHash = sha256String(mustReadBytes(t, path))
+			},
+			wantCode: "gjc_kat_status_invalid_json",
+		},
+		{
+			name: "missing command exit code",
+			mutate: func(t *testing.T, repo string, runID string, opts *GJCKATAttachOptions, status map[string]any) {
+				delete(status, "command_exit_code")
+				rewriteGJCKATStatusForTest(t, repo, opts, status)
+			},
+			wantCode: "gjc_kat_status_invalid",
+		},
+		{
+			name: "missing source status hash",
+			mutate: func(t *testing.T, repo string, runID string, opts *GJCKATAttachOptions, status map[string]any) {
+				delete(status, "source_status_hash")
+				rewriteGJCKATStatusForTest(t, repo, opts, status)
+			},
+			wantCode: "gjc_kat_status_invalid",
+		},
+		{
+			name: "malformed source status hash",
+			mutate: func(t *testing.T, repo string, runID string, opts *GJCKATAttachOptions, status map[string]any) {
+				status["source_status_hash"] = "sha256:not-a-real-hash"
+				rewriteGJCKATStatusForTest(t, repo, opts, status)
+			},
+			wantCode: "gjc_checksum_malformed",
+		},
+		{
+			name: "mismatched source status hash",
+			mutate: func(t *testing.T, repo string, runID string, opts *GJCKATAttachOptions, status map[string]any) {
+				status["source_status_hash"] = "sha256:" + strings.Repeat("1", 64)
+				rewriteGJCKATStatusForTest(t, repo, opts, status)
+			},
+			wantCode: "gjc_kat_source_status_hash_mismatch",
+		},
+		{
+			name: "cross run summary",
+			mutate: func(t *testing.T, repo string, runID string, opts *GJCKATAttachOptions, status map[string]any) {
+				otherRun := "run-20260626T134058Z-deadbeef0000"
+				path := writeGJCTestFile(t, repo, otherRun, "artifacts/test/summary.json", []byte(`{"other":true}`+"\n"))
+				opts.SummaryPath = packetRelative(otherRun, "artifacts/test/summary.json")
+				opts.SummaryHash = sha256String(mustReadBytes(t, path))
+			},
+			wantCode: "gjc_ref_cross_run",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := initializedRepo(t)
+			root, _ := DiscoverRoot(repo)
+			created, err := CreateRun(root, deterministicCreateRunOptions())
+			if err != nil {
+				t.Fatalf("CreateRun() error = %v", err)
+			}
+			runID := created.Metadata.RunID
+			start := startGJCUltragoalReadyForTest(t, root, repo, runID)
+			status := map[string]any{
+				"schema_version":     "kat.status.v1",
+				"run_id":             runID,
+				"status":             "passed",
+				"extractor_status":   "precise",
+				"command_exit_code":  0,
+				"self_approval":      false,
+				"final_accepted":     false,
+				"review_approved":    false,
+				"waiver_approved":    false,
+				"candidate_evidence": true,
+				"source_status_hash": start.Status.StatusHash,
+			}
+			kat := writeGJCKATEvidenceForTest(t, repo, runID, status)
+			opts := GJCKATAttachOptions{
+				RunID:            runID,
+				StatusPath:       kat.status.Path,
+				StatusHash:       kat.status.SHA256,
+				SummaryPath:      kat.summary.Path,
+				SummaryHash:      kat.summary.SHA256,
+				SummaryMDPath:    kat.summaryMD.Path,
+				SummaryMDHash:    kat.summaryMD.SHA256,
+				RawLogPath:       kat.rawLog.Path,
+				RawLogHash:       kat.rawLog.SHA256,
+				AttachmentStatus: "kat_evidence_ready",
+				Now:              testRunNow(9),
+			}
+			tc.mutate(t, repo, runID, &opts, status)
+
+			_, err = AttachGJCKATEvidence(root, opts)
+			assertProblemCode(t, err, tc.wantCode)
+		})
+	}
+}
+
+func TestShowGJCStatusRevalidatesPersistedKATStatusRefContent(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+	start := startGJCUltragoalReadyForTest(t, root, repo, runID)
+	statusEvidence := map[string]any{
+		"schema_version":     "kat.status.v1",
+		"run_id":             runID,
+		"status":             "passed",
+		"extractor_status":   "precise",
+		"command_exit_code":  0,
+		"self_approval":      false,
+		"final_accepted":     false,
+		"review_approved":    false,
+		"waiver_approved":    false,
+		"candidate_evidence": true,
+		"source_status_hash": start.Status.StatusHash,
+	}
+	kat := writeGJCKATEvidenceForTest(t, repo, runID, statusEvidence)
+	attached, err := AttachGJCKATEvidence(root, GJCKATAttachOptions{
+		RunID:            runID,
+		StatusPath:       kat.status.Path,
+		StatusHash:       kat.status.SHA256,
+		SummaryPath:      kat.summary.Path,
+		SummaryHash:      kat.summary.SHA256,
+		SummaryMDPath:    kat.summaryMD.Path,
+		SummaryMDHash:    kat.summaryMD.SHA256,
+		RawLogPath:       kat.rawLog.Path,
+		RawLogHash:       kat.rawLog.SHA256,
+		AttachmentStatus: "kat_evidence_ready",
+		Now:              testRunNow(8),
+	})
+	if err != nil {
+		t.Fatalf("AttachGJCKATEvidence() error = %v", err)
+	}
+
+	statusEvidence["mar_accepted"] = true
+	katStatusHash := rewriteGJCKATStatusContentForTest(t, repo, attached.Status.KAT.StatusRef.Path, statusEvidence)
+	persisted := attached.Status
+	persisted.KAT.StatusRef.SHA256 = katStatusHash
+	persisted.KAT.StatusHash = katStatusHash
+	persistedHash, err := computeGJCStatusHash(persisted)
+	if err != nil {
+		t.Fatalf("compute persisted status hash: %v", err)
+	}
+	persisted.StatusHash = persistedHash
+	data, err := json.MarshalIndent(persisted, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal persisted status: %v", err)
+	}
+	statusPath := filepath.Join(repo, filepath.FromSlash(persisted.StatusPath))
+	if err := os.WriteFile(statusPath, append(data, '\n'), 0o600); err != nil {
+		t.Fatalf("write persisted status: %v", err)
+	}
+
+	_, err = ShowGJCStatus(root, GJCStatusOptions{RunID: runID})
+	assertProblemCode(t, err, "gjc_kat_authority_claim")
+}
+
+func TestShowGJCStatusRejectsPersistedKATSourceStatusHashDrift(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+	start := startGJCUltragoalReadyForTest(t, root, repo, runID)
+	statusEvidence := map[string]any{
+		"schema_version":     "kat.status.v1",
+		"run_id":             runID,
+		"status":             "passed",
+		"extractor_status":   "precise",
+		"command_exit_code":  0,
+		"self_approval":      false,
+		"final_accepted":     false,
+		"review_approved":    false,
+		"waiver_approved":    false,
+		"candidate_evidence": true,
+		"source_status_hash": start.Status.StatusHash,
+	}
+	kat := writeGJCKATEvidenceForTest(t, repo, runID, statusEvidence)
+	attached, err := AttachGJCKATEvidence(root, GJCKATAttachOptions{
+		RunID:            runID,
+		StatusPath:       kat.status.Path,
+		StatusHash:       kat.status.SHA256,
+		SummaryPath:      kat.summary.Path,
+		SummaryHash:      kat.summary.SHA256,
+		SummaryMDPath:    kat.summaryMD.Path,
+		SummaryMDHash:    kat.summaryMD.SHA256,
+		RawLogPath:       kat.rawLog.Path,
+		RawLogHash:       kat.rawLog.SHA256,
+		AttachmentStatus: "kat_evidence_ready",
+		Now:              testRunNow(8),
+	})
+	if err != nil {
+		t.Fatalf("AttachGJCKATEvidence() error = %v", err)
+	}
+
+	statusEvidence["source_status_hash"] = "sha256:" + strings.Repeat("2", 64)
+	katStatusHash := rewriteGJCKATStatusContentForTest(t, repo, attached.Status.KAT.StatusRef.Path, statusEvidence)
+	persisted := attached.Status
+	persisted.KAT.StatusRef.SHA256 = katStatusHash
+	persisted.KAT.StatusHash = katStatusHash
+	persistedHash, err := computeGJCStatusHash(persisted)
+	if err != nil {
+		t.Fatalf("compute persisted status hash: %v", err)
+	}
+	persisted.StatusHash = persistedHash
+	data, err := json.MarshalIndent(persisted, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal persisted status: %v", err)
+	}
+	statusPath := filepath.Join(repo, filepath.FromSlash(persisted.StatusPath))
+	if err := os.WriteFile(statusPath, append(data, '\n'), 0o600); err != nil {
+		t.Fatalf("write persisted status: %v", err)
+	}
+
+	_, err = ShowGJCStatus(root, GJCStatusOptions{RunID: runID})
+	assertProblemCode(t, err, "gjc_kat_source_status_hash_mismatch")
+}
+
+func TestShowGJCStatusRejectsPersistedKATSourceStatusHashRebind(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+	start := startGJCUltragoalReadyForTest(t, root, repo, runID)
+	statusEvidence := map[string]any{
+		"schema_version":     "kat.status.v1",
+		"run_id":             runID,
+		"status":             "passed",
+		"extractor_status":   "precise",
+		"command_exit_code":  0,
+		"self_approval":      false,
+		"final_accepted":     false,
+		"review_approved":    false,
+		"waiver_approved":    false,
+		"candidate_evidence": true,
+		"source_status_hash": start.Status.StatusHash,
+	}
+	kat := writeGJCKATEvidenceForTest(t, repo, runID, statusEvidence)
+	attached, err := AttachGJCKATEvidence(root, GJCKATAttachOptions{
+		RunID:            runID,
+		StatusPath:       kat.status.Path,
+		StatusHash:       kat.status.SHA256,
+		SummaryPath:      kat.summary.Path,
+		SummaryHash:      kat.summary.SHA256,
+		SummaryMDPath:    kat.summaryMD.Path,
+		SummaryMDHash:    kat.summaryMD.SHA256,
+		RawLogPath:       kat.rawLog.Path,
+		RawLogHash:       kat.rawLog.SHA256,
+		AttachmentStatus: "kat_evidence_ready",
+		Now:              testRunNow(8),
+	})
+	if err != nil {
+		t.Fatalf("AttachGJCKATEvidence() error = %v", err)
+	}
+
+	staleHash := "sha256:" + strings.Repeat("2", 64)
+	statusEvidence["source_status_hash"] = staleHash
+	katStatusHash := rewriteGJCKATStatusContentForTest(t, repo, attached.Status.KAT.StatusRef.Path, statusEvidence)
+	persisted := attached.Status
+	persisted.KAT.StatusRef.SHA256 = katStatusHash
+	persisted.KAT.StatusHash = katStatusHash
+	persisted.KAT.SourceStatusHash = staleHash
+	persistedHash, err := computeGJCStatusHash(persisted)
+	if err != nil {
+		t.Fatalf("compute persisted status hash: %v", err)
+	}
+	persisted.StatusHash = persistedHash
+	data, err := json.MarshalIndent(persisted, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal persisted status: %v", err)
+	}
+	statusPath := filepath.Join(repo, filepath.FromSlash(persisted.StatusPath))
+	if err := os.WriteFile(statusPath, append(data, '\n'), 0o600); err != nil {
+		t.Fatalf("write persisted status: %v", err)
+	}
+
+	_, err = ShowGJCStatus(root, GJCStatusOptions{RunID: runID})
+	assertProblemCode(t, err, "gjc_kat_source_status_ref_mismatch")
+}
+
+func TestShowGJCStatusRejectsPersistedKATSourceStatusRefPathRebind(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	created, err := CreateRun(root, deterministicCreateRunOptions())
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+	start := startGJCUltragoalReadyForTest(t, root, repo, runID)
+	statusEvidence := map[string]any{
+		"schema_version":     "kat.status.v1",
+		"run_id":             runID,
+		"status":             "passed",
+		"extractor_status":   "precise",
+		"command_exit_code":  0,
+		"self_approval":      false,
+		"final_accepted":     false,
+		"review_approved":    false,
+		"waiver_approved":    false,
+		"candidate_evidence": true,
+		"source_status_hash": start.Status.StatusHash,
+	}
+	kat := writeGJCKATEvidenceForTest(t, repo, runID, statusEvidence)
+	attached, err := AttachGJCKATEvidence(root, GJCKATAttachOptions{
+		RunID:            runID,
+		StatusPath:       kat.status.Path,
+		StatusHash:       kat.status.SHA256,
+		SummaryPath:      kat.summary.Path,
+		SummaryHash:      kat.summary.SHA256,
+		SummaryMDPath:    kat.summaryMD.Path,
+		SummaryMDHash:    kat.summaryMD.SHA256,
+		RawLogPath:       kat.rawLog.Path,
+		RawLogHash:       kat.rawLog.SHA256,
+		AttachmentStatus: "kat_evidence_ready",
+		Now:              testRunNow(8),
+	})
+	if err != nil {
+		t.Fatalf("AttachGJCKATEvidence() error = %v", err)
+	}
+
+	fakeSource := start.Status
+	fakeSource.CurrentWaitReason = stringPtr("fake but self-consistent pre-attachment source")
+	fakeSourceHash, err := computeGJCStatusHash(fakeSource)
+	if err != nil {
+		t.Fatalf("compute fake source hash: %v", err)
+	}
+	fakeSource.StatusHash = fakeSourceHash
+	fakeData, err := json.MarshalIndent(fakeSource, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal fake source: %v", err)
+	}
+	fakeRel := packetRelative(runID, "artifacts/gjc/fake-kat-source-status.json")
+	fakePath := writeGJCTestFile(t, repo, runID, "artifacts/gjc/fake-kat-source-status.json", append(fakeData, '\n'))
+	fakeRef := GJCArtifactRef{Path: fakeRel, SHA256: sha256String(mustReadBytes(t, fakePath))}
+
+	statusEvidence["source_status_hash"] = fakeSourceHash
+	katStatusHash := rewriteGJCKATStatusContentForTest(t, repo, attached.Status.KAT.StatusRef.Path, statusEvidence)
+	persisted := attached.Status
+	persisted.KAT.StatusRef.SHA256 = katStatusHash
+	persisted.KAT.StatusHash = katStatusHash
+	persisted.KAT.SourceStatusHash = fakeSourceHash
+	persisted.KAT.SourceStatusRef = fakeRef
+	persistedHash, err := computeGJCStatusHash(persisted)
+	if err != nil {
+		t.Fatalf("compute persisted status hash: %v", err)
+	}
+	persisted.StatusHash = persistedHash
+	data, err := json.MarshalIndent(persisted, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal persisted status: %v", err)
+	}
+	statusPath := filepath.Join(repo, filepath.FromSlash(persisted.StatusPath))
+	if err := os.WriteFile(statusPath, append(data, '\n'), 0o600); err != nil {
+		t.Fatalf("write persisted status: %v", err)
+	}
+
+	_, err = ShowGJCStatus(root, GJCStatusOptions{RunID: runID})
+	assertProblemCode(t, err, "gjc_kat_source_status_ref_mismatch")
+}
+
 func writeGJCTestFile(t *testing.T, repo string, runID string, relative string, content []byte) string {
 	t.Helper()
 	path := filepath.Join(repo, filepath.FromSlash(packetRelative(runID, relative)))
@@ -630,4 +1116,79 @@ func canonicalTestPath(t *testing.T, path string) string {
 		t.Fatalf("canonicalize %s: %v", path, err)
 	}
 	return resolved
+}
+
+func startGJCUltragoalReadyForTest(t *testing.T, root Root, repo string, runID string) GJCStartResult {
+	t.Helper()
+	packetRel := packetRelative(runID, "artifacts/gjc/gjc-ultragoal-packet.yaml")
+	writeGJCTestFile(t, repo, runID, "artifacts/gjc/gjc-ultragoal-packet.yaml", []byte("packet_kind: ultragoal\n"))
+	brief := writeGJCTestFile(t, repo, runID, "artifacts/gjc/brief.md", []byte("# Brief\n"))
+	goals := writeGJCTestFile(t, repo, runID, "artifacts/gjc/goals.json", []byte(`{"goals":[]}`+"\n"))
+	ledger := writeGJCTestFile(t, repo, runID, "artifacts/gjc/ledger.jsonl", []byte(`{"event":"created"}`+"\n"))
+	artifactRefs := []GJCArtifactRef{
+		{Path: packetRelative(runID, "artifacts/gjc/brief.md"), SHA256: sha256String(mustReadBytes(t, brief))},
+		{Path: packetRelative(runID, "artifacts/gjc/goals.json"), SHA256: sha256String(mustReadBytes(t, goals))},
+		{Path: packetRelative(runID, "artifacts/gjc/ledger.jsonl"), SHA256: sha256String(mustReadBytes(t, ledger))},
+	}
+	oldRunner := gjcRunCommand
+	gjcRunCommand = func(invocation gjcRunnerInvocation) (gjcRunnerResult, error) {
+		receipt := map[string]any{
+			"status":                 "ultragoal_ready",
+			"artifact_refs":          artifactRefs,
+			"current_required_actor": "kat",
+		}
+		data, _ := json.Marshal(receipt)
+		return gjcRunnerResult{PID: 1234, ExitCode: 0, Stdout: data}, nil
+	}
+	defer func() { gjcRunCommand = oldRunner }()
+	result, err := StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-005", Packet: packetRel, CommandKind: "start-ultragoal", Now: testRunNow(7)})
+	if err != nil {
+		t.Fatalf("StartGJC(ultragoal) error = %v", err)
+	}
+	return result
+}
+
+type gjcKATFixture struct {
+	status    GJCArtifactRef
+	summary   GJCArtifactRef
+	summaryMD GJCArtifactRef
+	rawLog    GJCArtifactRef
+}
+
+func writeGJCKATEvidenceForTest(t *testing.T, repo string, runID string, status map[string]any) gjcKATFixture {
+	t.Helper()
+	statusData, err := json.MarshalIndent(status, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal KAT status: %v", err)
+	}
+	statusData = append(statusData, '\n')
+	statusPath := writeGJCTestFile(t, repo, runID, "artifacts/test/kat.status.json", statusData)
+	summaryPath := writeGJCTestFile(t, repo, runID, "artifacts/test/kat.summary.json", []byte(`{"summary":"fixture"}`+"\n"))
+	summaryMDPath := writeGJCTestFile(t, repo, runID, "artifacts/test/kat.summary.md", []byte("# KAT summary\n"))
+	rawLogPath := writeGJCTestFile(t, repo, runID, "artifacts/test/kat.raw.log", []byte("kat fixture log\n"))
+	return gjcKATFixture{
+		status:    GJCArtifactRef{Path: packetRelative(runID, "artifacts/test/kat.status.json"), SHA256: sha256String(mustReadBytes(t, statusPath))},
+		summary:   GJCArtifactRef{Path: packetRelative(runID, "artifacts/test/kat.summary.json"), SHA256: sha256String(mustReadBytes(t, summaryPath))},
+		summaryMD: GJCArtifactRef{Path: packetRelative(runID, "artifacts/test/kat.summary.md"), SHA256: sha256String(mustReadBytes(t, summaryMDPath))},
+		rawLog:    GJCArtifactRef{Path: packetRelative(runID, "artifacts/test/kat.raw.log"), SHA256: sha256String(mustReadBytes(t, rawLogPath))},
+	}
+}
+
+func rewriteGJCKATStatusForTest(t *testing.T, repo string, opts *GJCKATAttachOptions, status map[string]any) {
+	t.Helper()
+	opts.StatusHash = rewriteGJCKATStatusContentForTest(t, repo, opts.StatusPath, status)
+}
+
+func rewriteGJCKATStatusContentForTest(t *testing.T, repo string, relative string, status map[string]any) string {
+	t.Helper()
+	data, err := json.MarshalIndent(status, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal KAT status: %v", err)
+	}
+	data = append(data, '\n')
+	path := filepath.Join(repo, filepath.FromSlash(relative))
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("rewrite KAT status: %v", err)
+	}
+	return sha256String(data)
 }

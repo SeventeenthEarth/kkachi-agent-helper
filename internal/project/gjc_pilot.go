@@ -16,6 +16,8 @@ const (
 	gjcCallbackResultPending    = "pending"
 	gjcCallbackResultDelivered  = "delivered"
 	gjcCallbackResultFailed     = "failed"
+	gjcKATAttachmentReady       = "kat_evidence_ready"
+	gjcKATAttachmentFailed      = "kat_evidence_failed"
 	gjcNoWakeClaimNotification  = "no-wake-claim"
 	gjcPlanConflictReportName   = "plan-conflict.json"
 	gjcCallbackConflictHint     = "Use a new idempotency key for a different callback source hash or repair the existing callback evidence."
@@ -40,6 +42,50 @@ type GJCPlanLockOptions struct {
 	Now              func() time.Time
 }
 
+type GJCKATAttachOptions struct {
+	RunID            string
+	StatusPath       string
+	StatusHash       string
+	SummaryPath      string
+	SummaryHash      string
+	SummaryMDPath    string
+	SummaryMDHash    string
+	RawLogPath       string
+	RawLogHash       string
+	AttachmentStatus string
+	Now              func() time.Time
+}
+
+type gjcKATStatusEvidence struct {
+	SchemaVersion     string `json:"schema_version"`
+	RunID             string `json:"run_id"`
+	Status            string `json:"status"`
+	ExtractorStatus   string `json:"extractor_status"`
+	CommandExitCode   *int   `json:"command_exit_code"`
+	SourceStatusHash  string `json:"source_status_hash"`
+	SelfApproval      bool   `json:"self_approval"`
+	FinalAccepted     bool   `json:"final_accepted"`
+	ReviewApproved    bool   `json:"review_approved"`
+	WaiverApproved    bool   `json:"waiver_approved"`
+	CandidateEvidence bool   `json:"candidate_evidence"`
+}
+
+var gjcKATStatusAllowedFields = map[string]bool{
+	"schema_version":      true,
+	"run_id":              true,
+	"status":              true,
+	"extractor_status":    true,
+	"command_exit_code":   true,
+	"self_approval":       true,
+	"final_accepted":      true,
+	"review_approved":     true,
+	"waiver_approved":     true,
+	"candidate_evidence":  true,
+	"source_status_hash":  true,
+	"current_authority":   true,
+	"completion_boundary": true,
+}
+
 func RecordGJCCallback(root Root, options GJCCallbackOptions) (GJCStatusResult, error) {
 	var result GJCStatusResult
 	err := withProjectWriteLock(root, "gjc callback-kanban", options.RunID, func() error {
@@ -55,6 +101,16 @@ func LockGJCPlan(root Root, options GJCPlanLockOptions) (GJCStatusResult, error)
 	err := withProjectWriteLock(root, "gjc lock-plan", options.RunID, func() error {
 		var err error
 		result, err = lockGJCPlanUnlocked(root, options)
+		return err
+	})
+	return result, err
+}
+
+func AttachGJCKATEvidence(root Root, options GJCKATAttachOptions) (GJCStatusResult, error) {
+	var result GJCStatusResult
+	err := withProjectWriteLock(root, "gjc attach-kat-evidence", options.RunID, func() error {
+		var err error
+		result, err = attachGJCKATEvidenceUnlocked(root, options)
 		return err
 	})
 	return result, err
@@ -86,6 +142,37 @@ func recordGJCCallbackUnlocked(root Root, options GJCCallbackOptions) (GJCStatus
 	status.Callback = &callback
 	status.UpdatedAt = options.Now().UTC().Format(time.RFC3339)
 	updated, _, err := writeGJCStatusMutation(root, status, gjcEventCallback)
+	if err != nil {
+		return GJCStatusResult{}, err
+	}
+	return GJCStatusResult{Status: updated}, nil
+}
+
+func attachGJCKATEvidenceUnlocked(root Root, options GJCKATAttachOptions) (GJCStatusResult, error) {
+	if options.Now == nil {
+		options.Now = func() time.Time { return time.Now().UTC() }
+	}
+	status, err := readValidatedGJCStatus(root, options.RunID)
+	if err != nil {
+		return GJCStatusResult{}, err
+	}
+	if status.CommandKind != gjcCommandUltragoal || status.Process.Status != "ultragoal_ready" {
+		return GJCStatusResult{}, &Problem{Code: "gjc_kat_attachment_invalid_state", Message: "KAT evidence attachment requires ultragoal_ready candidate status", Hint: "Attach KAT evidence only after start-ultragoal records candidate implementation evidence.", Field: "process.status", Expected: "ultragoal_ready", Actual: status.Process.Status}
+	}
+	sourceStatusRef, err := writeGJCKATSourceStatusSnapshot(root, status)
+	if err != nil {
+		return GJCStatusResult{}, err
+	}
+	kat, err := parseGJCKATAttachOptions(root, status.RunID, status.StatusHash, options)
+	if err != nil {
+		return GJCStatusResult{}, err
+	}
+	kat.SourceStatusRef = sourceStatusRef
+	status.KAT = &kat
+	status.CurrentRequiredActor = GJCActorColor
+	status.CurrentWaitReason = nil
+	status.UpdatedAt = options.Now().UTC().Format(time.RFC3339)
+	updated, _, err := writeGJCStatusMutation(root, status, gjcEventKATAttached)
 	if err != nil {
 		return GJCStatusResult{}, err
 	}
@@ -127,6 +214,196 @@ func lockGJCPlanUnlocked(root Root, options GJCPlanLockOptions) (GJCStatusResult
 		return GJCStatusResult{}, err
 	}
 	return GJCStatusResult{Status: updated}, nil
+}
+
+func parseGJCKATAttachOptions(root Root, runID string, sourceStatusHash string, options GJCKATAttachOptions) (GJCKATEvidence, error) {
+	statusRef, statusData, err := validateGJCKATOptionRef(root, runID, options.StatusPath, options.StatusHash, "kat.status_ref")
+	if err != nil {
+		return GJCKATEvidence{}, err
+	}
+	summaryRef, _, err := validateGJCKATOptionRef(root, runID, options.SummaryPath, options.SummaryHash, "kat.summary_ref")
+	if err != nil {
+		return GJCKATEvidence{}, err
+	}
+	summaryMDRef, _, err := validateGJCKATOptionRef(root, runID, options.SummaryMDPath, options.SummaryMDHash, "kat.summary_md_ref")
+	if err != nil {
+		return GJCKATEvidence{}, err
+	}
+	rawLogRef, _, err := validateGJCKATOptionRef(root, runID, options.RawLogPath, options.RawLogHash, "kat.raw_log_ref")
+	if err != nil {
+		return GJCKATEvidence{}, err
+	}
+	katStatus, err := parseGJCKATStatus(statusData)
+	if err != nil {
+		return GJCKATEvidence{}, err
+	}
+	if katStatus.RunID != runID {
+		return GJCKATEvidence{}, &Problem{Code: "gjc_kat_run_id_mismatch", Message: "KAT status run id does not match selected run", Hint: "Use KAT evidence emitted with kkachi-agent-tester --run-id <run_id> run.", Path: statusRef.Path, Field: "kat.status.run_id", Expected: runID, Actual: katStatus.RunID}
+	}
+	if err := validateGJCKATStatusShape(katStatus, statusRef.Path); err != nil {
+		return GJCKATEvidence{}, err
+	}
+	if err := validateGJCKATSourceStatusHash(katStatus, sourceStatusHash, statusRef.Path); err != nil {
+		return GJCKATEvidence{}, err
+	}
+	attachmentStatus := strings.TrimSpace(options.AttachmentStatus)
+	if attachmentStatus == "" {
+		attachmentStatus = gjcKATAttachmentReady
+	}
+	if !validGJCKATAttachmentStatus(attachmentStatus) {
+		return GJCKATEvidence{}, &Problem{Code: "gjc_kat_attachment_status_unsupported", Message: "KAT attachment status is unsupported", Hint: "Use factual KAT evidence attachment states only; KAH cannot approve review, MAR, waiver, or final completion.", Field: "kat.attachment_status", Expected: "kat_evidence_ready or kat_evidence_failed", Actual: attachmentStatus}
+	}
+	return GJCKATEvidence{
+		RunID:            runID,
+		StatusRef:        statusRef,
+		SummaryRef:       summaryRef,
+		SummaryMDRef:     summaryMDRef,
+		RawLogRef:        rawLogRef,
+		StatusHash:       statusRef.SHA256,
+		RawLogHash:       rawLogRef.SHA256,
+		SourceStatusHash: katStatus.SourceStatusHash,
+		ExtractorStatus:  katStatus.ExtractorStatus,
+		CommandExitCode:  *katStatus.CommandExitCode,
+		AttachmentStatus: attachmentStatus,
+		UpdatedAt:        options.Now().UTC().Format(time.RFC3339),
+	}, nil
+}
+
+func writeGJCKATSourceStatusSnapshot(root Root, status GJCStatus) (GJCArtifactRef, error) {
+	path, err := gjcKATSourceStatusPath(root, status.RunID)
+	if err != nil {
+		return GJCArtifactRef{}, err
+	}
+	data, err := json.MarshalIndent(status, "", "  ")
+	if err != nil {
+		return GJCArtifactRef{}, &Problem{Code: "gjc_status_encode_failed", Message: "cannot encode KAT source status evidence", Hint: "Report the unsupported status payload to KAH maintainers.", Field: "kat.source_status_ref", Expected: "JSON-encodable pre-attachment GJC status", Actual: err.Error()}
+	}
+	data = append(data, '\n')
+	if _, err := os.Stat(path.Absolute); os.IsNotExist(err) {
+		if err := writeNewFileAtomically(path, data); err != nil {
+			return GJCArtifactRef{}, err
+		}
+	} else if err != nil {
+		return GJCArtifactRef{}, &Problem{Code: "gjc_ref_inspection_failed", Message: "cannot inspect KAT source status evidence", Hint: "Check run-local evidence permissions before retrying.", Path: path.Relative, Field: "kat.source_status_ref", Expected: "inspectable source status evidence", Actual: err.Error()}
+	} else if err := writeExistingFileAtomically(path, data); err != nil {
+		return GJCArtifactRef{}, err
+	}
+	return GJCArtifactRef{Path: path.Relative, SHA256: sha256String(data)}, nil
+}
+
+func gjcKATSourceStatusPath(root Root, runID string) (SafePath, error) {
+	return ResolveRelativePath(root, filepath.ToSlash(filepath.Join(RunRootPath, runID, "artifacts", "gjc", "kat-source-status.json")))
+}
+
+func validateGJCKATOptionRef(root Root, runID string, pathValue string, hashValue string, field string) (GJCArtifactRef, []byte, error) {
+	ref := GJCArtifactRef{Path: strings.TrimSpace(pathValue), SHA256: strings.TrimSpace(hashValue)}
+	if !gjcChecksumPattern.MatchString(ref.SHA256) {
+		return GJCArtifactRef{}, nil, &Problem{Code: "gjc_checksum_malformed", Message: "KAT evidence checksum is malformed", Hint: "Use sha256:<64 lowercase hex characters> for every KAT evidence ref.", Field: field + ".sha256", Expected: "sha256:<64hex>", Actual: ref.SHA256}
+	}
+	path, err := validateGJCRunRef(root, runID, ref.Path, field+".path")
+	if err != nil {
+		return GJCArtifactRef{}, nil, err
+	}
+	data, err := os.ReadFile(path.Absolute)
+	if err != nil {
+		return GJCArtifactRef{}, nil, &Problem{Code: "gjc_artifact_read_failed", Message: "cannot read KAT evidence ref", Hint: "Ensure KAT refs point to readable run-local evidence files.", Path: path.Relative, Field: field + ".path", Expected: "readable KAT evidence file", Actual: err.Error()}
+	}
+	actual := sha256String(data)
+	if actual != ref.SHA256 {
+		return GJCArtifactRef{}, nil, &Problem{Code: "gjc_checksum_mismatch", Message: "KAT evidence checksum does not match file content", Hint: "Regenerate or reattach KAT evidence after content changes.", Path: path.Relative, Field: field + ".sha256", Expected: actual, Actual: ref.SHA256}
+	}
+	return GJCArtifactRef{Path: path.Relative, SHA256: ref.SHA256}, data, nil
+}
+
+func parseGJCKATStatus(data []byte) (gjcKATStatusEvidence, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return gjcKATStatusEvidence{}, &Problem{Code: "gjc_kat_status_invalid_json", Message: "KAT status evidence is not valid JSON", Hint: "Attach the KAT status JSON emitted under the selected run id.", Field: "kat.status_ref", Expected: "KAT status JSON object", Actual: err.Error()}
+	}
+	for key := range raw {
+		if gjcKATStatusAllowedFields[key] {
+			continue
+		}
+		if isGJCKATAuthorityClaimKey(key) {
+			return gjcKATStatusEvidence{}, &Problem{Code: "gjc_kat_authority_claim", Message: "KAT status contains unsupported approval authority field", Hint: "KAT/GJC/KAH evidence is candidate or factual only; remove review, MAR, waiver, approval, accepted, or final claims.", Field: "kat.status." + key, Expected: "no approval, acceptance, waiver, MAR, or final claim fields", Actual: key}
+		}
+		return gjcKATStatusEvidence{}, &Problem{Code: "gjc_kat_status_invalid", Message: "KAT status contains unsupported field", Hint: "Attach only the GAJAE KAT status fields understood by KAH.", Field: "kat.status." + key, Expected: "supported KAT status field", Actual: key}
+	}
+	var status gjcKATStatusEvidence
+	if err := json.Unmarshal(data, &status); err != nil {
+		return status, &Problem{Code: "gjc_kat_status_invalid_json", Message: "KAT status evidence is not valid JSON", Hint: "Attach the KAT status JSON emitted under the selected run id.", Field: "kat.status_ref", Expected: "KAT status JSON object", Actual: err.Error()}
+	}
+	return status, nil
+}
+
+func validateGJCKATStatusShape(status gjcKATStatusEvidence, path string) error {
+	if strings.TrimSpace(status.SchemaVersion) == "" {
+		return &Problem{Code: "gjc_kat_status_invalid", Message: "KAT status schema version is missing", Hint: "Attach complete KAT status JSON evidence.", Path: path, Field: "kat.status.schema_version", Expected: "non-empty schema version", Actual: "missing"}
+	}
+	if !validGJCKATStatus(status.Status) {
+		return &Problem{Code: "gjc_kat_status_unsupported", Message: "KAT status is unsupported", Hint: "Use factual KAT command states only; KAT cannot approve review, MAR, waiver, or final completion.", Path: path, Field: "kat.status.status", Expected: "passed, failed, or error", Actual: status.Status}
+	}
+	if !validGJCKATExtractorStatus(status.ExtractorStatus) {
+		return &Problem{Code: "gjc_kat_extractor_status_unsupported", Message: "KAT extractor status is unsupported", Hint: "Use precise, partial, degraded, or no_match as factual extractor evidence.", Path: path, Field: "kat.status.extractor_status", Expected: "precise, partial, degraded, or no_match", Actual: status.ExtractorStatus}
+	}
+	if status.CommandExitCode == nil {
+		return &Problem{Code: "gjc_kat_status_invalid", Message: "KAT status command exit code is missing", Hint: "Attach complete KAT status JSON evidence.", Path: path, Field: "kat.status.command_exit_code", Expected: "integer command exit code", Actual: "missing"}
+	}
+	if status.SelfApproval || status.FinalAccepted || status.ReviewApproved || status.WaiverApproved {
+		return &Problem{Code: "gjc_kat_authority_claim", Message: "KAT status claims unsupported approval authority", Hint: "KAT/GJC/KAH evidence is candidate or factual only; KAS/Blue/color/MAR/final gates decide acceptance.", Path: path, Field: "kat.status.authority", Expected: "no self-approval, review approval, waiver, or final acceptance claims", Actual: "approval claim present"}
+	}
+	return nil
+}
+
+func validateGJCKATSourceStatusHash(status gjcKATStatusEvidence, expectedHash string, path string) error {
+	sourceHash := strings.TrimSpace(status.SourceStatusHash)
+	if sourceHash == "" {
+		return &Problem{Code: "gjc_kat_status_invalid", Message: "KAT status source status hash is missing", Hint: "KAT evidence must bind to the current pre-attachment GJC status hash.", Path: path, Field: "kat.status.source_status_hash", Expected: "sha256:<64hex>", Actual: "missing"}
+	}
+	if !gjcChecksumPattern.MatchString(sourceHash) {
+		return &Problem{Code: "gjc_checksum_malformed", Message: "KAT status source status hash is malformed", Hint: "Use sha256:<64 lowercase hex characters> from the pre-attachment GJC status.", Path: path, Field: "kat.status.source_status_hash", Expected: "sha256:<64hex>", Actual: sourceHash}
+	}
+	if sourceHash != expectedHash {
+		return &Problem{Code: "gjc_kat_source_status_hash_mismatch", Message: "KAT status source status hash does not match bound GJC status", Hint: "Attach KAT evidence generated from the current pre-attachment GJC status evidence.", Path: path, Field: "kat.status.source_status_hash", Expected: expectedHash, Actual: sourceHash}
+	}
+	return nil
+}
+
+func validGJCKATStatus(status string) bool {
+	switch strings.TrimSpace(status) {
+	case "passed", "failed", "error":
+		return true
+	default:
+		return false
+	}
+}
+
+func validGJCKATExtractorStatus(status string) bool {
+	switch strings.TrimSpace(status) {
+	case "precise", "partial", "degraded", "no_match":
+		return true
+	default:
+		return false
+	}
+}
+
+func validGJCKATAttachmentStatus(status string) bool {
+	switch strings.TrimSpace(status) {
+	case gjcKATAttachmentReady, gjcKATAttachmentFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+func isGJCKATAuthorityClaimKey(key string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(key))
+	for _, token := range []string{"approval", "approved", "accepted", "acceptance", "final", "waiver", "mar"} {
+		if strings.Contains(normalized, token) {
+			return true
+		}
+	}
+	return false
 }
 
 func parseGJCCallbackOptions(status GJCStatus, options GJCCallbackOptions) (GJCCallback, error) {
@@ -304,6 +581,114 @@ func validateGJCCallback(callback *GJCCallback) error {
 		return &Problem{Code: "gjc_callback_result_unsupported", Message: "GJC callback result is unsupported", Hint: "Use pending, delivered, or failed.", Field: "callback.last_callback_status", Expected: "pending, delivered, or failed", Actual: callback.LastCallbackStatus}
 	}
 	return nil
+}
+
+func validateGJCKATEvidence(root Root, runID string, evidence *GJCKATEvidence) error {
+	if evidence == nil {
+		return nil
+	}
+	if evidence.RunID != runID {
+		return &Problem{Code: "gjc_kat_run_id_mismatch", Message: "persisted KAT evidence run id does not match selected run", Hint: "Do not copy KAT evidence across runs.", Field: "kat.run_id", Expected: runID, Actual: evidence.RunID}
+	}
+	sourceStatusHash, err := validateGJCKATSourceStatusRef(root, runID, evidence.SourceStatusRef, evidence.SourceStatusHash)
+	if err != nil {
+		return err
+	}
+	statusRef, statusData, err := validateGJCKATOptionRef(root, runID, evidence.StatusRef.Path, evidence.StatusRef.SHA256, "kat.status_ref")
+	if err != nil {
+		return err
+	}
+	summaryRef, _, err := validateGJCKATOptionRef(root, runID, evidence.SummaryRef.Path, evidence.SummaryRef.SHA256, "kat.summary_ref")
+	if err != nil {
+		return err
+	}
+	summaryMDRef, _, err := validateGJCKATOptionRef(root, runID, evidence.SummaryMDRef.Path, evidence.SummaryMDRef.SHA256, "kat.summary_md_ref")
+	if err != nil {
+		return err
+	}
+	rawLogRef, _, err := validateGJCKATOptionRef(root, runID, evidence.RawLogRef.Path, evidence.RawLogRef.SHA256, "kat.raw_log_ref")
+	if err != nil {
+		return err
+	}
+	katStatus, err := parseGJCKATStatus(statusData)
+	if err != nil {
+		return err
+	}
+	if katStatus.RunID != runID {
+		return &Problem{Code: "gjc_kat_run_id_mismatch", Message: "persisted KAT status run id does not match selected run", Hint: "Do not copy KAT evidence across runs.", Path: statusRef.Path, Field: "kat.status.run_id", Expected: runID, Actual: katStatus.RunID}
+	}
+	if err := validateGJCKATStatusShape(katStatus, statusRef.Path); err != nil {
+		return err
+	}
+	if evidence.StatusHash != evidence.StatusRef.SHA256 {
+		return &Problem{Code: "gjc_checksum_mismatch", Message: "persisted KAT status hash does not match status ref", Hint: "Regenerate KAT attachment evidence through the KAH wrapper.", Field: "kat.status_hash", Expected: evidence.StatusRef.SHA256, Actual: evidence.StatusHash}
+	}
+	if evidence.RawLogHash != evidence.RawLogRef.SHA256 {
+		return &Problem{Code: "gjc_checksum_mismatch", Message: "persisted KAT raw-log hash does not match raw-log ref", Hint: "Regenerate KAT attachment evidence through the KAH wrapper.", Field: "kat.raw_log_hash", Expected: evidence.RawLogRef.SHA256, Actual: evidence.RawLogHash}
+	}
+	if !gjcChecksumPattern.MatchString(evidence.SourceStatusHash) {
+		return &Problem{Code: "gjc_checksum_malformed", Message: "persisted KAT source status hash is malformed", Hint: "Regenerate KAT attachment evidence through the KAH wrapper.", Field: "kat.source_status_hash", Expected: "sha256:<64hex>", Actual: evidence.SourceStatusHash}
+	}
+	if evidence.SourceStatusHash != sourceStatusHash {
+		return &Problem{Code: "gjc_kat_source_status_ref_mismatch", Message: "persisted KAT source status hash does not match source status evidence", Hint: "Regenerate KAT attachment evidence through the KAH wrapper.", Field: "kat.source_status_hash", Expected: sourceStatusHash, Actual: evidence.SourceStatusHash}
+	}
+	if err := validateGJCKATSourceStatusHash(katStatus, evidence.SourceStatusHash, statusRef.Path); err != nil {
+		return err
+	}
+	if evidence.StatusRef != statusRef || evidence.SummaryRef != summaryRef || evidence.SummaryMDRef != summaryMDRef || evidence.RawLogRef != rawLogRef {
+		return &Problem{Code: "gjc_checksum_mismatch", Message: "persisted KAT refs do not match normalized run-local evidence", Hint: "Regenerate KAT attachment evidence through the KAH wrapper.", Field: "kat.refs", Expected: "normalized run-local refs", Actual: "stale refs"}
+	}
+	if evidence.ExtractorStatus != katStatus.ExtractorStatus {
+		return &Problem{Code: "gjc_kat_status_invalid", Message: "persisted KAT extractor status does not match status_ref content", Hint: "Regenerate KAT attachment evidence through the KAH wrapper.", Path: statusRef.Path, Field: "kat.extractor_status", Expected: katStatus.ExtractorStatus, Actual: evidence.ExtractorStatus}
+	}
+	if evidence.CommandExitCode != *katStatus.CommandExitCode {
+		return &Problem{Code: "gjc_kat_status_invalid", Message: "persisted KAT command exit code does not match status_ref content", Hint: "Regenerate KAT attachment evidence through the KAH wrapper.", Path: statusRef.Path, Field: "kat.command_exit_code", Expected: fmt.Sprintf("%d", *katStatus.CommandExitCode), Actual: fmt.Sprintf("%d", evidence.CommandExitCode)}
+	}
+	if !validGJCKATExtractorStatus(evidence.ExtractorStatus) {
+		return &Problem{Code: "gjc_kat_extractor_status_unsupported", Message: "persisted KAT extractor status is unsupported", Hint: "Use precise, partial, degraded, or no_match as factual extractor evidence.", Field: "kat.extractor_status", Expected: "precise, partial, degraded, or no_match", Actual: evidence.ExtractorStatus}
+	}
+	if !validGJCKATAttachmentStatus(evidence.AttachmentStatus) {
+		return &Problem{Code: "gjc_kat_attachment_status_unsupported", Message: "persisted KAT attachment status is unsupported", Hint: "Use factual KAT evidence attachment states only.", Field: "kat.attachment_status", Expected: "kat_evidence_ready or kat_evidence_failed", Actual: evidence.AttachmentStatus}
+	}
+	return nil
+}
+
+func validateGJCKATSourceStatusRef(root Root, runID string, ref GJCArtifactRef, expectedHash string) (string, error) {
+	expectedPath := filepath.ToSlash(filepath.Join(RunRootPath, runID, "artifacts", "gjc", "kat-source-status.json"))
+	if strings.TrimSpace(ref.Path) != expectedPath {
+		return "", &Problem{Code: "gjc_kat_source_status_ref_mismatch", Message: "KAT source status ref is not the canonical pre-attachment source evidence", Hint: "Regenerate KAT attachment evidence through the KAH wrapper; do not rebind source_status_ref to another run-local artifact.", Field: "kat.source_status_ref.path", Expected: expectedPath, Actual: ref.Path}
+	}
+	sourceRef, sourceData, err := validateGJCKATOptionRef(root, runID, ref.Path, ref.SHA256, "kat.source_status_ref")
+	if err != nil {
+		return "", err
+	}
+	var sourceStatus GJCStatus
+	if err := json.Unmarshal(sourceData, &sourceStatus); err != nil {
+		return "", &Problem{Code: "gjc_kat_source_status_invalid_json", Message: "KAT source status evidence is not valid GJC status JSON", Hint: "Regenerate KAT attachment evidence through the KAH wrapper.", Path: sourceRef.Path, Field: "kat.source_status_ref", Expected: "pre-attachment GJC status JSON", Actual: err.Error()}
+	}
+	if sourceStatus.RunID != runID {
+		return "", &Problem{Code: "gjc_kat_run_id_mismatch", Message: "KAT source status run id does not match selected run", Hint: "Do not copy KAT source evidence across runs.", Path: sourceRef.Path, Field: "kat.source_status_ref.run_id", Expected: runID, Actual: sourceStatus.RunID}
+	}
+	if sourceStatus.CommandKind != gjcCommandUltragoal || sourceStatus.Process.Status != "ultragoal_ready" {
+		return "", &Problem{Code: "gjc_kat_source_status_ref_mismatch", Message: "KAT source status evidence is not the ultragoal_ready pre-attachment status", Hint: "Regenerate KAT attachment evidence after start-ultragoal records candidate status.", Path: sourceRef.Path, Field: "kat.source_status_ref.process.status", Expected: "ultragoal_ready", Actual: sourceStatus.Process.Status}
+	}
+	if sourceStatus.KAT != nil {
+		return "", &Problem{Code: "gjc_kat_source_status_ref_mismatch", Message: "KAT source status evidence already contains KAT attachment data", Hint: "Regenerate KAT attachment evidence with the pre-attachment source status.", Path: sourceRef.Path, Field: "kat.source_status_ref.kat", Expected: "absent pre-attachment KAT section", Actual: "present"}
+	}
+	if !gjcChecksumPattern.MatchString(sourceStatus.StatusHash) {
+		return "", &Problem{Code: "gjc_checksum_malformed", Message: "KAT source status hash is malformed", Hint: "Regenerate KAT attachment evidence through the KAH wrapper.", Path: sourceRef.Path, Field: "kat.source_status_ref.status_hash", Expected: "sha256:<64hex>", Actual: sourceStatus.StatusHash}
+	}
+	computed, err := computeGJCStatusHash(sourceStatus)
+	if err != nil {
+		return "", err
+	}
+	if sourceStatus.StatusHash != computed {
+		return "", &Problem{Code: "gjc_kat_source_status_ref_mismatch", Message: "KAT source status hash does not match source status content", Hint: "Regenerate KAT attachment evidence through the KAH wrapper.", Path: sourceRef.Path, Field: "kat.source_status_ref.status_hash", Expected: computed, Actual: sourceStatus.StatusHash}
+	}
+	if expectedHash != "" && sourceStatus.StatusHash != expectedHash {
+		return "", &Problem{Code: "gjc_kat_source_status_ref_mismatch", Message: "KAT source status evidence does not match persisted source status hash", Hint: "Regenerate KAT attachment evidence through the KAH wrapper.", Path: sourceRef.Path, Field: "kat.source_status_ref.status_hash", Expected: expectedHash, Actual: sourceStatus.StatusHash}
+	}
+	return sourceStatus.StatusHash, nil
 }
 
 func gjcConflictReportPath(runID string) string {
