@@ -239,6 +239,257 @@ func TestStartGJCRalplanAcceptsQuotedNativeArtifactWithComment(t *testing.T) {
 	}
 }
 
+func TestStartGJCUltragoalUsesNativeBriefFileAndAdaptsRealGJCOutput(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.TaskID = "GAJAE-008"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+	packetRel := writeNativeUltragoalPacket(t, repo, runID, "Implement GAJAE-008 bounded adapter evidence.\n")
+	wantBrief := filepath.Join(root.Path, filepath.FromSlash(packetRelative(runID, "artifacts/gjc/ultragoal-brief-input.md")))
+
+	oldRunner := gjcRunCommand
+	gjcRunCommand = func(invocation gjcRunnerInvocation) (gjcRunnerResult, error) {
+		if slices.Contains(invocation.Args, "--packet") {
+			t.Fatalf("args = %#v, must not use legacy --packet for native ultragoal", invocation.Args)
+		}
+		if !slices.Equal(invocation.Args, []string{"ultragoal", "create-goals", "--brief-file", wantBrief, "--json"}) {
+			t.Fatalf("args = %#v, want native ultragoal invocation", invocation.Args)
+		}
+		briefData := mustReadBytes(t, wantBrief)
+		if string(briefData) != "Implement GAJAE-008 bounded adapter evidence.\n" {
+			t.Fatalf("brief file = %q, want normalized brief", string(briefData))
+		}
+		gjcDir := filepath.Join(root.Path, ".gjc", "_session-"+invocation.SessionID, "ultragoal")
+		if err := os.MkdirAll(gjcDir, 0o755); err != nil {
+			t.Fatalf("mkdir fake gjc dir: %v", err)
+		}
+		goalsPath := filepath.Join(gjcDir, "goals.json")
+		ledgerPath := filepath.Join(gjcDir, "ledger.jsonl")
+		if err := os.WriteFile(goalsPath, []byte(`{"goals":[{"id":"G001"}]}`+"\n"), 0o600); err != nil {
+			t.Fatalf("write fake goals: %v", err)
+		}
+		if err := os.WriteFile(ledgerPath, []byte(`{"event":"plan_created"}`+"\n"), 0o600); err != nil {
+			t.Fatalf("write fake ledger: %v", err)
+		}
+		native := map[string]any{"ok": true, "goals_count": 1, "goal_ids": []string{"G001"}, "goals_path": goalsPath}
+		data, _ := json.Marshal(native)
+		return gjcRunnerResult{PID: 1234, ExitCode: 0, Stdout: data}, nil
+	}
+	defer func() { gjcRunCommand = oldRunner }()
+
+	result, err := StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-008", Packet: packetRel, CommandKind: "start-ultragoal", Now: testRunNow(8)})
+	if err != nil {
+		t.Fatalf("StartGJC() error = %v", err)
+	}
+	if result.Status.Process.Status != "ultragoal_ready" || result.Status.CurrentRequiredActor != GJCActorKAS {
+		t.Fatalf("status = %#v, want candidate ultragoal_ready for KAS", result.Status)
+	}
+	if result.Status.NativeInput == nil || result.Status.NativeInput.Path != packetRelative(runID, "artifacts/gjc/ultragoal-brief-input.md") || result.Status.NativeInput.SHA256 != sha256String([]byte("Implement GAJAE-008 bounded adapter evidence.\n")) {
+		t.Fatalf("native_input_ref = %#v, want generated brief input path/hash", result.Status.NativeInput)
+	}
+	wantArtifacts := map[string]bool{
+		packetRelative(runID, "artifacts/gjc/ultragoal-goals.json"):   false,
+		packetRelative(runID, "artifacts/gjc/ultragoal-ledger.jsonl"): false,
+	}
+	for _, ref := range result.Status.Artifacts {
+		if _, ok := wantArtifacts[ref.Path]; ok {
+			wantArtifacts[ref.Path] = true
+		}
+	}
+	for path, found := range wantArtifacts {
+		if !found {
+			t.Fatalf("artifact_refs = %#v, missing normalized native output %s", result.Status.Artifacts, path)
+		}
+	}
+}
+
+func TestStartGJCUltragoalRejectsCrossSessionNativeOutput(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.TaskID = "GAJAE-008"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+	packetRel := writeNativeUltragoalPacket(t, repo, runID, "Cross-session probe.\n")
+
+	oldRunner := gjcRunCommand
+	gjcRunCommand = func(invocation gjcRunnerInvocation) (gjcRunnerResult, error) {
+		gjcDir := filepath.Join(root.Path, ".gjc", "sessions", "gjc-other-run", "ultragoal")
+		if err := os.MkdirAll(gjcDir, 0o755); err != nil {
+			t.Fatalf("mkdir foreign gjc dir: %v", err)
+		}
+		goalsPath := filepath.Join(gjcDir, "goals.json")
+		ledgerPath := filepath.Join(gjcDir, "ledger.jsonl")
+		if err := os.WriteFile(goalsPath, []byte(`{"goals":[{"id":"G001"}]}`+"\n"), 0o600); err != nil {
+			t.Fatalf("write foreign goals: %v", err)
+		}
+		if err := os.WriteFile(ledgerPath, []byte(`{"event":"plan_created"}`+"\n"), 0o600); err != nil {
+			t.Fatalf("write foreign ledger: %v", err)
+		}
+		data, _ := json.Marshal(map[string]any{"ok": true, "goals_count": 1, "goal_ids": []string{"G001"}, "goals_path": goalsPath})
+		return gjcRunnerResult{PID: 1234, ExitCode: 0, Stdout: data}, nil
+	}
+	defer func() { gjcRunCommand = oldRunner }()
+
+	_, err = StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-008", Packet: packetRel, CommandKind: "start-ultragoal", Now: testRunNow(8)})
+	assertProblemCode(t, err, "gjc_ultragoal_native_output_invalid")
+}
+
+func TestStartGJCUltragoalRejectsSymlinkedNativeOutput(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.TaskID = "GAJAE-008"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+	packetRel := writeNativeUltragoalPacket(t, repo, runID, "Symlink probe.\n")
+
+	oldRunner := gjcRunCommand
+	gjcRunCommand = func(invocation gjcRunnerInvocation) (gjcRunnerResult, error) {
+		gjcDir := filepath.Join(root.Path, ".gjc", "_session-"+invocation.SessionID, "ultragoal")
+		if err := os.MkdirAll(gjcDir, 0o755); err != nil {
+			t.Fatalf("mkdir gjc dir: %v", err)
+		}
+		outside := filepath.Join(root.Path, ".gjc", "outside-goals.json")
+		if err := os.WriteFile(outside, []byte(`{"goals":[{"id":"G001"}]}`+"\n"), 0o600); err != nil {
+			t.Fatalf("write outside goals: %v", err)
+		}
+		goalsPath := filepath.Join(gjcDir, "goals.json")
+		if err := os.Symlink(outside, goalsPath); err != nil {
+			t.Fatalf("symlink goals: %v", err)
+		}
+		ledgerPath := filepath.Join(gjcDir, "ledger.jsonl")
+		if err := os.WriteFile(ledgerPath, []byte(`{"event":"plan_created"}`+"\n"), 0o600); err != nil {
+			t.Fatalf("write ledger: %v", err)
+		}
+		data, _ := json.Marshal(map[string]any{"ok": true, "goals_count": 1, "goal_ids": []string{"G001"}, "goals_path": goalsPath})
+		return gjcRunnerResult{PID: 1234, ExitCode: 0, Stdout: data}, nil
+	}
+	defer func() { gjcRunCommand = oldRunner }()
+
+	_, err = StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-008", Packet: packetRel, CommandKind: "start-ultragoal", Now: testRunNow(8)})
+	assertProblemCode(t, err, "gjc_ultragoal_native_output_invalid")
+}
+
+func TestStartGJCUltragoalRejectsSymlinkedNativeOutputInsideSelectedSession(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.TaskID = "GAJAE-008"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+	packetRel := writeNativeUltragoalPacket(t, repo, runID, "Internal symlink probe.\n")
+
+	oldRunner := gjcRunCommand
+	gjcRunCommand = func(invocation gjcRunnerInvocation) (gjcRunnerResult, error) {
+		gjcDir := filepath.Join(root.Path, ".gjc", "_session-"+invocation.SessionID, "ultragoal")
+		if err := os.MkdirAll(gjcDir, 0o755); err != nil {
+			t.Fatalf("mkdir gjc dir: %v", err)
+		}
+		target := filepath.Join(gjcDir, "goals-target.json")
+		if err := os.WriteFile(target, []byte(`{"goals":[{"id":"G001"}]}`+"\n"), 0o600); err != nil {
+			t.Fatalf("write target goals: %v", err)
+		}
+		goalsPath := filepath.Join(gjcDir, "goals.json")
+		if err := os.Symlink(target, goalsPath); err != nil {
+			t.Fatalf("symlink goals: %v", err)
+		}
+		ledgerPath := filepath.Join(gjcDir, "ledger.jsonl")
+		if err := os.WriteFile(ledgerPath, []byte(`{"event":"plan_created"}`+"\n"), 0o600); err != nil {
+			t.Fatalf("write ledger: %v", err)
+		}
+		data, _ := json.Marshal(map[string]any{"ok": true, "goals_count": 1, "goal_ids": []string{"G001"}, "goals_path": goalsPath})
+		return gjcRunnerResult{PID: 1234, ExitCode: 0, Stdout: data}, nil
+	}
+	defer func() { gjcRunCommand = oldRunner }()
+
+	_, err = StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-008", Packet: packetRel, CommandKind: "start-ultragoal", Now: testRunNow(8)})
+	assertProblemCode(t, err, "gjc_ultragoal_native_output_invalid")
+}
+
+func TestStartGJCUltragoalRequiresNativeInputBeforeRunner(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.TaskID = "GAJAE-008"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+	packetRel := packetRelative(runID, "artifacts/gjc/gjc-ultragoal-packet.yaml")
+	writeGJCTestFile(t, repo, runID, "artifacts/gjc/gjc-ultragoal-packet.yaml", []byte("packet_kind: ultragoal\n"))
+
+	oldRunner := gjcRunCommand
+	gjcRunCommand = func(invocation gjcRunnerInvocation) (gjcRunnerResult, error) {
+		t.Fatalf("runner should not be called when native_ultragoal_input is missing")
+		return gjcRunnerResult{}, nil
+	}
+	defer func() { gjcRunCommand = oldRunner }()
+
+	_, err = StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-008", Packet: packetRel, CommandKind: "start-ultragoal", Now: testRunNow(8)})
+	assertProblemCode(t, err, "gjc_ultragoal_native_input_missing")
+}
+
+func TestShowGJCStatusRejectsNativeInputHashDrift(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.TaskID = "GAJAE-008"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+	packetRel := writeNativeUltragoalPacket(t, repo, runID, "Brief before drift.\n")
+
+	oldRunner := gjcRunCommand
+	gjcRunCommand = func(invocation gjcRunnerInvocation) (gjcRunnerResult, error) {
+		gjcDir := filepath.Join(root.Path, ".gjc", "_session-"+invocation.SessionID, "ultragoal")
+		if err := os.MkdirAll(gjcDir, 0o755); err != nil {
+			t.Fatalf("mkdir fake gjc dir: %v", err)
+		}
+		goalsPath := filepath.Join(gjcDir, "goals.json")
+		ledgerPath := filepath.Join(gjcDir, "ledger.jsonl")
+		if err := os.WriteFile(goalsPath, []byte(`{"goals":[{"id":"G001"}]}`+"\n"), 0o600); err != nil {
+			t.Fatalf("write fake goals: %v", err)
+		}
+		if err := os.WriteFile(ledgerPath, []byte(`{"event":"plan_created"}`+"\n"), 0o600); err != nil {
+			t.Fatalf("write fake ledger: %v", err)
+		}
+		data, _ := json.Marshal(map[string]any{"ok": true, "goals_count": 1, "goal_ids": []string{"G001"}, "goals_path": goalsPath})
+		return gjcRunnerResult{PID: 1234, ExitCode: 0, Stdout: data}, nil
+	}
+	defer func() { gjcRunCommand = oldRunner }()
+
+	result, err := StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-008", Packet: packetRel, CommandKind: "start-ultragoal", Now: testRunNow(8)})
+	if err != nil {
+		t.Fatalf("StartGJC() error = %v", err)
+	}
+	if result.Status.NativeInput == nil {
+		t.Fatalf("native_input_ref missing")
+	}
+	if err := os.WriteFile(filepath.Join(repo, filepath.FromSlash(result.Status.NativeInput.Path)), []byte("tampered\n"), 0o600); err != nil {
+		t.Fatalf("tamper native input: %v", err)
+	}
+	_, err = ShowGJCStatus(root, GJCStatusOptions{RunID: runID})
+	assertProblemCode(t, err, "gjc_checksum_mismatch")
+}
+
 func TestStartGJCPreservesPacketRefAndShowStatusValidatesIt(t *testing.T) {
 	repo := initializedRepo(t)
 	root, _ := DiscoverRoot(repo)
@@ -1357,6 +1608,21 @@ func envContains(env []string, want string) bool {
 	return false
 }
 
+func writeNativeUltragoalPacket(t *testing.T, repo string, runID string, brief string) string {
+	t.Helper()
+	packetRel := packetRelative(runID, "artifacts/gjc/gjc-ultragoal-packet.yaml")
+	writeGJCTestFile(t, repo, runID, "artifacts/gjc/gjc-ultragoal-packet.yaml", []byte("packet_kind: ultragoal\nnative_ultragoal_input:\n  mode: brief_file\n  brief: |\n"+indentGJCTestBlock(brief, "    ")+"\n"))
+	return packetRel
+}
+
+func indentGJCTestBlock(value string, indent string) string {
+	lines := strings.Split(strings.TrimRight(value, "\n"), "\n")
+	for i, line := range lines {
+		lines[i] = indent + line
+	}
+	return strings.Join(lines, "\n")
+}
+
 func countEnvPrefix(env []string, prefix string) int {
 	count := 0
 	for _, item := range env {
@@ -1388,8 +1654,7 @@ func canonicalTestPath(t *testing.T, path string) string {
 
 func startGJCUltragoalReadyForTest(t *testing.T, root Root, repo string, runID string) GJCStartResult {
 	t.Helper()
-	packetRel := packetRelative(runID, "artifacts/gjc/gjc-ultragoal-packet.yaml")
-	writeGJCTestFile(t, repo, runID, "artifacts/gjc/gjc-ultragoal-packet.yaml", []byte("packet_kind: ultragoal\n"))
+	packetRel := writeNativeUltragoalPacket(t, repo, runID, "# Brief\n")
 	brief := writeGJCTestFile(t, repo, runID, "artifacts/gjc/brief.md", []byte("# Brief\n"))
 	goals := writeGJCTestFile(t, repo, runID, "artifacts/gjc/goals.json", []byte(`{"goals":[]}`+"\n"))
 	ledger := writeGJCTestFile(t, repo, runID, "artifacts/gjc/ledger.jsonl", []byte(`{"event":"created"}`+"\n"))

@@ -81,6 +81,7 @@ type GJCStatus struct {
 	GJCSessionID         string           `json:"gjc_session_id"`
 	Process              GJCProcessStatus `json:"process"`
 	Packet               GJCArtifactRef   `json:"packet_ref"`
+	NativeInput          *GJCArtifactRef  `json:"native_input_ref,omitempty"`
 	Receipt              *GJCArtifactRef  `json:"receipt_ref,omitempty"`
 	Artifacts            []GJCArtifactRef `json:"artifact_refs"`
 	Plan                 GJCPlanEvidence  `json:"plan,omitempty"`
@@ -179,12 +180,26 @@ type gjcNativeRalplanInput struct {
 	Artifact SafePath
 }
 
+type gjcNativeUltragoalInput struct {
+	Mode  string
+	Brief string
+}
+
+type gjcCommandInput struct {
+	Args        []string
+	NativeInput *GJCArtifactRef
+}
+
 type gjcReceipt struct {
 	Status               string           `json:"status"`
 	Artifacts            []GJCArtifactRef `json:"artifact_refs"`
 	ArtifactRefs         []GJCArtifactRef `json:"artifacts"`
 	CurrentRequiredActor string           `json:"current_required_actor"`
 	CurrentWaitReason    *string          `json:"current_wait_reason"`
+	OK                   bool             `json:"ok"`
+	GoalsCount           int              `json:"goals_count"`
+	GoalIDs              []string         `json:"goal_ids"`
+	GoalsPath            string           `json:"goals_path"`
 }
 
 func StartGJC(root Root, options GJCStartOptions) (GJCStartResult, error) {
@@ -254,7 +269,7 @@ func startGJCUnlocked(root Root, options GJCStartOptions) (GJCStartResult, error
 		return GJCStartResult{}, &Problem{Code: "gjc_artifact_read_failed", Message: "cannot read GJC packet_ref", Hint: "Regenerate or repair the run-local KAS packet before starting GJC.", Path: packet.Relative, Field: "packet_ref.path", Expected: "readable packet file", Actual: err.Error()}
 	}
 	packetRef := GJCArtifactRef{Path: packet.Relative, SHA256: sha256String(packetData)}
-	args, err := gjcArgsForCommand(root, metadata.RunID, commandKind, packet.Absolute, packetData)
+	commandInput, err := gjcArgsForCommand(root, metadata.RunID, commandKind, packet.Absolute, packetData)
 	if err != nil {
 		return GJCStartResult{}, err
 	}
@@ -268,7 +283,7 @@ func startGJCUnlocked(root Root, options GJCStartOptions) (GJCStartResult, error
 	}
 	invocation := gjcRunnerInvocation{
 		Command:      gjcCommand,
-		Args:         args,
+		Args:         commandInput.Args,
 		Dir:          root.Path,
 		Env:          gjcEnv(realHome, session.SessionID),
 		RealUserHome: realHome,
@@ -285,6 +300,7 @@ func startGJCUnlocked(root Root, options GJCStartOptions) (GJCStartResult, error
 		GJCSessionID:         session.SessionID,
 		Process:              GJCProcessStatus{Status: GJCStatusRunning, PID: runnerResult.PID, ExitCode: runnerResult.ExitCode},
 		Packet:               packetRef,
+		NativeInput:          commandInput.NativeInput,
 		CurrentRequiredActor: GJCActorGJC,
 		StatusPath:           mustGJCStatusRelative(metadata.RunID),
 		UpdatedAt:            occurredAt,
@@ -301,7 +317,7 @@ func startGJCUnlocked(root Root, options GJCStartOptions) (GJCStartResult, error
 		status.RecoveryHint = "Inspect run-local GJC status and stderr evidence, then rerun after fixing the GJC-side failure."
 		return writeGJCStatusAndEvent(root, status, gjcEventFailed, &Problem{Code: "gjc_command_nonzero", Message: "GJC command exited non-zero", Hint: status.RecoveryHint, Field: "exit_code", Expected: "0", Actual: fmt.Sprintf("%d", runnerResult.ExitCode)})
 	}
-	receipt, err := parseGJCReceipt(runnerResult.Stdout)
+	receipt, err := parseGJCReceipt(root, metadata.RunID, commandKind, runnerResult.Stdout)
 	if err != nil {
 		status.Process.Status = GJCStatusFailed
 		status.Error = &GJCStatusError{Code: problemCode(err, "gjc_json_invalid"), Message: problemMessage(err)}
@@ -387,7 +403,7 @@ func applyGJCReceipt(root Root, runID string, commandKind string, status *GJCSta
 	return applyGJCPlanEvidence(root, runID, commandKind, status)
 }
 
-func parseGJCReceipt(stdout []byte) (gjcReceipt, error) {
+func parseGJCReceipt(root Root, runID string, commandKind string, stdout []byte) (gjcReceipt, error) {
 	var receipt gjcReceipt
 	trimmed := strings.TrimSpace(string(stdout))
 	if trimmed == "" {
@@ -396,7 +412,95 @@ func parseGJCReceipt(stdout []byte) (gjcReceipt, error) {
 	if err := json.Unmarshal([]byte(trimmed), &receipt); err != nil {
 		return receipt, &Problem{Code: "gjc_json_invalid", Message: "GJC receipt is not valid JSON", Hint: "Configure GJC to emit a compact JSON object on stdout.", Field: "stdout", Expected: "JSON receipt object", Actual: err.Error()}
 	}
+	if commandKind == gjcCommandUltragoal && strings.TrimSpace(receipt.Status) == "" {
+		return adaptNativeUltragoalReceipt(root, runID, receipt)
+	}
 	return receipt, nil
+}
+
+func adaptNativeUltragoalReceipt(root Root, runID string, receipt gjcReceipt) (gjcReceipt, error) {
+	if !receipt.OK || strings.TrimSpace(receipt.GoalsPath) == "" || receipt.GoalsCount <= 0 {
+		return receipt, nil
+	}
+	goalsRef, err := copyGJCUltragoalNativeArtifact(root, runID, receipt.GoalsPath, "ultragoal-goals.json")
+	if err != nil {
+		return receipt, err
+	}
+	ledgerSource := filepath.Join(filepath.Dir(receipt.GoalsPath), "ledger.jsonl")
+	ledgerRef, err := copyGJCUltragoalNativeArtifact(root, runID, ledgerSource, "ultragoal-ledger.jsonl")
+	if err != nil {
+		return receipt, err
+	}
+	receipt.Status = "ultragoal_ready"
+	receipt.Artifacts = []GJCArtifactRef{goalsRef, ledgerRef}
+	receipt.CurrentRequiredActor = GJCActorKAS
+	return receipt, nil
+}
+
+func copyGJCUltragoalNativeArtifact(root Root, runID string, source string, destBase string) (GJCArtifactRef, error) {
+	cleanedSource := filepath.Clean(source)
+	if !filepath.IsAbs(cleanedSource) {
+		return GJCArtifactRef{}, &Problem{Code: "gjc_ultragoal_native_output_invalid", Message: "native ultragoal output path is not absolute", Hint: "Use GJC native JSON output paths emitted by `gjc ultragoal create-goals --json`.", Field: "goals_path", Expected: "absolute path under repository .gjc sessions", Actual: source}
+	}
+	expectedSessionID := "gjc-" + runID
+	allowedPrefixes := []string{
+		filepath.Join(root.Path, ".gjc", "sessions", expectedSessionID) + string(filepath.Separator),
+		filepath.Join(root.Path, ".gjc", "_session-"+expectedSessionID) + string(filepath.Separator),
+	}
+	allowed := false
+	for _, prefix := range allowedPrefixes {
+		if strings.HasPrefix(cleanedSource, prefix) {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return GJCArtifactRef{}, &Problem{Code: "gjc_ultragoal_native_output_invalid", Message: "native ultragoal output path is outside the selected repository GJC session area", Hint: "Do not consume external, cross-repository, or cross-session GJC artifacts.", Field: "goals_path", Expected: strings.Join(allowedPrefixes, " or ") + "...", Actual: cleanedSource}
+	}
+	originalInfo, err := os.Lstat(cleanedSource)
+	if err != nil {
+		return GJCArtifactRef{}, &Problem{Code: "gjc_ultragoal_native_output_missing", Message: "cannot stat native ultragoal output", Hint: "Ensure GJC emitted goals.json and ledger.jsonl before adapting evidence.", Path: cleanedSource, Field: "goals_path", Expected: "selected-session regular file", Actual: err.Error()}
+	}
+	if originalInfo.Mode()&os.ModeSymlink != 0 {
+		return GJCArtifactRef{}, &Problem{Code: "gjc_ultragoal_native_output_invalid", Message: "native ultragoal output is a symlink", Hint: "Do not consume symlinked or rebound GJC artifacts.", Path: cleanedSource, Field: "goals_path", Expected: "regular file", Actual: originalInfo.Mode().String()}
+	}
+	if !originalInfo.Mode().IsRegular() {
+		return GJCArtifactRef{}, &Problem{Code: "gjc_ultragoal_native_output_invalid", Message: "native ultragoal output is not a regular file", Hint: "Do not consume directories, devices, or special files as GJC artifacts.", Path: cleanedSource, Field: "goals_path", Expected: "regular file", Actual: originalInfo.Mode().String()}
+	}
+	resolvedSource, err := filepath.EvalSymlinks(cleanedSource)
+	if err != nil {
+		return GJCArtifactRef{}, &Problem{Code: "gjc_ultragoal_native_output_missing", Message: "cannot resolve native ultragoal output", Hint: "Ensure GJC emitted real files, not stale or broken links, before adapting evidence.", Path: cleanedSource, Field: "goals_path", Expected: "resolvable selected-session file", Actual: err.Error()}
+	}
+	resolvedAllowed := false
+	for _, prefix := range allowedPrefixes {
+		resolvedPrefix, err := filepath.EvalSymlinks(strings.TrimSuffix(prefix, string(filepath.Separator)))
+		if err == nil && (resolvedSource == resolvedPrefix || strings.HasPrefix(resolvedSource, resolvedPrefix+string(filepath.Separator))) {
+			resolvedAllowed = true
+			break
+		}
+	}
+	if !resolvedAllowed {
+		return GJCArtifactRef{}, &Problem{Code: "gjc_ultragoal_native_output_invalid", Message: "native ultragoal output resolves outside the selected repository GJC session area", Hint: "Do not consume symlinked or rebound GJC artifacts.", Field: "goals_path", Expected: strings.Join(allowedPrefixes, " or ") + "...", Actual: resolvedSource}
+	}
+	info, err := os.Stat(resolvedSource)
+	if err != nil {
+		return GJCArtifactRef{}, &Problem{Code: "gjc_ultragoal_native_output_missing", Message: "cannot stat native ultragoal output", Hint: "Ensure GJC emitted goals.json and ledger.jsonl before adapting evidence.", Path: cleanedSource, Field: "goals_path", Expected: "readable selected-session file", Actual: err.Error()}
+	}
+	if !info.Mode().IsRegular() {
+		return GJCArtifactRef{}, &Problem{Code: "gjc_ultragoal_native_output_invalid", Message: "native ultragoal output is not a regular file", Hint: "Do not consume directories, devices, or special files as GJC artifacts.", Path: cleanedSource, Field: "goals_path", Expected: "regular file", Actual: info.Mode().String()}
+	}
+	data, err := os.ReadFile(resolvedSource)
+	if err != nil {
+		return GJCArtifactRef{}, &Problem{Code: "gjc_ultragoal_native_output_missing", Message: "cannot read native ultragoal output", Hint: "Ensure GJC emitted goals.json and ledger.jsonl before adapting evidence.", Path: cleanedSource, Field: "goals_path", Expected: "readable native GJC output", Actual: err.Error()}
+	}
+	dest, err := ResolveRelativePath(root, filepath.ToSlash(filepath.Join(RunRootPath, runID, "artifacts", "gjc", destBase)))
+	if err != nil {
+		return GJCArtifactRef{}, err
+	}
+	if err := writeExistingFileAtomically(dest, data); err != nil {
+		return GJCArtifactRef{}, err
+	}
+	return GJCArtifactRef{Path: dest.Relative, SHA256: sha256String(data)}, nil
 }
 
 func loadOrCreateGJCSession(root Root, runID string, now func() time.Time) (gjcSession, error) {
@@ -467,6 +571,11 @@ func validatePersistedGJCStatus(root Root, metadata RunMetadata, status GJCStatu
 	}
 	if err := validateGJCPacketRef(root, metadata.RunID, status.Packet); err != nil {
 		return err
+	}
+	if status.NativeInput != nil {
+		if err := validateGJCArtifactRef(root, metadata.RunID, *status.NativeInput, "native_input_ref"); err != nil {
+			return err
+		}
 	}
 	if status.Receipt != nil {
 		if err := validateGJCArtifactRef(root, metadata.RunID, *status.Receipt, "receipt_ref"); err != nil {
@@ -607,20 +716,32 @@ func normalizeGJCRealHome(value string) (string, error) {
 	return cleaned, nil
 }
 
-func gjcArgsForCommand(root Root, runID string, commandKind string, packet string, packetData []byte) ([]string, error) {
+func gjcArgsForCommand(root Root, runID string, commandKind string, packet string, packetData []byte) (gjcCommandInput, error) {
 	switch commandKind {
 	case gjcCommandDeep:
-		return []string{"deep-interview", "--packet", packet, "--json"}, nil
+		return gjcCommandInput{Args: []string{"deep-interview", "--packet", packet, "--json"}}, nil
 	case gjcCommandRalplan:
 		native, err := parseGJCRalplanNativeInput(root, runID, packetData)
 		if err != nil {
-			return nil, err
+			return gjcCommandInput{}, err
 		}
-		return []string{"ralplan", "--write", "--stage", native.Stage, "--stage_n", native.StageN, "--artifact", native.Artifact.Absolute, "--json"}, nil
+		return gjcCommandInput{Args: []string{"ralplan", "--write", "--stage", native.Stage, "--stage_n", native.StageN, "--artifact", native.Artifact.Absolute, "--json"}}, nil
 	case gjcCommandUltragoal:
-		return []string{"ultragoal", "create-goals", "--packet", packet, "--json"}, nil
+		native, err := parseGJCUltragoalNativeInput(packetData)
+		if err != nil {
+			return gjcCommandInput{}, err
+		}
+		nativeInput, err := writeGJCUltragoalBriefInput(root, runID, native)
+		if err != nil {
+			return gjcCommandInput{}, err
+		}
+		path, err := validateGJCRunRef(root, runID, nativeInput.Path, "native_input_ref.path")
+		if err != nil {
+			return gjcCommandInput{}, err
+		}
+		return gjcCommandInput{Args: []string{"ultragoal", "create-goals", "--brief-file", path.Absolute, "--json"}, NativeInput: &nativeInput}, nil
 	default:
-		return []string{commandKind, "--packet", packet, "--json"}, nil
+		return gjcCommandInput{Args: []string{commandKind, "--packet", packet, "--json"}}, nil
 	}
 }
 
@@ -703,6 +824,124 @@ func extractGJCRalplanNativeInputFields(packetData []byte) (map[string]string, b
 		}
 	}
 	return fields, inBlock, nil
+}
+
+func parseGJCUltragoalNativeInput(packetData []byte) (gjcNativeUltragoalInput, error) {
+	fields, found, err := extractGJCUltragoalNativeInputFields(packetData)
+	if err != nil {
+		return gjcNativeUltragoalInput{}, err
+	}
+	if !found {
+		return gjcNativeUltragoalInput{}, &Problem{Code: "gjc_ultragoal_native_input_missing", Message: "ultragoal packet lacks native_ultragoal_input", Hint: "Regenerate the KAS ultragoal packet with native_ultragoal_input.mode=brief_file and native_ultragoal_input.brief before starting GJC.", Field: "native_ultragoal_input", Expected: "mode and brief fields", Actual: "missing"}
+	}
+	mode := strings.TrimSpace(fields["mode"])
+	brief := strings.TrimSpace(fields["brief"])
+	if mode == "" || brief == "" {
+		return gjcNativeUltragoalInput{}, &Problem{Code: "gjc_ultragoal_native_input_invalid", Message: "ultragoal native input is incomplete", Hint: "Provide native_ultragoal_input.mode and native_ultragoal_input.brief.", Field: "native_ultragoal_input", Expected: "non-empty mode and brief", Actual: fmt.Sprintf("mode=%q brief_empty=%t", mode, brief == "")}
+	}
+	if mode != "brief_file" {
+		return gjcNativeUltragoalInput{}, &Problem{Code: "gjc_ultragoal_native_input_invalid", Message: "ultragoal native input mode is unsupported", Hint: "Use native_ultragoal_input.mode: brief_file; do not fall back to --brief or --from-stdin.", Field: "native_ultragoal_input.mode", Expected: "brief_file", Actual: mode}
+	}
+	return gjcNativeUltragoalInput{Mode: mode, Brief: strings.TrimSpace(brief) + "\n"}, nil
+}
+
+func extractGJCUltragoalNativeInputFields(packetData []byte) (map[string]string, bool, error) {
+	fields := map[string]string{}
+	lines := strings.Split(string(packetData), "\n")
+	blockCount := 0
+	for idx, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "native_ultragoal_input:" {
+			continue
+		}
+		indent := len(line) - len(strings.TrimLeft(line, " \t"))
+		if indent != 0 {
+			return nil, true, &Problem{Code: "gjc_ultragoal_native_input_invalid", Message: "ultragoal native input block is nested", Hint: "Declare native_ultragoal_input once at the packet top level.", Field: fmt.Sprintf("native_ultragoal_input line %d", idx+1), Expected: "top-level native_ultragoal_input block", Actual: "nested block"}
+		}
+		blockCount++
+	}
+	if blockCount > 1 {
+		return nil, true, &Problem{Code: "gjc_ultragoal_native_input_invalid", Message: "ultragoal packet has duplicate native input blocks", Hint: "Declare native_ultragoal_input exactly once at the packet top level.", Field: "native_ultragoal_input", Expected: "single block", Actual: "duplicate blocks"}
+	}
+	inBlock := false
+	blockIndent := -1
+	for idx := 0; idx < len(lines); idx++ {
+		line := lines[idx]
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		indent := len(line) - len(strings.TrimLeft(line, " \t"))
+		if !inBlock {
+			if trimmed == "native_ultragoal_input:" {
+				inBlock = true
+				blockIndent = indent
+			}
+			continue
+		}
+		if indent <= blockIndent {
+			break
+		}
+		key, value, ok := strings.Cut(trimmed, ":")
+		if !ok {
+			return nil, true, &Problem{Code: "gjc_ultragoal_native_input_invalid", Message: "ultragoal native input has a malformed field", Hint: "Use simple key: value lines under native_ultragoal_input.", Field: fmt.Sprintf("native_ultragoal_input line %d", idx+1), Expected: "key: value", Actual: trimmed}
+		}
+		key = strings.TrimSpace(key)
+		value = normalizeGJCPacketScalar(value)
+		switch key {
+		case "mode":
+			if _, exists := fields[key]; exists {
+				return nil, true, &Problem{Code: "gjc_ultragoal_native_input_invalid", Message: "ultragoal native input has a duplicate field", Hint: "Declare each native_ultragoal_input field exactly once: mode and brief.", Field: "native_ultragoal_input." + key, Expected: "single field declaration", Actual: "duplicate"}
+			}
+			fields[key] = value
+		case "brief":
+			if _, exists := fields[key]; exists {
+				return nil, true, &Problem{Code: "gjc_ultragoal_native_input_invalid", Message: "ultragoal native input has a duplicate field", Hint: "Declare each native_ultragoal_input field exactly once: mode and brief.", Field: "native_ultragoal_input." + key, Expected: "single field declaration", Actual: "duplicate"}
+			}
+			if value != "|" {
+				fields[key] = value
+				continue
+			}
+			fieldIndent := indent
+			var blockLines []string
+			contentIndent := -1
+			for idx+1 < len(lines) {
+				next := lines[idx+1]
+				nextTrimmed := strings.TrimSpace(next)
+				nextIndent := len(next) - len(strings.TrimLeft(next, " \t"))
+				if nextTrimmed != "" && nextIndent <= fieldIndent {
+					break
+				}
+				idx++
+				if nextTrimmed == "" {
+					blockLines = append(blockLines, "")
+					continue
+				}
+				if contentIndent == -1 {
+					contentIndent = nextIndent
+				}
+				if len(next) >= contentIndent {
+					blockLines = append(blockLines, next[contentIndent:])
+				} else {
+					blockLines = append(blockLines, strings.TrimSpace(next))
+				}
+			}
+			fields[key] = strings.TrimRight(strings.Join(blockLines, "\n"), "\n")
+		}
+	}
+	return fields, inBlock, nil
+}
+
+func writeGJCUltragoalBriefInput(root Root, runID string, native gjcNativeUltragoalInput) (GJCArtifactRef, error) {
+	path, err := ResolveRelativePath(root, filepath.ToSlash(filepath.Join(RunRootPath, runID, "artifacts", "gjc", "ultragoal-brief-input.md")))
+	if err != nil {
+		return GJCArtifactRef{}, err
+	}
+	data := []byte(native.Brief)
+	if err := writeExistingFileAtomically(path, data); err != nil {
+		return GJCArtifactRef{}, err
+	}
+	return GJCArtifactRef{Path: path.Relative, SHA256: sha256String(data)}, nil
 }
 
 func normalizeGJCPacketScalar(value string) string {
@@ -850,6 +1089,7 @@ func gjcEventPayload(status GJCStatus) map[string]any {
 		"gjc_session_id":         status.GJCSessionID,
 		"process":                status.Process,
 		"packet_ref":             status.Packet,
+		"native_input_ref":       status.NativeInput,
 		"receipt_ref":            status.Receipt,
 		"artifact_refs":          status.Artifacts,
 		"plan":                   status.Plan,

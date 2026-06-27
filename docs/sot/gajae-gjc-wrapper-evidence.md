@@ -177,14 +177,14 @@ GAJAE uses shared logical task ids across KAS and KAH. KAH tasks require KAH-loc
 | GAJAE-005 | Async ultragoal + KAT evidence pilot | Start ultragoal async, attach KAT run-id evidence, and expose review-ready status. | Source-side pilot |
 | GAJAE-006 | Watcher/callback closeout | Productize idempotent callback/watcher status surfaces and docs/compatibility notes. | Completed |
 | GAJAE-007 | Real GJC `ralplan` adapter | Convert KAS packet `native_ralplan_input.stage`, `.stage_n`, and `.artifact` fields into GJC 0.7.3 native `ralplan --write` flags and persist candidate plan refs/hashes without KAH plan acceptance. | Completed |
-| GAJAE-008 | Real GJC `ultragoal` adapter | Convert KAS packet content into GJC 0.7.3 native ultragoal brief input and persist implementation-candidate refs/hashes without review/MAR/final acceptance. | Planned |
+| GAJAE-008 | Real GJC `ultragoal` adapter | Convert KAS packet `native_ultragoal_input.brief` into run-local `native_input_ref` evidence, invoke native `ultragoal create-goals --brief-file`, and persist implementation-candidate refs/hashes without review/MAR/final acceptance. | Completed |
 | GAJAE-009 | KAT evidence normalization / attach adapter | Normalize KAT v0.1.0 factual artifacts into a KAH-bindable evidence snapshot or consume a KAT-emitted compatible snapshot. | Planned |
 | GAJAE-010 | Contract docs and skill guidance update | Update KAS/KAH/KAT repo docs plus Hermes skill references after the real adapter contracts settle. | Planned |
 
 ## 7.1. GAJAE-007..010 pilot-unblock task scope
 
 - `GAJAE-007`: KAH code changes for the real GJC 0.7.3 ralplan invocation contract. Done criteria include live-compatible native input construction, run-local candidate plan refs/hashes, plan-lock compatibility, and fail-closed behavior for missing/malformed native inputs.
-- `GAJAE-008`: KAH code changes for the real GJC 0.7.3 ultragoal invocation contract. Done criteria include KAS-derived brief generation, run-local implementation-candidate refs/hashes, and no authority claims beyond `ultragoal_ready`.
+- `GAJAE-008`: KAH code changes for the real GJC 0.7.3 ultragoal invocation contract. Done criteria include KAS-derived brief generation as run-local `native_input_ref`, native `ultragoal create-goals --brief-file` invocation, run-local implementation-candidate refs/hashes, and no authority claims beyond `ultragoal_ready`.
 - `GAJAE-009`: KAH/KAT evidence contract changes. Done criteria include a normalized KAT evidence snapshot or KAT-emitted bindable status, pre-attachment GJC status-hash binding, factual command/extractor evidence preservation, and fail-closed rejection of approval/final/review/MAR/waiver claims.
 - `GAJAE-010`: documentation and skill-reference closeout after the adapter contracts settle. Verification is recorded inside each task's done criteria; do not create a separate verification-only task.
 
