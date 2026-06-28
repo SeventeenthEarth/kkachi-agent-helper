@@ -239,6 +239,239 @@ func TestStartGJCRalplanAcceptsQuotedNativeArtifactWithComment(t *testing.T) {
 	}
 }
 
+func TestStartGJCRalplanAdaptsLiveNativeOutput(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.TaskID = "GAJAE-011"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+	packetRel := writeNativeRalplanPacket(t, repo, runID, "planner", "1", packetRelative(runID, "artifacts/gjc/ralplan-input.md"))
+	planData := []byte("# Live native ralplan candidate\n")
+
+	oldRunner := gjcRunCommand
+	gjcRunCommand = func(invocation gjcRunnerInvocation) (gjcRunnerResult, error) {
+		gjcDir := filepath.Join(root.Path, ".gjc", "_session-"+invocation.SessionID, "ralplan")
+		if err := os.MkdirAll(gjcDir, 0o755); err != nil {
+			t.Fatalf("mkdir fake gjc dir: %v", err)
+		}
+		planPath := filepath.Join(gjcDir, "plan.md")
+		if err := os.WriteFile(planPath, planData, 0o600); err != nil {
+			t.Fatalf("write native plan: %v", err)
+		}
+		native := map[string]any{
+			"run_id":       invocation.SessionID,
+			"path":         planPath,
+			"stage":        "planner",
+			"stage_n":      1,
+			"sha256":       sha256String(planData),
+			"created_at":   "2026-06-28T00:00:00Z",
+			"deduplicated": false,
+		}
+		data, _ := json.Marshal(native)
+		return gjcRunnerResult{PID: 1234, ExitCode: 0, Stdout: data}, nil
+	}
+	defer func() { gjcRunCommand = oldRunner }()
+
+	result, err := StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-011", Packet: packetRel, CommandKind: "start-ralplan", Now: testRunNow(11)})
+	if err != nil {
+		t.Fatalf("StartGJC() error = %v", err)
+	}
+	if result.Status.Process.Status != "ralplan_ready" || result.Status.CurrentRequiredActor != GJCActorKAS {
+		t.Fatalf("status = %#v, want candidate ralplan_ready for KAS", result.Status)
+	}
+	if result.Status.CurrentWaitReason == nil || *result.Status.CurrentWaitReason != "plan_review_required" {
+		t.Fatalf("current_wait_reason = %#v, want plan_review_required", result.Status.CurrentWaitReason)
+	}
+	if len(result.Status.Artifacts) != 1 {
+		t.Fatalf("artifact_refs = %#v, want copied plan artifact", result.Status.Artifacts)
+	}
+	artifact := result.Status.Artifacts[0]
+	if !strings.HasPrefix(artifact.Path, packetRelative(runID, "artifacts/plan/")) || artifact.SHA256 != sha256String(planData) {
+		t.Fatalf("artifact_ref = %#v, want run-local plan artifact with actual hash", artifact)
+	}
+	if result.Status.Plan.Artifact != artifact.Path || result.Status.Plan.ArtifactHash != artifact.SHA256 {
+		t.Fatalf("plan = %#v, want copied artifact/hash", result.Status.Plan)
+	}
+	if got := mustReadBytes(t, filepath.Join(repo, filepath.FromSlash(artifact.Path))); string(got) != string(planData) {
+		t.Fatalf("copied plan = %q, want native plan content", string(got))
+	}
+}
+
+func TestStartGJCRalplanRejectsCrossSessionNativeOutput(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.TaskID = "GAJAE-011"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+	packetRel := writeNativeRalplanPacket(t, repo, runID, "planner", "1", packetRelative(runID, "artifacts/gjc/ralplan-input.md"))
+	planData := []byte("# Cross-session plan\n")
+
+	oldRunner := gjcRunCommand
+	gjcRunCommand = func(invocation gjcRunnerInvocation) (gjcRunnerResult, error) {
+		gjcDir := filepath.Join(root.Path, ".gjc", "sessions", "gjc-other-run", "ralplan")
+		if err := os.MkdirAll(gjcDir, 0o755); err != nil {
+			t.Fatalf("mkdir foreign gjc dir: %v", err)
+		}
+		planPath := filepath.Join(gjcDir, "plan.md")
+		if err := os.WriteFile(planPath, planData, 0o600); err != nil {
+			t.Fatalf("write foreign plan: %v", err)
+		}
+		data, _ := json.Marshal(map[string]any{"run_id": invocation.SessionID, "path": planPath, "sha256": sha256String(planData)})
+		return gjcRunnerResult{PID: 1234, ExitCode: 0, Stdout: data}, nil
+	}
+	defer func() { gjcRunCommand = oldRunner }()
+
+	_, err = StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-011", Packet: packetRel, CommandKind: "start-ralplan", Now: testRunNow(11)})
+	assertProblemCode(t, err, "gjc_ralplan_native_output_invalid")
+}
+
+func TestStartGJCRalplanRejectsNativeChecksumMismatch(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.TaskID = "GAJAE-011"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+	packetRel := writeNativeRalplanPacket(t, repo, runID, "planner", "1", packetRelative(runID, "artifacts/gjc/ralplan-input.md"))
+	planData := []byte("# Mismatched plan\n")
+
+	oldRunner := gjcRunCommand
+	gjcRunCommand = func(invocation gjcRunnerInvocation) (gjcRunnerResult, error) {
+		gjcDir := filepath.Join(root.Path, ".gjc", "_session-"+invocation.SessionID, "ralplan")
+		if err := os.MkdirAll(gjcDir, 0o755); err != nil {
+			t.Fatalf("mkdir gjc dir: %v", err)
+		}
+		planPath := filepath.Join(gjcDir, "plan.md")
+		if err := os.WriteFile(planPath, planData, 0o600); err != nil {
+			t.Fatalf("write native plan: %v", err)
+		}
+		data, _ := json.Marshal(map[string]any{"run_id": invocation.SessionID, "path": planPath, "sha256": "sha256:" + strings.Repeat("0", 64)})
+		return gjcRunnerResult{PID: 1234, ExitCode: 0, Stdout: data}, nil
+	}
+	defer func() { gjcRunCommand = oldRunner }()
+
+	_, err = StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-011", Packet: packetRel, CommandKind: "start-ralplan", Now: testRunNow(11)})
+	assertProblemCode(t, err, "gjc_checksum_mismatch")
+}
+
+func TestStartGJCRalplanRejectsSymlinkedNativeOutput(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.TaskID = "GAJAE-011"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+	packetRel := writeNativeRalplanPacket(t, repo, runID, "planner", "1", packetRelative(runID, "artifacts/gjc/ralplan-input.md"))
+	planData := []byte("# Symlink target plan\n")
+
+	oldRunner := gjcRunCommand
+	gjcRunCommand = func(invocation gjcRunnerInvocation) (gjcRunnerResult, error) {
+		gjcDir := filepath.Join(root.Path, ".gjc", "_session-"+invocation.SessionID, "ralplan")
+		if err := os.MkdirAll(gjcDir, 0o755); err != nil {
+			t.Fatalf("mkdir gjc dir: %v", err)
+		}
+		target := filepath.Join(gjcDir, "plan-target.md")
+		if err := os.WriteFile(target, planData, 0o600); err != nil {
+			t.Fatalf("write target plan: %v", err)
+		}
+		planPath := filepath.Join(gjcDir, "plan.md")
+		if err := os.Symlink(target, planPath); err != nil {
+			t.Fatalf("symlink native plan: %v", err)
+		}
+		data, _ := json.Marshal(map[string]any{"run_id": invocation.SessionID, "path": planPath, "sha256": sha256String(planData)})
+		return gjcRunnerResult{PID: 1234, ExitCode: 0, Stdout: data}, nil
+	}
+	defer func() { gjcRunCommand = oldRunner }()
+
+	_, err = StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-011", Packet: packetRel, CommandKind: "start-ralplan", Now: testRunNow(11)})
+	assertProblemCode(t, err, "gjc_ralplan_native_output_invalid")
+}
+
+func TestStartGJCRalplanRejectsSymlinkedNativeSessionRoot(t *testing.T) {
+	repo := initializedRepo(t)
+	root, _ := DiscoverRoot(repo)
+	options := deterministicCreateRunOptions()
+	options.TaskID = "GAJAE-011"
+	created, err := CreateRun(root, options)
+	if err != nil {
+		t.Fatalf("CreateRun() error = %v", err)
+	}
+	runID := created.Metadata.RunID
+	packetRel := writeNativeRalplanPacket(t, repo, runID, "planner", "1", packetRelative(runID, "artifacts/gjc/ralplan-input.md"))
+	planData := []byte("# Escaped session-root plan\n")
+
+	oldRunner := gjcRunCommand
+	gjcRunCommand = func(invocation gjcRunnerInvocation) (gjcRunnerResult, error) {
+		externalSession := filepath.Join(t.TempDir(), "external-session")
+		if err := os.MkdirAll(filepath.Join(externalSession, "ralplan"), 0o755); err != nil {
+			t.Fatalf("mkdir external session: %v", err)
+		}
+		gjcRoot := filepath.Join(root.Path, ".gjc")
+		if err := os.MkdirAll(gjcRoot, 0o755); err != nil {
+			t.Fatalf("mkdir gjc root: %v", err)
+		}
+		sessionLink := filepath.Join(gjcRoot, "_session-"+invocation.SessionID)
+		if err := os.Symlink(externalSession, sessionLink); err != nil {
+			t.Fatalf("symlink native session root: %v", err)
+		}
+		planPath := filepath.Join(sessionLink, "ralplan", "plan.md")
+		if err := os.WriteFile(filepath.Join(externalSession, "ralplan", "plan.md"), planData, 0o600); err != nil {
+			t.Fatalf("write escaped native plan: %v", err)
+		}
+		data, _ := json.Marshal(map[string]any{"run_id": invocation.SessionID, "path": planPath, "sha256": sha256String(planData)})
+		return gjcRunnerResult{PID: 1234, ExitCode: 0, Stdout: data}, nil
+	}
+	defer func() { gjcRunCommand = oldRunner }()
+
+	_, err = StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-011", Packet: packetRel, CommandKind: "start-ralplan", Now: testRunNow(11)})
+	assertProblemCode(t, err, "gjc_ralplan_native_output_invalid")
+}
+
+func TestStartGJCRalplanRejectsNativeOutputMissingRunIDPathOrHash(t *testing.T) {
+	for name, native := range map[string]map[string]any{
+		"run_id": {"path": "/tmp/plan.md", "sha256": "sha256:" + strings.Repeat("0", 64)},
+		"path":   {"run_id": "gjc-run-20260628T000000Z-aaaaaaaaaaaa", "sha256": "sha256:" + strings.Repeat("0", 64)},
+		"hash":   {"run_id": "gjc-run-20260628T000000Z-aaaaaaaaaaaa", "path": "/tmp/plan.md"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			repo := initializedRepo(t)
+			root, _ := DiscoverRoot(repo)
+			options := deterministicCreateRunOptions()
+			options.TaskID = "GAJAE-011"
+			created, err := CreateRun(root, options)
+			if err != nil {
+				t.Fatalf("CreateRun() error = %v", err)
+			}
+			runID := created.Metadata.RunID
+			packetRel := writeNativeRalplanPacket(t, repo, runID, "planner", "1", packetRelative(runID, "artifacts/gjc/ralplan-input.md"))
+
+			oldRunner := gjcRunCommand
+			gjcRunCommand = func(invocation gjcRunnerInvocation) (gjcRunnerResult, error) {
+				data, _ := json.Marshal(native)
+				return gjcRunnerResult{PID: 1234, ExitCode: 0, Stdout: data}, nil
+			}
+			defer func() { gjcRunCommand = oldRunner }()
+
+			_, err = StartGJC(root, GJCStartOptions{RunID: runID, TaskID: "GAJAE-011", Packet: packetRel, CommandKind: "start-ralplan", Now: testRunNow(11)})
+			assertProblemCode(t, err, "gjc_ralplan_native_output_invalid")
+		})
+	}
+}
+
 func TestStartGJCUltragoalUsesNativeBriefFileAndAdaptsRealGJCOutput(t *testing.T) {
 	repo := initializedRepo(t)
 	root, _ := DiscoverRoot(repo)

@@ -196,6 +196,13 @@ type gjcReceipt struct {
 	ArtifactRefs         []GJCArtifactRef `json:"artifacts"`
 	CurrentRequiredActor string           `json:"current_required_actor"`
 	CurrentWaitReason    *string          `json:"current_wait_reason"`
+	RunID                string           `json:"run_id"`
+	Path                 string           `json:"path"`
+	Stage                string           `json:"stage"`
+	StageN               any              `json:"stage_n"`
+	SHA256               string           `json:"sha256"`
+	CreatedAt            string           `json:"created_at"`
+	Deduplicated         bool             `json:"deduplicated"`
 	OK                   bool             `json:"ok"`
 	GoalsCount           int              `json:"goals_count"`
 	GoalIDs              []string         `json:"goal_ids"`
@@ -412,10 +419,170 @@ func parseGJCReceipt(root Root, runID string, commandKind string, stdout []byte)
 	if err := json.Unmarshal([]byte(trimmed), &receipt); err != nil {
 		return receipt, &Problem{Code: "gjc_json_invalid", Message: "GJC receipt is not valid JSON", Hint: "Configure GJC to emit a compact JSON object on stdout.", Field: "stdout", Expected: "JSON receipt object", Actual: err.Error()}
 	}
+	if commandKind == gjcCommandRalplan && strings.TrimSpace(receipt.Status) == "" {
+		return adaptNativeRalplanReceipt(root, runID, receipt)
+	}
 	if commandKind == gjcCommandUltragoal && strings.TrimSpace(receipt.Status) == "" {
 		return adaptNativeUltragoalReceipt(root, runID, receipt)
 	}
 	return receipt, nil
+}
+
+func adaptNativeRalplanReceipt(root Root, runID string, receipt gjcReceipt) (gjcReceipt, error) {
+	if strings.TrimSpace(receipt.RunID) == "" || strings.TrimSpace(receipt.Path) == "" || strings.TrimSpace(receipt.SHA256) == "" {
+		return receipt, &Problem{Code: "gjc_ralplan_native_output_invalid", Message: "native ralplan output is missing required fields", Hint: "Use GJC native JSON output with run_id, path, and sha256 fields from `gjc ralplan --write --json`.", Field: "native_ralplan_output", Expected: "run_id, path, and sha256", Actual: "missing required field"}
+	}
+	expectedRunID := "gjc-" + runID
+	if strings.TrimSpace(receipt.RunID) != expectedRunID {
+		return receipt, &Problem{Code: "gjc_ralplan_native_output_invalid", Message: "native ralplan output run id does not match the selected GJC session", Hint: "Do not consume cross-session GJC ralplan artifacts.", Field: "run_id", Expected: expectedRunID, Actual: receipt.RunID}
+	}
+	planRef, err := copyGJCRalplanNativeArtifact(root, runID, receipt.Path, receipt.SHA256)
+	if err != nil {
+		return receipt, err
+	}
+	waitReason := "plan_review_required"
+	receipt.Status = "ralplan_ready"
+	receipt.Artifacts = []GJCArtifactRef{planRef}
+	receipt.CurrentRequiredActor = GJCActorKAS
+	receipt.CurrentWaitReason = &waitReason
+	return receipt, nil
+}
+
+func copyGJCRalplanNativeArtifact(root Root, runID string, source string, declaredHash string) (GJCArtifactRef, error) {
+	normalizedHash, err := normalizeGJCRalplanNativeHash(declaredHash)
+	if err != nil {
+		return GJCArtifactRef{}, err
+	}
+	data, cleanedSource, err := readGJCNativeSessionFile(root, runID, source, "ralplan")
+	if err != nil {
+		return GJCArtifactRef{}, err
+	}
+	actualHash := sha256String(data)
+	if actualHash != normalizedHash {
+		return GJCArtifactRef{}, &Problem{Code: "gjc_checksum_mismatch", Message: "native ralplan output checksum does not match file content", Hint: "Do not consume stale or tampered GJC ralplan artifacts.", Path: cleanedSource, Field: "sha256", Expected: actualHash, Actual: normalizedHash}
+	}
+	destBase := "ralplan-" + filepath.Base(cleanedSource)
+	if destBase == "ralplan-." || destBase == "ralplan-"+string(filepath.Separator) {
+		destBase = "ralplan-plan.md"
+	}
+	dest, err := ResolveRelativePath(root, filepath.ToSlash(filepath.Join(RunRootPath, runID, "artifacts", "plan", destBase)))
+	if err != nil {
+		return GJCArtifactRef{}, err
+	}
+	if err := writeExistingFileAtomically(dest, data); err != nil {
+		return GJCArtifactRef{}, err
+	}
+	return GJCArtifactRef{Path: dest.Relative, SHA256: actualHash}, nil
+}
+
+func normalizeGJCRalplanNativeHash(value string) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", &Problem{Code: "gjc_ralplan_native_output_invalid", Message: "native ralplan output checksum is missing", Hint: "Use the sha256 emitted by GJC native ralplan JSON output.", Field: "sha256", Expected: "sha256:<64hex>", Actual: "missing"}
+	}
+	if strings.HasPrefix(strings.ToLower(trimmed), "sha256:") {
+		trimmed = strings.TrimPrefix(strings.ToLower(trimmed), "sha256:")
+	}
+	normalized := "sha256:" + strings.ToLower(trimmed)
+	if !gjcChecksumPattern.MatchString(normalized) {
+		return "", &Problem{Code: "gjc_ralplan_native_output_invalid", Message: "native ralplan output checksum is malformed", Hint: "Use a 64-character sha256 hex digest, with or without sha256: prefix.", Field: "sha256", Expected: "sha256:<64hex>", Actual: value}
+	}
+	return normalized, nil
+}
+
+func readGJCNativeSessionFile(root Root, runID string, source string, artifactName string) ([]byte, string, error) {
+	cleanedSource := filepath.Clean(source)
+	if !filepath.IsAbs(cleanedSource) {
+		return nil, cleanedSource, &Problem{Code: "gjc_" + artifactName + "_native_output_invalid", Message: "native " + artifactName + " output path is not absolute", Hint: "Use GJC native JSON output paths emitted under the selected repository .gjc session.", Field: "path", Expected: "absolute path under repository .gjc sessions", Actual: source}
+	}
+	expectedSessionID := "gjc-" + runID
+	allowedPrefixes := []string{
+		filepath.Join(root.Path, ".gjc", "sessions", expectedSessionID) + string(filepath.Separator),
+		filepath.Join(root.Path, ".gjc", "_session-"+expectedSessionID) + string(filepath.Separator),
+	}
+	allowed := false
+	for _, prefix := range allowedPrefixes {
+		if strings.HasPrefix(cleanedSource, prefix) {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return nil, cleanedSource, &Problem{Code: "gjc_" + artifactName + "_native_output_invalid", Message: "native " + artifactName + " output path is outside the selected repository GJC session area", Hint: "Do not consume external, cross-repository, or cross-session GJC artifacts.", Field: "path", Expected: strings.Join(allowedPrefixes, " or ") + "...", Actual: cleanedSource}
+	}
+	if err := rejectGJCNativeSymlinkComponents(root, cleanedSource, artifactName); err != nil {
+		return nil, cleanedSource, err
+	}
+	originalInfo, err := os.Lstat(cleanedSource)
+	if err != nil {
+		return nil, cleanedSource, &Problem{Code: "gjc_" + artifactName + "_native_output_missing", Message: "cannot stat native " + artifactName + " output", Hint: "Ensure GJC emitted the artifact before adapting evidence.", Path: cleanedSource, Field: "path", Expected: "selected-session regular file", Actual: err.Error()}
+	}
+	if originalInfo.Mode()&os.ModeSymlink != 0 {
+		return nil, cleanedSource, &Problem{Code: "gjc_" + artifactName + "_native_output_invalid", Message: "native " + artifactName + " output is a symlink", Hint: "Do not consume symlinked or rebound GJC artifacts.", Path: cleanedSource, Field: "path", Expected: "regular file", Actual: originalInfo.Mode().String()}
+	}
+	if !originalInfo.Mode().IsRegular() {
+		return nil, cleanedSource, &Problem{Code: "gjc_" + artifactName + "_native_output_invalid", Message: "native " + artifactName + " output is not a regular file", Hint: "Do not consume directories, devices, or special files as GJC artifacts.", Path: cleanedSource, Field: "path", Expected: "regular file", Actual: originalInfo.Mode().String()}
+	}
+	resolvedSource, err := filepath.EvalSymlinks(cleanedSource)
+	if err != nil {
+		return nil, cleanedSource, &Problem{Code: "gjc_" + artifactName + "_native_output_missing", Message: "cannot resolve native " + artifactName + " output", Hint: "Ensure GJC emitted real files, not stale or broken links, before adapting evidence.", Path: cleanedSource, Field: "path", Expected: "resolvable selected-session file", Actual: err.Error()}
+	}
+	resolvedAllowed := false
+	for _, prefix := range allowedPrefixes {
+		resolvedPrefix, err := filepath.EvalSymlinks(strings.TrimSuffix(prefix, string(filepath.Separator)))
+		if err == nil && (resolvedSource == resolvedPrefix || strings.HasPrefix(resolvedSource, resolvedPrefix+string(filepath.Separator))) {
+			resolvedAllowed = true
+			break
+		}
+	}
+	if !resolvedAllowed {
+		return nil, cleanedSource, &Problem{Code: "gjc_" + artifactName + "_native_output_invalid", Message: "native " + artifactName + " output resolves outside the selected repository GJC session area", Hint: "Do not consume symlinked or rebound GJC artifacts.", Field: "path", Expected: strings.Join(allowedPrefixes, " or ") + "...", Actual: resolvedSource}
+	}
+	info, err := os.Stat(resolvedSource)
+	if err != nil {
+		return nil, cleanedSource, &Problem{Code: "gjc_" + artifactName + "_native_output_missing", Message: "cannot stat native " + artifactName + " output", Hint: "Ensure GJC emitted readable selected-session files before adapting evidence.", Path: cleanedSource, Field: "path", Expected: "readable selected-session file", Actual: err.Error()}
+	}
+	if !info.Mode().IsRegular() {
+		return nil, cleanedSource, &Problem{Code: "gjc_" + artifactName + "_native_output_invalid", Message: "native " + artifactName + " output is not a regular file", Hint: "Do not consume directories, devices, or special files as GJC artifacts.", Path: cleanedSource, Field: "path", Expected: "regular file", Actual: info.Mode().String()}
+	}
+	data, err := os.ReadFile(resolvedSource)
+	if err != nil {
+		return nil, cleanedSource, &Problem{Code: "gjc_" + artifactName + "_native_output_missing", Message: "cannot read native " + artifactName + " output", Hint: "Ensure GJC emitted readable native output before adapting evidence.", Path: cleanedSource, Field: "path", Expected: "readable native GJC output", Actual: err.Error()}
+	}
+	return data, cleanedSource, nil
+}
+
+func rejectGJCNativeSymlinkComponents(root Root, cleanedSource string, artifactName string) error {
+	dir := filepath.Dir(cleanedSource)
+	relativeDir, err := filepath.Rel(root.Path, dir)
+	if err != nil || relativeDir == ".." || strings.HasPrefix(relativeDir, ".."+string(filepath.Separator)) || filepath.IsAbs(relativeDir) {
+		actual := dir
+		if err != nil {
+			actual = err.Error()
+		}
+		return &Problem{Code: "gjc_" + artifactName + "_native_output_invalid", Message: "native " + artifactName + " output path is outside the selected repository", Hint: "Do not consume external or symlink-escaped GJC artifacts.", Field: "path", Expected: "path under repository root", Actual: actual}
+	}
+	if relativeDir == "." {
+		return nil
+	}
+	current := root.Path
+	for _, component := range strings.Split(relativeDir, string(filepath.Separator)) {
+		if component == "" || component == "." {
+			continue
+		}
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return &Problem{Code: "gjc_" + artifactName + "_native_output_missing", Message: "cannot inspect native " + artifactName + " output path component", Hint: "Ensure GJC emitted readable selected-session directories before adapting evidence.", Path: current, Field: "path", Expected: "inspectable non-symlink directory", Actual: err.Error()}
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return &Problem{Code: "gjc_" + artifactName + "_native_output_invalid", Message: "native " + artifactName + " output path component is a symlink", Hint: "Do not consume symlinked or rebound GJC session artifacts.", Path: current, Field: "path", Expected: "non-symlink selected-session path", Actual: info.Mode().String()}
+		}
+	}
+	return nil
 }
 
 func adaptNativeUltragoalReceipt(root Root, runID string, receipt gjcReceipt) (gjcReceipt, error) {
