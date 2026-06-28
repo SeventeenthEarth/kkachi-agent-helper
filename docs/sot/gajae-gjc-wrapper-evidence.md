@@ -3,7 +3,7 @@
 Date: 2026-06-26
 Owner: KAH deterministic helper layer
 Confirming role: Responsible approver / governance evidence record
-Status: GAJAE-002 Completed for the KAH source-side GJC evidence wrapper MVP; GAJAE-004 source-side ralplan/callback evidence pilot support is completed for source scope; this document does not authorize install/release/runtime activation by itself
+Status: GAJAE-002 Completed for the KAH source-side GJC evidence wrapper MVP; GAJAE-004/006 source-side ralplan/callback/watcher evidence support is completed for source scope; GAJAE-007/008 native GJC adapter contracts and GAJAE-009 KAT evidence normalization are recorded; GAJAE-010 contract docs/skill guidance closeout is completed and does not authorize install/release/runtime activation by itself
 Authority level: KAH-side SOT for deterministic GJC wrapper commands, GJC/KAT artifact refs, async callback evidence, and watcher-compatible status surfaces
 Scope: `kkachi-agent-helper` source behavior only; paired KAS packet/gate authority is `kkachi-hermes-skills/docs/sot/gajae-delegated-execution-contract.md`
 Related docs: `docs/roadmap.md`, `docs/specs.md`, `docs/compatibility.md`, `docs/sot/multi-agent-review-evidence-gates.md`, `docs/sot/strict-workflow-enforcement.md`, KAS `docs/sot/gajae-delegated-execution-contract.md`
@@ -13,14 +13,9 @@ External evidence: `/Users/draccoon/Workspace/Hermes/17thHermes/40_outputs/team/
 
 `GAJAE` is the shared KAS/KAH epic for delegated Gajae Code (`gjc`) execution. KAH's role is to provide a thin deterministic wrapper around GJC and KAT so KAS can delegate planning/implementation without hand-written shell snippets, hidden environment assumptions, or Hermes-visible polling loops.
 
-As of GAJAE-004 source-side work, the KAH source tree contains the completed `gjc` start/status wrapper plus source-side pilot evidence for ralplan receipt preservation, callback idempotency metadata, and KAS-supplied plan-lock hashes. This SOT records the intended and current helper boundary; it does not by itself authorize live runtime activation, KAB activation, provider/auth/token/gateway/model/profile mutation, install/release/push, or any transfer of KAS plan/review/MAR/final authority into KAH.
+As of GAJAE-004 source-side work, the KAH source tree contains the completed `gjc` start/status wrapper plus source-side pilot evidence for ralplan receipt preservation, callback idempotency metadata, and KAS-supplied plan-lock hashes. GAJAE-006 extends that surface with watcher-compatible no-wake-claim fields. As of GAJAE-007/008, KAH adapts KAS packet fields into the installed GJC 0.7.3 native invocation shapes instead of passing `--packet` through to live GJC: ralplan uses `native_ralplan_input.stage`, `.stage_n`, and `.artifact`; ultragoal materializes `native_ultragoal_input.brief` as run-local `native_input_ref` and calls `ultragoal create-goals --brief-file`. This SOT records the intended and current helper boundary; it does not by itself authorize live runtime activation, KAB activation, provider/auth/token/gateway/model/profile mutation, install/release/push, or any transfer of KAS plan/review/MAR/final authority into KAH.
 
-As of GAJAE-005 source-side work, the KAH source tree also contains bounded
-KAT attachment evidence handling for `ultragoal_ready` candidate runs. This is
-source behavior only: it records KAT status, summary, raw-log refs and hashes,
-extractor status, command exit code, attachment status, and run-id linkage. It
-does not authorize real async GJC `ultragoal`, live KAT execution, install,
-release, runtime activation, or acceptance authority.
+As of GAJAE-009 source-side work, the KAH source tree also contains bounded KAH-side normalization for KAT v0.1.0 factual status/summary/raw-log artifacts attached to `ultragoal_ready` candidate runs. This is source behavior only: it records KAT status, summary, raw-log refs and hashes, extractor status, command exit code, attachment status, run-id linkage, and the pre-attachment GJC `source_status_hash`. KAT `status_hash` remains KAT self-integrity metadata only. This behavior does not authorize real async GJC `ultragoal`, live KAT execution, install, release, runtime activation, review/MAR/waiver/final acceptance, or acceptance authority.
 
 KAH must not become the policy or reasoning layer. It records facts, artifact references, hashes, process states, callbacks, and deterministic gate evidence. KAS/Blue/color review decide plan acceptance, implementation acceptance, MAR disposition, and final completion.
 
@@ -181,13 +176,13 @@ GAJAE uses shared logical task ids across KAS and KAH. KAH tasks require KAH-loc
 | GAJAE-007 | Real GJC `ralplan` adapter | Convert KAS packet `native_ralplan_input.stage`, `.stage_n`, and `.artifact` fields into GJC 0.7.3 native `ralplan --write` flags and persist candidate plan refs/hashes without KAH plan acceptance. | Completed |
 | GAJAE-008 | Real GJC `ultragoal` adapter | Convert KAS packet `native_ultragoal_input.brief` into run-local `native_input_ref` evidence, invoke native `ultragoal create-goals --brief-file`, and persist implementation-candidate refs/hashes without review/MAR/final acceptance. | Completed |
 | GAJAE-009 | KAT evidence normalization / attach adapter | Normalize KAT v0.1.0 factual artifacts into KAH-bindable KAT evidence from status/summary/raw-log refs without requiring KAT source changes. | Completed |
-| GAJAE-010 | Contract docs and skill guidance update | Update KAS/KAH/KAT repo docs plus Hermes skill references after the real adapter contracts settle. | Planned |
+| GAJAE-010 | Contract docs and skill guidance update | Update KAS/KAH/KAT repo docs plus Hermes skill references after the real adapter contracts settle; prior KAH-only edits plus KAS/KAT/profile readback were corrected through restart review and final gates. | Completed |
 
 ## 7.1. GAJAE-007..010 pilot-unblock task scope
 
 - `GAJAE-007`: KAH code changes for the real GJC 0.7.3 ralplan invocation contract. Done criteria include live-compatible native input construction, run-local candidate plan refs/hashes, plan-lock compatibility, and fail-closed behavior for missing/malformed native inputs.
 - `GAJAE-008`: KAH code changes for the real GJC 0.7.3 ultragoal invocation contract. Done criteria include KAS-derived brief generation as run-local `native_input_ref`, native `ultragoal create-goals --brief-file` invocation, run-local implementation-candidate refs/hashes, and no authority claims beyond `ultragoal_ready`.
-- `GAJAE-009`: KAH/KAT evidence contract changes. Done criteria include a normalized KAT evidence snapshot or KAT-emitted bindable status, pre-attachment GJC status-hash binding, factual command/extractor evidence preservation, and fail-closed rejection of approval/final/review/MAR/waiver claims.
+- `GAJAE-009`: KAH/KAT evidence contract changes. Done criteria include KAH-side normalization of KAT v0.1.0 status/summary/raw-log refs, pre-attachment GJC `source_status_hash` binding, factual command/extractor evidence preservation, KAT `status_hash` kept as KAT self-integrity metadata only, and fail-closed rejection of approval/final/review/MAR/waiver claims.
 - `GAJAE-010`: documentation and skill-reference closeout after the adapter contracts settle. Verification is recorded inside each task's done criteria; do not create a separate verification-only task.
 
 ## 8. GAJAE-001 acceptance criteria
